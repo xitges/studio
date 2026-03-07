@@ -42,6 +42,7 @@ public:
 
     double getSampleRate()         const { return sampleRate; }
     long   getSongSamplePosition() const { return songSamplePosition; }
+    double getPatternBeatPos()     const { return patternBeatPos; }   // M3
 
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext(
@@ -70,6 +71,20 @@ public:
     void setChannelAttack (int ch, float ms);
     void setChannelRelease(int ch, float ms);
 
+    // M3 — set active pattern for NoteEvent playback in pattern mode
+    void setActivePattern(int patternId);
+
+    // M3 — preview a note from the piano roll keyboard (does not alter channelBasePitch)
+    void previewNote(int ch, int midiPitch);
+
+    // M5 — mixer track controls
+    void setMixerTrackVolume(int track, float vol);
+    void setMixerTrackPan   (int track, float pan);
+    void setMixerTrackMuted (int track, bool muted);
+    void setMixerTrackSoloed(int track, bool soloed);
+    void setMasterVolume    (float vol);
+    void setMasterPan       (float pan);
+
     // M10 — Offline render to WAV file
     // Temporarily removes the real-time audio callback to avoid thread conflicts.
     // mode: Pattern = loops the sequencer, Song = renders the full timeline.
@@ -92,8 +107,18 @@ private:
     long   songSamplePosition = 0;
     double bpm                = 140.0;
 
+    // M3 — beat tracking for NoteEvent playback
+    double patternBeatPos  = 0.0;
+    int    activePatternId = 0;
+    float  channelBasePitch[16] = {};   // stores user pitch-slider values per channel
+
+    // M5 — mixer intermediate buffers
+    juce::AudioBuffer<float> stagingBuf;                         // temp per-channel render
+    std::array<juce::AudioBuffer<float>, 8> mixerTrackBufs;     // 8 insert tracks
+
     void processPatternMode(juce::AudioBuffer<float>& buffer, int numSamples, int numOutputChannels);
     void processSongMode   (juce::AudioBuffer<float>& buffer, int numSamples, int numOutputChannels);
+    void mixToOutput       (juce::AudioBuffer<float>& buffer, int numSamples);  // M5
 
     const Pattern* findPatternById(int patternId) const;
 

@@ -227,11 +227,24 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
         g.drawText(channels[i].name, 8, y + 2, 86, 18,
                    juce::Justification::centredLeft);
 
-        // Sample name (bottom half, left area)
-        g.setColour(juce::Colour(0xff3498db));
-        g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
-        g.drawText(channels[i].sampleName, 8, y + 24, 86, 16,
-                   juce::Justification::centredLeft);
+        // Sample name / type badge (bottom half, left area)
+        const bool isMelodic = (i < (int)channelTypes.size() &&
+                                 channelTypes[(size_t)i] == ChannelType::Melodic);
+        if (isMelodic)
+        {
+            g.setColour(juce::Colour(0xff2ecc71).withAlpha(0.25f));
+            g.fillRoundedRectangle(6.0f, (float)(y + 23), 38.0f, 14.0f, 3.0f);
+            g.setColour(juce::Colour(0xff2ecc71));
+            g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+            g.drawText("MELODIC", 6, y + 23, 38, 14, juce::Justification::centred);
+        }
+        else
+        {
+            g.setColour(juce::Colour(0xff3498db));
+            g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
+            g.drawText(channels[(size_t)i].sampleName, 8, y + 24, 86, 16,
+                       juce::Justification::centredLeft);
+        }
 
         // Small "V" / "P" / "pitch" labels above sliders
         g.setColour(juce::Colours::grey);
@@ -298,29 +311,88 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
     const int x = e.getPosition().getX();
     const int y = e.getPosition().getY() - HEADER_HEIGHT;
 
-    if (x < stepAreaX || y < 0) return;
+    if (y < 0) return;
 
     const int ch = y / ROW_HEIGHT;
-    const int s  = (int)((x - stepAreaX) / stepW);
 
-    if (ch >= 0 && ch < (int)channels.size() && s >= 0 && s < stepCount)
+    // Right-click on label area → channel context menu (M3)
+    if (e.mods.isRightButtonDown() && x < stepAreaX
+        && ch >= 0 && ch < (int)channels.size())
     {
-        channels[ch].steps[s] = !channels[ch].steps[s];
+        const bool isMelodic = (channelTypes[(size_t)ch] == ChannelType::Melodic);
+        juce::PopupMenu menu;
+        menu.addItem(1, "Rename");
+        menu.addSeparator();
+        menu.addItem(2, isMelodic ? "Switch to Drum" : "Switch to Melodic");
+        if (isMelodic)
+            menu.addItem(3, "Open Piano Roll");
+
+        menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
+            [this, ch, isMelodic](int result)
+            {
+                if (ch < 0 || ch >= (int)channels.size()) return;
+                if (result == 1)
+                {
+                    auto* dialog = new juce::AlertWindow("Rename Channel",
+                                                          "Enter a new name:",
+                                                          juce::MessageBoxIconType::NoIcon);
+                    dialog->addTextEditor("name", channels[(size_t)ch].name);
+                    dialog->addButton("OK", 1); dialog->addButton("Cancel", 0);
+                    dialog->enterModalState(true,
+                        juce::ModalCallbackFunction::create([this, ch, dialog](int r) {
+                            if (r == 1) { channels[(size_t)ch].name = dialog->getTextEditorContents("name"); repaint(); }
+                            delete dialog;
+                        }), false);
+                }
+                else if (result == 2)
+                {
+                    const ChannelType newType = isMelodic ? ChannelType::Drum : ChannelType::Melodic;
+                    channelTypes[(size_t)ch] = newType;
+                    if (onChannelTypeChanged) onChannelTypeChanged(ch, newType);
+                    repaint();
+                }
+                else if (result == 3)
+                {
+                    if (onOpenPianoRoll) onOpenPianoRoll(ch);
+                }
+            });
+        return;
+    }
+
+    // Left-click on step grid
+    if (x < stepAreaX) return;
+
+    const int s = (int)((x - stepAreaX) / stepW);
+
+    // M3: only Drum channels use the step grid; Melodic channels use the piano roll
+    if (ch >= 0 && ch < (int)channels.size() && s >= 0 && s < stepCount
+        && channelTypes[(size_t)ch] == ChannelType::Drum)
+    {
+        const bool oldState = channels[(size_t)ch].steps[(size_t)s];
+        channels[(size_t)ch].steps[(size_t)s] = !oldState;
+        if (onStepToggled) onStepToggled(ch, s, !oldState, oldState);
         repaint();
     }
+    // Melodic channel: double-click opens piano roll (handled in mouseDoubleClick)
 }
 
-// M1.5 — Double-click on channel name to rename
+// M1.5 / M3 — Double-click on channel label area
 void ChannelRackComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
     const int x = e.getPosition().getX();
     const int y = e.getPosition().getY() - HEADER_HEIGHT;
 
-    // Only respond to clicks in the name text area (left 94px of label)
     if (x > 94 || y < 0) return;
 
     const int ch = y / ROW_HEIGHT;
     if (ch < 0 || ch >= (int)channels.size()) return;
+
+    // M3: melodic channels open piano roll on double-click
+    if (channelTypes[(size_t)ch] == ChannelType::Melodic)
+    {
+        if (onOpenPianoRoll) onOpenPianoRoll(ch);
+        return;
+    }
 
     auto* dialog = new juce::AlertWindow("Rename Channel",
                                           "Enter a new name:",

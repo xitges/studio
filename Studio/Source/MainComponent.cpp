@@ -1,9 +1,42 @@
 #include "MainComponent.h"
 
+// ---------------------------------------------------------------------------
+// M6 — generic lambda-based undo action
+// ---------------------------------------------------------------------------
+namespace {
+struct LambdaAction : public juce::UndoableAction
+{
+    std::function<bool()> performFn, undoFn;
+    LambdaAction(std::function<bool()> p, std::function<bool()> u)
+        : performFn(std::move(p)), undoFn(std::move(u)) {}
+    bool perform() override { return performFn(); }
+    bool undo()    override { return undoFn();    }
+};
+} // namespace
+
 MainComponent::MainComponent()
 {
     // ---- Seed project with initial data
     project.bpm = 70.0;
+
+    // M5 — default 8 mixer tracks
+    for (int t = 0; t < 8; ++t)
+    {
+        MixerTrack mt;
+        mt.name = "Track " + juce::String(t + 1);
+        project.mixerTracks.push_back(mt);
+    }
+    // M5 — default routing: channel N → track N (mod 8)
+    for (int ch = 0; ch < 16; ++ch)
+        project.channelMixerRouting[ch] = ch % 8;
+
+    // M11 — default 8 playlist tracks
+    for (int t = 0; t < 8; ++t)
+    {
+        PlaylistTrack pt;
+        pt.name = "Track " + juce::String(t + 1);
+        project.playlistTracks.push_back(pt);
+    }
 
     Pattern p1;
     p1.id = 1; p1.name = "Pattern 1"; p1.lengthBars = 1; p1.stepCount = 16;
@@ -54,6 +87,8 @@ MainComponent::MainComponent()
         audioEngine.stop();
         channelRack.setPlaybackStep(-1);
         playlist.setPlayheadBar(-1.0);
+        if (pianoRollWindow != nullptr)
+            pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
     };
 
     toolbar.onBPMChanged = [this](double bpm)
@@ -209,10 +244,30 @@ MainComponent::MainComponent()
 
     toolbar.setProjectTitle("", false);
 
-    // ---- Playlist
-    addAndMakeVisible(playlist);
+    // ---- Playlist inside Viewport
     playlist.setProject(&project);
     playlist.getActivePatternId = [this]() { return activePatternId; };
+
+    playlistViewport.setViewedComponent(&playlist, false);
+    playlistViewport.setScrollBarsShown(true, true);
+    playlistViewport.setScrollBarThickness(8);
+    addAndMakeVisible(playlistViewport);
+
+    // Snap box — floats outside the viewport so it never scrolls away
+    playlistSnapBox.addItem("1 Bar",   1);
+    playlistSnapBox.addItem("1/2 Bar", 2);
+    playlistSnapBox.addItem("1/4 Bar", 4);
+    playlistSnapBox.addItem("Free",    99);
+    playlistSnapBox.setSelectedId(1, juce::dontSendNotification);
+    playlistSnapBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
+    playlistSnapBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
+    playlistSnapBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
+    playlistSnapBox.onChange = [this]
+    {
+        const int id = playlistSnapBox.getSelectedId();
+        playlist.setSnapDivisor(id == 99 ? 0 : id);
+    };
+    addAndMakeVisible(playlistSnapBox);
 
     // ---- Channel Rack inside Viewport
     channelRack.loadPattern(project.patterns[0]);   // load initial pattern into grid
@@ -257,6 +312,150 @@ MainComponent::MainComponent()
         audioEngine.setChannelPitch(ch, s);
     };
 
+    // ---- M6: Step toggle undo
+    channelRack.onStepToggled = [this](int ch, int step, bool newState, bool oldState)
+    {
+        markDirty();
+        const int patId = activePatternId;
+        undoManager.perform(new LambdaAction(
+            [this, patId, ch, step, newState]() -> bool {
+                if (auto* p = findPattern(patId)) {
+                    p->steps[ch][step] = newState;
+                    if (patId == activePatternId) channelRack.loadPattern(*p);
+                }
+                markDirty(); return true;
+            },
+            [this, patId, ch, step, oldState]() -> bool {
+                if (auto* p = findPattern(patId)) {
+                    p->steps[ch][step] = oldState;
+                    if (patId == activePatternId) channelRack.loadPattern(*p);
+                }
+                markDirty(); return true;
+            }));
+    };
+
+    // ---- M6: Playlist clip undo
+    // M11 — track management callbacks
+    playlist.onTrackAdded   = [this]()      { markDirty(); resized(); };
+    playlist.onTrackRenamed = [this](int)   { markDirty(); };
+    playlist.onTrackDeleted = [this](int)   { markDirty(); resized(); };
+
+    playlist.onClipAdded = [this](PlaylistClip clip)
+    {
+        markDirty();
+        const int clipId = clip.id;
+        undoManager.perform(new LambdaAction(
+            [this, clip]() -> bool {
+                bool found = false;
+                for (const auto& c : project.playlistClips) if (c.id == clip.id) { found = true; break; }
+                if (!found) project.playlistClips.push_back(clip);
+                playlist.repaint(); markDirty(); return true;
+            },
+            [this, clipId]() -> bool {
+                auto& list = project.playlistClips;
+                list.erase(std::remove_if(list.begin(), list.end(),
+                    [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
+                playlist.repaint(); markDirty(); return true;
+            }));
+    };
+
+    playlist.onClipDeleted = [this](PlaylistClip clip)
+    {
+        markDirty();
+        const int clipId = clip.id;
+        undoManager.perform(new LambdaAction(
+            [this, clipId]() -> bool {
+                auto& list = project.playlistClips;
+                list.erase(std::remove_if(list.begin(), list.end(),
+                    [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
+                playlist.repaint(); markDirty(); return true;
+            },
+            [this, clip]() -> bool {
+                project.playlistClips.push_back(clip);
+                playlist.repaint(); markDirty(); return true;
+            }));
+    };
+
+    playlist.onClipMoved = [this](int id, float oldBar, int oldTrack, float newBar, int newTrack)
+    {
+        markDirty();
+        undoManager.perform(new LambdaAction(
+            [this, id, newBar, newTrack]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == id) { c.startBar = newBar; c.trackIndex = newTrack; break; }
+                playlist.repaint(); markDirty(); return true;
+            },
+            [this, id, oldBar, oldTrack]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == id) { c.startBar = oldBar; c.trackIndex = oldTrack; break; }
+                playlist.repaint(); markDirty(); return true;
+            }));
+    };
+
+    playlist.onClipResized = [this](int id, float oldLen, float newLen)
+    {
+        markDirty();
+        undoManager.perform(new LambdaAction(
+            [this, id, newLen]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == id) { c.lengthBars = newLen; break; }
+                playlist.repaint(); markDirty(); return true;
+            },
+            [this, id, oldLen]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == id) { c.lengthBars = oldLen; break; }
+                playlist.repaint(); markDirty(); return true;
+            }));
+    };
+
+    // ---- M3: Piano Roll
+    channelRack.onOpenPianoRoll = [this](int ch)
+    {
+        pianoRollChannel = ch;
+
+        if (pianoRollWindow == nullptr)
+        {
+            pianoRollWindow = std::make_unique<PianoRollWindow>();
+            pianoRollWindow->centreWithSize(1000, 520);
+        }
+
+        if (auto* pat = findPattern(activePatternId))
+        {
+            pianoRollWindow->content.pianoRoll.setPattern(pat, ch, project.bpm);
+            pianoRollWindow->content.pianoRoll.onNotesChanged = [this] { markDirty(); };
+            pianoRollWindow->content.pianoRoll.onKeyPreview   = [this, ch](int pitch)
+            {
+                audioEngine.previewNote(ch, pitch);
+            };
+        }
+
+        pianoRollWindow->setVisible(true);
+        pianoRollWindow->toFront(true);
+    };
+
+    channelRack.onChannelTypeChanged = [this](int ch, ChannelType t)
+    {
+        project.channelTypes[ch] = t;
+        channelRack.setChannelType(ch, t);
+        markDirty();
+    };
+
+    // ---- M5: Mixer
+    addAndMakeVisible(mixer);
+    mixer.setVisible(false);   // hidden until toolbar toggle
+    mixer.loadFromProject(project);
+    mixer.updateRoutingLabels(project.channelMixerRouting);
+
+    mixer.onTrackVolumeChanged  = [this](int t, float v) { audioEngine.setMixerTrackVolume(t, v); markDirty(); };
+    mixer.onTrackPanChanged     = [this](int t, float p) { audioEngine.setMixerTrackPan(t, p);    markDirty(); };
+    mixer.onTrackMuteChanged    = [this](int t, bool m)  { audioEngine.setMixerTrackMuted(t, m);  markDirty(); };
+    mixer.onTrackSoloChanged    = [this](int t, bool s)  { audioEngine.setMixerTrackSoloed(t, s); markDirty(); };
+    mixer.onMasterVolumeChanged = [this](float v)        { audioEngine.setMasterVolume(v);         markDirty(); };
+    mixer.onMasterPanChanged    = [this](float p)        { audioEngine.setMasterPan(p);            markDirty(); };
+
+    toolbar.onToggleMixer = [this] { showMixer = !showMixer; resized(); };
+
+    setWantsKeyboardFocus(true);
     startTimerHz(30);
     setSize(1280, 780);
 }
@@ -298,6 +497,12 @@ void MainComponent::selectPattern(int id)
         channelRack.loadPattern(*newPat);
 
     toolbar.updatePatternList(project.patterns, activePatternId);
+    audioEngine.setActivePattern(activePatternId);
+
+    // Update open piano roll to the newly selected pattern
+    if (pianoRollWindow != nullptr && pianoRollWindow->isVisible() && pianoRollChannel >= 0)
+        if (auto* pat = findPattern(activePatternId))
+            pianoRollWindow->content.pianoRoll.setPattern(pat, pianoRollChannel, project.bpm);
 }
 
 void MainComponent::syncPatternToEngine()
@@ -329,6 +534,8 @@ void MainComponent::markDirty()
 
 void MainComponent::reloadProjectIntoUI()
 {
+    undoManager.clearUndoHistory();   // M6: stale actions reference old project data
+
     // Stop the audio engine before touching shared project data —
     // processSongMode reads project->patterns on the audio thread.
     audioEngine.stop();
@@ -353,6 +560,34 @@ void MainComponent::reloadProjectIntoUI()
 
     // Refresh playlist
     playlist.setProject(&project);
+
+    // M5 — ensure mixer tracks exist, then sync UI
+    if (project.mixerTracks.empty())
+    {
+        for (int t = 0; t < 8; ++t)
+        {
+            MixerTrack mt;
+            mt.name = "Track " + juce::String(t + 1);
+            project.mixerTracks.push_back(mt);
+        }
+        for (int ch = 0; ch < 16; ++ch)
+            project.channelMixerRouting[ch] = ch % 8;
+    }
+    mixer.loadFromProject(project);
+    mixer.updateRoutingLabels(project.channelMixerRouting);
+
+    // M11 — ensure playlist tracks exist
+    if (project.playlistTracks.empty())
+        for (int t = 0; t < 8; ++t)
+        {
+            PlaylistTrack pt;
+            pt.name = "Track " + juce::String(t + 1);
+            project.playlistTracks.push_back(pt);
+        }
+
+    // M3 — sync channel types to channel rack
+    for (int ch = 0; ch < 16; ++ch)
+        channelRack.setChannelType(ch, project.channelTypes[ch]);
 
     projectDirty = false;
     toolbar.setProjectTitle(currentFile.getFileNameWithoutExtension(), false);
@@ -495,6 +730,46 @@ void MainComponent::saveProjectAs()
 }
 
 // ---------------------------------------------------------------------------
+// M6 — Keyboard shortcuts
+// ---------------------------------------------------------------------------
+
+bool MainComponent::keyPressed(const juce::KeyPress& key)
+{
+    const auto cmd   = juce::ModifierKeys::commandModifier;
+    const auto shift = juce::ModifierKeys::shiftModifier;
+
+    if (key == juce::KeyPress('z', cmd, 0))
+    {
+        undoManager.undo();
+        return true;
+    }
+    if (key == juce::KeyPress('z', cmd | shift, 0))
+    {
+        undoManager.redo();
+        return true;
+    }
+    // Space — play / stop
+    if (key == juce::KeyPress(juce::KeyPress::spaceKey))
+    {
+        if (audioEngine.isPlaying())
+        {
+            audioEngine.stop();
+            channelRack.setPlaybackStep(-1);
+            playlist.setPlayheadBar(-1.0);
+            if (pianoRollWindow != nullptr)
+                pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
+        }
+        else
+        {
+            syncPatternToEngine();
+            audioEngine.play();
+        }
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Component overrides
 // ---------------------------------------------------------------------------
 
@@ -510,8 +785,20 @@ void MainComponent::resized()
     // Toolbar is now 80px (two rows)
     toolbar.setBounds(area.removeFromTop(80));
 
+    // M5 — Mixer panel anchored at bottom, visible only when toggled
+    mixer.setVisible(showMixer);
+    if (showMixer)
+        mixer.setBounds(area.removeFromBottom(160));
+
     const int playlistHeight = (int)(area.getHeight() * 0.38f);
-    playlist.setBounds(area.removeFromTop(playlistHeight));
+    auto playlistArea = area.removeFromTop(playlistHeight);
+
+    // Snap box anchored to top-right, outside the scrollable area
+    playlistSnapBox.setBounds(playlistArea.getRight() - 114, playlistArea.getY() + 2, 112, 20);
+
+    playlistViewport.setBounds(playlistArea);
+    playlist.setSize(juce::jmax(playlistArea.getWidth(),  playlist.getNeededWidth()),
+                     juce::jmax(playlistArea.getHeight(), playlist.getNeededHeight()));
 
     channelRackViewport.setBounds(area);
 
@@ -525,9 +812,25 @@ void MainComponent::timerCallback()
 {
     if (!audioEngine.isPlaying()) return;
 
+    const double bpm = project.bpm > 0.0 ? project.bpm : 70.0;
+    const double sr  = audioEngine.getSampleRate();
+
     if (toolbar.getPlayMode() == PlayMode::Song)
     {
-        const double samplesPerBar = (audioEngine.getSampleRate() * 60.0 / project.bpm) * 4.0;
+        const double samplesPerBar = (sr * 60.0 / bpm) * 4.0;
         playlist.setPlayheadBar(audioEngine.getSongSamplePosition() / samplesPerBar);
+    }
+
+    // M3 — update piano roll playhead (wrap to pattern length)
+    if (pianoRollWindow != nullptr && pianoRollWindow->isVisible())
+    {
+        double beatPos = audioEngine.getPatternBeatPos();
+        if (auto* pat = findPattern(activePatternId))
+        {
+            const double patternBeats = pat->stepCount * 0.25;
+            if (patternBeats > 0.0)
+                beatPos = std::fmod(beatPos, patternBeats);
+        }
+        pianoRollWindow->content.pianoRoll.setPlayheadBeat(beatPos);
     }
 }

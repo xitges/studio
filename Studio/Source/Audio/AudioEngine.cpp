@@ -39,6 +39,7 @@ void AudioEngine::play()
 {
     if (playMode == PlayMode::Pattern)
     {
+        patternBeatPos = 0.0;   // M3
         sequencer.start();
     }
     else
@@ -96,7 +97,10 @@ void AudioEngine::setChannelPan(int ch, float pan)
 void AudioEngine::setChannelPitch(int ch, float semitones)
 {
     if (ch >= 0 && ch < 16)
+    {
+        channelBasePitch[ch] = semitones;
         players[ch].setPitch(semitones);
+    }
 }
 
 // ---- M1.3 Envelope -----------------------------------------------------
@@ -111,6 +115,52 @@ void AudioEngine::setChannelRelease(int ch, float ms)
 {
     if (ch >= 0 && ch < 16)
         players[ch].setRelease(ms);
+}
+
+// ---- M3 — Active pattern / pitch ----------------------------------------
+
+void AudioEngine::setActivePattern(int patternId)
+{
+    activePatternId = patternId;
+    patternBeatPos  = 0.0;
+}
+
+void AudioEngine::previewNote(int ch, int midiPitch)
+{
+    if (ch < 0 || ch >= 16) return;
+    players[ch].setPitch(channelBasePitch[ch] + (float)(midiPitch - 60));
+    players[ch].trigger();
+}
+
+// ---- M5 — Mixer track controls ------------------------------------------
+
+void AudioEngine::setMixerTrackVolume(int track, float vol)
+{
+    if (project && track >= 0 && track < (int)project->mixerTracks.size())
+        project->mixerTracks[(size_t)track].volume = vol;
+}
+void AudioEngine::setMixerTrackPan(int track, float pan)
+{
+    if (project && track >= 0 && track < (int)project->mixerTracks.size())
+        project->mixerTracks[(size_t)track].pan = pan;
+}
+void AudioEngine::setMixerTrackMuted(int track, bool muted)
+{
+    if (project && track >= 0 && track < (int)project->mixerTracks.size())
+        project->mixerTracks[(size_t)track].muted = muted;
+}
+void AudioEngine::setMixerTrackSoloed(int track, bool soloed)
+{
+    if (project && track >= 0 && track < (int)project->mixerTracks.size())
+        project->mixerTracks[(size_t)track].soloed = soloed;
+}
+void AudioEngine::setMasterVolume(float vol)
+{
+    if (project) project->masterVolume = vol;
+}
+void AudioEngine::setMasterPan(float pan)
+{
+    if (project) project->masterPan = pan;
 }
 
 // ---- BPM / Mode / Project ----------------------------------------------
@@ -188,6 +238,11 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 
     for (auto& player : players)
         player.prepare(sampleRate, bufferSize);
+
+    // M5 — allocate mixer staging buffers
+    stagingBuf.setSize(2, bufferSize);
+    for (auto& tb : mixerTrackBufs)
+        tb.setSize(2, bufferSize);
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -204,8 +259,47 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
 {
     sequencer.processBlock(numSamples);
 
-    for (auto& player : players)
-        player.renderNextBlock(buffer, numSamples);
+    // M3 — trigger NoteEvents for Melodic channels
+    if (project != nullptr)
+    {
+        const Pattern* pat = findPatternById(activePatternId);
+        if (pat != nullptr && sampleRate > 0.0)
+        {
+            const double samplesPerBeat = sampleRate * 60.0 / bpm;
+            const double patternBeats   = pat->stepCount * 0.25;  // 1 step = 1/16 note
+
+            if (patternBeats > 0.0)
+            {
+                const double startBeat = patternBeatPos;
+                const double endBeat   = startBeat + numSamples / samplesPerBeat;
+
+                const double loopStart = std::fmod(startBeat, patternBeats);
+                const double loopEnd   = std::fmod(endBeat,   patternBeats);
+
+                for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+                {
+                    if (project->channelTypes[ch] != ChannelType::Melodic) continue;
+                    for (const auto& note : pat->notes[ch])
+                    {
+                        const double ns = std::fmod((double)note.startBeat, patternBeats);
+                        const bool fires = (loopEnd < loopStart)
+                                           ? (ns >= loopStart || ns < loopEnd)
+                                           : (ns >= loopStart && ns < loopEnd);
+                        if (fires)
+                        {
+                            // Combine user base pitch with note pitch (C4=60 = 0 semitones offset)
+                            players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
+                            players[ch].trigger();
+                        }
+                    }
+                }
+            }
+
+            patternBeatPos += numSamples / samplesPerBeat;
+        }
+    }
+
+    mixToOutput(buffer, numSamples);
 }
 
 void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
@@ -268,10 +362,79 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    for (auto& player : players)
-        player.renderNextBlock(buffer, numSamples);
+    mixToOutput(buffer, numSamples);
 
     songSamplePosition += numSamples;
+}
+
+// M5 — route channels through mixer tracks and sum to output
+void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
+{
+    // Clear mixer track buses
+    for (auto& tb : mixerTrackBufs)
+        tb.clear();
+
+    // Render each channel into staging, accumulate into its assigned mixer track
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        stagingBuf.clear();
+        players[ch].renderNextBlock(stagingBuf, numSamples);
+
+        const int trackIdx = (project != nullptr)
+                             ? juce::jlimit(0, 7, project->channelMixerRouting[ch])
+                             : 0;
+
+        for (int s = 0; s < numSamples; ++s)
+        {
+            mixerTrackBufs[(size_t)trackIdx].addSample(0, s, stagingBuf.getSample(0, s));
+            mixerTrackBufs[(size_t)trackIdx].addSample(1, s, stagingBuf.getSample(1, s));
+        }
+    }
+
+    // Check if any track is soloed
+    bool anySoloed = false;
+    if (project != nullptr)
+        for (const auto& mt : project->mixerTracks)
+            if (mt.soloed) { anySoloed = true; break; }
+
+    const float mv  = project ? project->masterVolume : 1.0f;
+    const float mp  = project ? project->masterPan    : 0.0f;
+    const float mAng = (mp + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+    const float mL  = mv * std::cos(mAng);
+    const float mR  = mv * std::sin(mAng);
+
+    // Mix each track bus into output with track volume/pan
+    for (int t = 0; t < 8; ++t)
+    {
+        if (project != nullptr && t < (int)project->mixerTracks.size())
+        {
+            const auto& mt = project->mixerTracks[(size_t)t];
+            if (mt.muted || (anySoloed && !mt.soloed)) continue;
+
+            const float ang = (mt.pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+            const float L   = mt.volume * std::cos(ang);
+            const float R   = mt.volume * std::sin(ang);
+
+            for (int s = 0; s < numSamples; ++s)
+            {
+                if (output.getNumChannels() > 0)
+                    output.addSample(0, s, mixerTrackBufs[(size_t)t].getSample(0, s) * L * mL);
+                if (output.getNumChannels() > 1)
+                    output.addSample(1, s, mixerTrackBufs[(size_t)t].getSample(1, s) * R * mR);
+            }
+        }
+        else
+        {
+            // No mixer track data: pass through at unity
+            for (int s = 0; s < numSamples; ++s)
+            {
+                if (output.getNumChannels() > 0)
+                    output.addSample(0, s, mixerTrackBufs[(size_t)t].getSample(0, s) * mL);
+                if (output.getNumChannels() > 1)
+                    output.addSample(1, s, mixerTrackBufs[(size_t)t].getSample(1, s) * mR);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

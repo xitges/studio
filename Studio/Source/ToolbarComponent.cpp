@@ -116,6 +116,11 @@ ToolbarComponent::ToolbarComponent()
     exportBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff4a2c6b));
     exportBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     exportBtn.onClick = [this] { if (onExport) onExport(); };
+
+    addAndMakeVisible(mixerBtn);
+    mixerBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a4060));
+    mixerBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    mixerBtn.onClick = [this] { if (onToggleMixer) onToggleMixer(); };
 }
 
 ToolbarComponent::~ToolbarComponent() {}
@@ -168,6 +173,8 @@ void ToolbarComponent::resized()
 
         bpmLabel .setBounds(row.removeFromLeft(36).reduced(2));
         bpmSlider.setBounds(row.removeFromLeft(60).reduced(2));
+        row.removeFromLeft(8);
+        mixerBtn .setBounds(row.removeFromLeft(54).reduced(2));
 
         titleLabel.setBounds(row);
     }

@@ -5,14 +5,6 @@
     Created: 6 Mar 2026
     Author:  홍준영
 
-    FL 스타일 DAW를 위한 기본 데이터 모델:
-    - PlayMode (Pattern / Song)
-    - Pattern (채널 x 스텝 패턴)
-    - PlaylistClip (타임라인 위의 패턴 클립)
-    - Project (BPM, 패턴, 플레이리스트 모음)
-
-    순수 데이터 구조만 정의하고, UI/오디오 엔진은 이 모델을 참조만 합니다.
-
   ==============================================================================
 */
 
@@ -20,10 +12,33 @@
 
 #include <JuceHeader.h>
 
-enum class PlayMode
+enum class PlayMode    { Pattern, Song };
+enum class ChannelType { Drum, Melodic };   // M3
+
+// M3 — one note in a melodic channel's piano roll
+struct NoteEvent
 {
-    Pattern,
-    Song
+    int   pitch       = 60;    // MIDI note number (C4 = 60)
+    float startBeat   = 0.0f;  // beat position within the pattern (0 = start)
+    float lengthBeats = 0.25f; // duration in beats (0.25 = 16th note)
+    float velocity    = 0.8f;  // 0.0 – 1.0
+};
+
+// M5 — one strip in the mixer
+struct MixerTrack
+{
+    juce::String name   = "Track";
+    float        volume = 1.0f;
+    float        pan    = 0.0f;
+    bool         muted  = false;
+    bool         soloed = false;
+};
+
+// M11 — one row in the playlist timeline
+struct PlaylistTrack
+{
+    juce::String name   = "Track";
+    juce::Colour colour = juce::Colour(0xff3498db);
 };
 
 struct Pattern
@@ -31,12 +46,15 @@ struct Pattern
     int          id         = 0;
     juce::String name       = "Pattern 1";
     int          lengthBars = 1;
-    int          stepCount  = 16;  // 실제 사용 스텝 수 (16, 32, 64 ...)
+    int          stepCount  = 16;
 
     static constexpr int kMaxChannels = 16;
-    static constexpr int kMaxSteps    = 64; // 상한 (필요시 늘릴 수 있음)
+    static constexpr int kMaxSteps    = 64;
 
     bool steps[kMaxChannels][kMaxSteps] {};
+
+    // M3 — per-channel note lists (for Melodic channels)
+    std::vector<NoteEvent> notes[kMaxChannels];
 };
 
 struct PlaylistClip
@@ -55,6 +73,15 @@ struct Project
     double bpm = 140.0;
 
     std::vector<Pattern>      patterns;
-    std::vector<PlaylistClip> playlistClips;
-};
+    std::vector<PlaylistClip>  playlistClips;
+    std::vector<PlaylistTrack> playlistTracks;   // M11 — dynamic track rows
 
+    // M3 — channel types (global, not per-pattern)
+    std::array<ChannelType, 16> channelTypes        = {};   // all Drum by default
+
+    // M5 — mixer
+    std::array<int, 16>       channelMixerRouting  = {};   // channel → mixer track (0-7)
+    std::vector<MixerTrack>   mixerTracks;                  // 8 tracks initialised in MainComponent
+    float                     masterVolume         = 1.0f;
+    float                     masterPan            = 0.0f;
+};

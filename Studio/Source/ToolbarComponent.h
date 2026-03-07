@@ -59,6 +59,9 @@ public:
     // M10 — Export callback
     std::function<void()>  onExport;
 
+    // M5 — Mixer toggle
+    std::function<void()>  onToggleMixer;
+
 private:
     // Row 1 — transport
     juce::TextButton playButton   { "Play" };
@@ -85,6 +88,9 @@ private:
 
     // M10 — export button
     juce::TextButton exportBtn     { "Export WAV" };
+
+    // M5 — mixer toggle button
+    juce::TextButton mixerBtn      { "Mixer" };
 
     bool     playing  = false;
     PlayMode playMode = PlayMode::Pattern;

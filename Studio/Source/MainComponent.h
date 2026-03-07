@@ -6,6 +6,8 @@
 #include "ChannelRackComponent.h"
 #include "Audio/AudioEngine.h"
 #include "PlaylistComponent.h"
+#include "PianoRollComponent.h"
+#include "MixerComponent.h"
 
 class MainComponent : public juce::Component,
                       public juce::Timer
@@ -24,8 +26,16 @@ private:
     AudioEngine          audioEngine;
     ToolbarComponent     toolbar;
     PlaylistComponent    playlist;
+    juce::Viewport       playlistViewport;
+    juce::ComboBox       playlistSnapBox;
     ChannelRackComponent channelRack;
     juce::Viewport       channelRackViewport;
+    MixerComponent       mixer;
+
+    // M3 — floating piano roll window
+    std::unique_ptr<PianoRollWindow> pianoRollWindow;
+    int  pianoRollChannel = -1;
+    bool showMixer = false;
 
     // M2 — pattern management state
     int activePatternId = 1;
@@ -34,6 +44,9 @@ private:
     int      nextPatternId() const;
     void     selectPattern(int id);
     void     syncPatternToEngine();
+
+    // M6 — undo/redo
+    juce::UndoManager undoManager;
 
     // M4 — file state
     juce::File currentFile;

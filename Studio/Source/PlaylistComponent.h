@@ -36,8 +36,30 @@ public:
         if (playheadBar != bar) { playheadBar = bar; repaint(); }
     }
 
+    void setSnapDivisor(int d) { snapDivisor = d; repaint(); }
+
+    int getNeededWidth()  const { return 200 * barWidth; }
+    int getNeededHeight() const { return headerHeight + getTrackCount() * (trackHeight + trackGap); }
+    int getTrackCount()   const
+    {
+        if (project != nullptr && !project->playlistTracks.empty())
+            return (int)project->playlistTracks.size();
+        return 8;
+    }
+
     // M2.2 — provide the currently selected pattern ID when creating a clip
     std::function<int()> getActivePatternId;
+
+    // M6 — undo/redo hooks
+    std::function<void(PlaylistClip)>                                           onClipAdded;
+    std::function<void(PlaylistClip)>                                           onClipDeleted;
+    std::function<void(int id, float oldBar, int oldTrack, float newBar, int newTrack)> onClipMoved;
+    std::function<void(int id, float oldLen, float newLen)>                     onClipResized;
+
+    // M11 — track management callbacks
+    std::function<void()>        onTrackAdded;
+    std::function<void(int idx)> onTrackRenamed;
+    std::function<void(int idx)> onTrackDeleted;
 
 private:
     Project* project = nullptr;
@@ -47,13 +69,11 @@ private:
     static constexpr int headerHeight = 24;
     static constexpr int trackHeight  = 40;
     static constexpr int trackGap     = 4;
-    static constexpr int trackCount   = 8;   // expanded from 4
     static constexpr int barWidth     = 64;
     static constexpr int resizeHotspot = 10; // px from right edge = resize handle
 
     // Snap
-    int            snapDivisor = 1;    // 1=1bar, 2=½bar, 4=¼bar, 0=free
-    juce::ComboBox snapBox;
+    int snapDivisor = 1;    // 1=1bar, 2=½bar, 4=¼bar, 0=free
 
     // Drag state
     int   draggingClipId  = -1;
@@ -79,8 +99,10 @@ private:
     int           trackIndexAt(int mouseY) const;
 
     // Clip operations
-    void showContextMenu (int clipId);
-    void showRenameDialog(int clipId);
+    void showContextMenu      (int clipId);
+    void showRenameDialog     (int clipId);
+    void showTrackContextMenu (int trackIdx);   // M11
+    void showTrackRenameDialog(int trackIdx);   // M11
 
     std::vector<PlaylistClip>& clipList()
     {
@@ -105,22 +127,6 @@ private:
 
 inline PlaylistComponent::PlaylistComponent()
 {
-    addAndMakeVisible(snapBox);
-    snapBox.addItem("1 Bar",   1);
-    snapBox.addItem("1/2 Bar", 2);
-    snapBox.addItem("1/4 Bar", 4);
-    snapBox.addItem("Free",    99);
-    snapBox.setSelectedId(1, juce::dontSendNotification);
-    snapBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
-    snapBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
-    snapBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
-    snapBox.onChange = [this]
-    {
-        const int id = snapBox.getSelectedId();
-        snapDivisor = (id == 99) ? 0 : id;
-        repaint();
-    };
-
     PlaylistClip c1; c1.id=1; c1.patternId=1; c1.name="Intro Beat";
     c1.trackIndex=0; c1.startBar=0;  c1.lengthBars=4; localDemoClips.push_back(c1);
 
@@ -134,10 +140,7 @@ inline PlaylistComponent::PlaylistComponent()
     c4.trackIndex=2; c4.startBar=12; c4.lengthBars=2; localDemoClips.push_back(c4);
 }
 
-inline void PlaylistComponent::resized()
-{
-    snapBox.setBounds(getWidth() - 112, 2, 110, headerHeight - 4);
-}
+inline void PlaylistComponent::resized() {}
 
 inline double PlaylistComponent::getTotalBars() const
 {
@@ -205,20 +208,30 @@ inline void PlaylistComponent::drawTimeRuler(juce::Graphics& g)
 
 inline void PlaylistComponent::drawTracks(juce::Graphics& g)
 {
-    for (int t = 0; t < trackCount; ++t)
+    const int count = getTrackCount();
+    for (int t = 0; t < count; ++t)
     {
         const int trackY = headerHeight + t * (trackHeight + trackGap);
 
         g.setColour(t % 2 == 0 ? juce::Colour(0xff1b1b30) : juce::Colour(0xff151528));
         g.fillRect(0, trackY, getWidth(), trackHeight);
 
+        // Track header label area
         g.setColour(juce::Colour(0xff0f3460));
         g.fillRect(0, trackY, 80, trackHeight);
 
+        const juce::String name = (project != nullptr && t < (int)project->playlistTracks.size())
+                                  ? project->playlistTracks[(size_t)t].name
+                                  : ("Track " + juce::String(t + 1));
+
         g.setColour(juce::Colours::white.withAlpha(0.8f));
         g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
-        g.drawText("Track " + juce::String(t + 1), 6, trackY, 72, trackHeight,
-                   juce::Justification::centredLeft);
+        g.drawText(name, 6, trackY, 72, trackHeight, juce::Justification::centredLeft);
+
+        // Subtle right-click hint (three dots)
+        g.setColour(juce::Colours::white.withAlpha(0.25f));
+        for (int d = 0; d < 3; ++d)
+            g.fillEllipse(66.0f + d * 4.0f, (float)(trackY + trackHeight / 2 - 1), 2.0f, 2.0f);
     }
 }
 
@@ -232,9 +245,10 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
     };
     constexpr int paletteSize = (int)(sizeof(palette) / sizeof(palette[0]));
 
+    const int tc = getTrackCount();
     for (const auto& clip : clipList())
     {
-        if (clip.trackIndex < 0 || clip.trackIndex >= trackCount) continue;
+        if (clip.trackIndex < 0 || clip.trackIndex >= tc) continue;
 
         const int x  = (int)(clip.startBar  * barWidth);
         const int w  = (int)(clip.lengthBars * barWidth) - 2;
@@ -250,13 +264,43 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
         g.setColour(border);
         g.drawRoundedRectangle((float)x + 1, (float)ty, (float)w, (float)h, 4.0f, 1.3f);
 
-        // Resize handle indicator (right edge stripe)
+        // Resize handle stripe
         g.setColour(border.withAlpha(0.5f));
         g.fillRect(x + w - 4, ty + 2, 4, h - 4);
 
+        // M11.5 — mini step-grid preview (first 3 channels, bottom half of clip)
+        if (project != nullptr && w > 20)
+        {
+            const Pattern* pat = nullptr;
+            for (const auto& p : project->patterns)
+                if (p.id == clip.patternId) { pat = &p; break; }
+
+            if (pat != nullptr && pat->stepCount > 0)
+            {
+                const int   previewX = x + 4;
+                const int   previewW = w - 8;
+                const int   previewY = ty + h - 13;
+                const float stepW    = (float)previewW / (float)pat->stepCount;
+
+                for (int ch = 0; ch < juce::jmin(3, Pattern::kMaxChannels); ++ch)
+                {
+                    const int rowY = previewY + ch * 4;
+                    for (int s = 0; s < pat->stepCount; ++s)
+                    {
+                        if (pat->steps[ch][s])
+                        {
+                            g.setColour(fill.brighter(0.8f).withAlpha(0.85f));
+                            g.fillRect(previewX + (int)(s * stepW), rowY,
+                                       juce::jmax(1, (int)stepW - 1), 3);
+                        }
+                    }
+                }
+            }
+        }
+
         g.setColour(juce::Colours::white);
         g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
-        g.drawText(clip.name, x + 6, ty, w - 14, h, juce::Justification::centredLeft);
+        g.drawText(clip.name, x + 6, ty, w - 14, h - 14, juce::Justification::centredLeft);
     }
 }
 
@@ -277,9 +321,10 @@ inline void PlaylistComponent::drawPlayhead(juce::Graphics& g)
 
 inline PlaylistClip* PlaylistComponent::findClipAt(int x, int y)
 {
+    const int tc = getTrackCount();
     for (auto& clip : clipList())
     {
-        if (clip.trackIndex < 0 || clip.trackIndex >= trackCount) continue;
+        if (clip.trackIndex < 0 || clip.trackIndex >= tc) continue;
         const int cx = (int)(clip.startBar   * barWidth);
         const int cw = (int)(clip.lengthBars * barWidth) - 2;
         const int cy = headerHeight + clip.trackIndex * (trackHeight + trackGap) + 3;
@@ -301,7 +346,7 @@ inline int PlaylistComponent::trackIndexAt(int mouseY) const
     const int relY = mouseY - headerHeight;
     if (relY < 0) return -1;
     const int t = relY / (trackHeight + trackGap);
-    return juce::jlimit(0, trackCount - 1, t);
+    return juce::jlimit(0, getTrackCount() - 1, t);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,10 +360,19 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
 
     PlaylistClip* clip = findClipAt(pos.x, pos.y);
 
-    // Right-click → context menu
+    // Right-click → context or track menu
     if (e.mods.isRightButtonDown())
     {
-        if (clip != nullptr) showContextMenu(clip->id);
+        if (pos.x < 80 && pos.y >= headerHeight)
+        {
+            const int t = (pos.y - headerHeight) / (trackHeight + trackGap);
+            if (t >= 0 && t < getTrackCount())
+                showTrackContextMenu(t);
+        }
+        else if (clip != nullptr)
+        {
+            showContextMenu(clip->id);
+        }
         return;
     }
 
@@ -370,7 +424,7 @@ inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
 
         const int deltaY     = pos.y - dragStartMouseY;
         const int deltaTrack = (int)std::round((double)deltaY / (double)(trackHeight + trackGap));
-        clip->trackIndex = juce::jlimit(0, trackCount - 1, dragStartTrack + deltaTrack);
+        clip->trackIndex = juce::jlimit(0, getTrackCount() - 1, dragStartTrack + deltaTrack);
     }
 
     repaint();
@@ -378,6 +432,22 @@ inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
 
 inline void PlaylistComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (draggingClipId >= 0)
+    {
+        if (auto* clip = findClipById(draggingClipId))
+        {
+            if (resizingClip)
+            {
+                if (clip->lengthBars != dragStartLength && onClipResized)
+                    onClipResized(draggingClipId, dragStartLength, clip->lengthBars);
+            }
+            else
+            {
+                if ((clip->startBar != dragStartBar || clip->trackIndex != dragStartTrack) && onClipMoved)
+                    onClipMoved(draggingClipId, dragStartBar, dragStartTrack, clip->startBar, clip->trackIndex);
+            }
+        }
+    }
     draggingClipId = -1;
 }
 
@@ -396,7 +466,7 @@ inline void PlaylistComponent::mouseDoubleClick(const juce::MouseEvent& e)
 
     // Double-click on empty space → create new clip
     const int track = trackIndexAt(pos.y);
-    if (track < 0 || track >= trackCount) return;
+    if (track < 0 || track >= getTrackCount()) return;
 
     const float rawBar  = (float)pos.x / barWidth;
     const float snapUnit = (snapDivisor == 0) ? 0.0f : 1.0f / (float)snapDivisor;
@@ -417,6 +487,7 @@ inline void PlaylistComponent::mouseDoubleClick(const juce::MouseEvent& e)
     clip.name       = "Clip " + juce::String(newId);
     list.push_back(clip);
     repaint();
+    if (onClipAdded) onClipAdded(clip);
 }
 
 // ---------------------------------------------------------------------------
@@ -453,9 +524,13 @@ inline void PlaylistComponent::showContextMenu(int clipId)
             else if (result == 2)
             {
                 auto& list = clipList();
+                PlaylistClip deleted;
+                bool found = false;
+                for (const auto& c : list) { if (c.id == clipId) { deleted = c; found = true; break; } }
                 list.erase(std::remove_if(list.begin(), list.end(),
                     [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
                 repaint();
+                if (found && onClipDeleted) onClipDeleted(deleted);
             }
             else if (result >= 100)
             {
@@ -484,6 +559,90 @@ inline void PlaylistComponent::showRenameDialog(int clipId)
                 if (auto* c = findClipById(clipId))
                     c->name = dialog->getTextEditorContents("name");
                 repaint();
+            }
+            delete dialog;
+        }),
+        false);
+}
+
+// ---------------------------------------------------------------------------
+// M11 — Track management
+// ---------------------------------------------------------------------------
+
+inline void PlaylistComponent::showTrackContextMenu(int trackIdx)
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, "Rename Track");
+    menu.addItem(2, "Add Track Below");
+    menu.addSeparator();
+    menu.addItem(3, "Delete Track", getTrackCount() > 1);
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
+        [this, trackIdx](int result)
+        {
+            if (result == 1)
+            {
+                showTrackRenameDialog(trackIdx);
+            }
+            else if (result == 2)
+            {
+                if (project != nullptr)
+                {
+                    PlaylistTrack nt;
+                    nt.name = "Track " + juce::String(project->playlistTracks.size() + 1);
+                    project->playlistTracks.insert(
+                        project->playlistTracks.begin() + trackIdx + 1, nt);
+                    // Shift clips below the insertion point down by one track
+                    for (auto& c : clipList())
+                        if (c.trackIndex > trackIdx) c.trackIndex++;
+                    repaint();
+                    if (onTrackAdded) onTrackAdded();
+                }
+            }
+            else if (result == 3)
+            {
+                if (project != nullptr && getTrackCount() > 1)
+                {
+                    // Remove clips on the deleted track, shift the rest up
+                    auto& clips = clipList();
+                    clips.erase(std::remove_if(clips.begin(), clips.end(),
+                        [trackIdx](const PlaylistClip& c)
+                        { return c.trackIndex == trackIdx; }), clips.end());
+                    for (auto& c : clips)
+                        if (c.trackIndex > trackIdx) c.trackIndex--;
+                    project->playlistTracks.erase(
+                        project->playlistTracks.begin() + (size_t)trackIdx);
+                    repaint();
+                    if (onTrackDeleted) onTrackDeleted(trackIdx);
+                }
+            }
+        });
+}
+
+inline void PlaylistComponent::showTrackRenameDialog(int trackIdx)
+{
+    if (project == nullptr || trackIdx >= (int)project->playlistTracks.size()) return;
+
+    const juce::String current = project->playlistTracks[(size_t)trackIdx].name;
+    auto* dialog = new juce::AlertWindow("Rename Track", "Enter new name:",
+                                          juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor("name", current);
+    dialog->addButton("OK",     1);
+    dialog->addButton("Cancel", 0);
+
+    dialog->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, trackIdx, dialog](int result)
+        {
+            if (result == 1)
+            {
+                if (project != nullptr && trackIdx < (int)project->playlistTracks.size())
+                {
+                    const auto newName = dialog->getTextEditorContents("name").trim();
+                    if (newName.isNotEmpty())
+                        project->playlistTracks[(size_t)trackIdx].name = newName;
+                    repaint();
+                    if (onTrackRenamed) onTrackRenamed(trackIdx);
+                }
             }
             delete dialog;
         }),

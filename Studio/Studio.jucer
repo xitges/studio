@@ -33,6 +33,8 @@
       <FILE id="GP5oxg" name="MainComponent.h" compile="0" resource="0" file="Source/MainComponent.h"/>
       <FILE id="i8steI" name="MainComponent.cpp" compile="1" resource="0"
             file="Source/MainComponent.cpp"/>
+      <FILE id="PRoll1" name="PianoRollComponent.h" compile="0" resource="0" file="Source/PianoRollComponent.h"/>
+      <FILE id="MixC01" name="MixerComponent.h" compile="0" resource="0" file="Source/MixerComponent.h"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>

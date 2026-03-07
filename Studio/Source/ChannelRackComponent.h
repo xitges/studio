@@ -58,7 +58,20 @@ public:
     std::function<void(int ch, float pan)>    onPanChanged;     // M1.1
     std::function<void(int ch, float pitch)>  onPitchChanged;   // M1.2
     std::function<void(int ch, juce::File)>   onSampleDropped;
+    std::function<void(int ch, int step, bool newState, bool oldState)> onStepToggled; // M6
+    std::function<void(int ch)>               onOpenPianoRoll;      // M3
+    std::function<void(int ch, ChannelType)>  onChannelTypeChanged; // M3
     std::function<int()>                      getCurrentStep;
+
+    // M3 — reflect channel types from project
+    void setChannelType(int ch, ChannelType t)
+    {
+        if (ch >= 0 && ch < (int)channelTypes.size())
+        {
+            channelTypes[(size_t)ch] = t;
+            repaint();
+        }
+    }
 
     bool getStep(int channel, int step) const
     {
@@ -94,6 +107,7 @@ public:
 
 private:
     std::vector<ChannelRow> channels;
+    std::array<ChannelType, 16> channelTypes = {};  // M3: mirrors project.channelTypes
     juce::TextButton addChannelBtn { "+ Add Channel" };
     juce::Slider     stepCountSlider;
 
