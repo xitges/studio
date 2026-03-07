@@ -6,6 +6,7 @@ ChannelRackComponent::ChannelRackComponent()
     addChannel("Snare");
     addChannel("HiHat");
 
+    // Default beat pattern
     channels[0].steps[0]  = true;
     channels[0].steps[4]  = true;
     channels[0].steps[8]  = true;
@@ -17,11 +18,10 @@ ChannelRackComponent::ChannelRackComponent()
     for (int i = 0; i < 16; ++i)
         channels[2].steps[i] = true;
 
+    // Add Channel button
     addAndMakeVisible(addChannelBtn);
-    addChannelBtn.setColour(juce::TextButton::buttonColourId,
-                            juce::Colour(0xff0f3460));
-    addChannelBtn.setColour(juce::TextButton::textColourOnId,
-                            juce::Colours::white);
+    addChannelBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff0f3460));
+    addChannelBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     addChannelBtn.onClick = [this]
     {
         addChannel("Channel " + juce::String(channels.size() + 1));
@@ -29,17 +29,18 @@ ChannelRackComponent::ChannelRackComponent()
         repaint();
     };
 
-    // 스텝 개수 선택 콤보박스 (16 / 32 / 64)
-    addAndMakeVisible(stepCountBox);
-    stepCountBox.addItem("16 Steps", 16);
-    stepCountBox.addItem("32 Steps", 32);
-    stepCountBox.addItem("64 Steps", 64);
-    stepCountBox.setSelectedId(16, juce::dontSendNotification);
-    stepCountBox.onChange = [this]
+    // Step count slider — any value 1..kMaxSteps by 1
+    addAndMakeVisible(stepCountSlider);
+    stepCountSlider.setRange(1, Pattern::kMaxSteps, 1);
+    stepCountSlider.setValue(16, juce::dontSendNotification);
+    stepCountSlider.setSliderStyle(juce::Slider::IncDecButtons);
+    stepCountSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 40, 24);
+    stepCountSlider.setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
+    stepCountSlider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16213e));
+    stepCountSlider.setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff0f3460));
+    stepCountSlider.onValueChange = [this]
     {
-        int newCount = stepCountBox.getSelectedId();
-        newCount = juce::jlimit(1, Pattern::kMaxSteps, newCount);
-        stepCount = newCount;
+        stepCount = (int)stepCountSlider.getValue();
         repaint();
     };
     stepCount = 16;
@@ -52,18 +53,128 @@ ChannelRackComponent::~ChannelRackComponent()
     stopTimer();
 }
 
+// ---------------------------------------------------------------------------
+
 void ChannelRackComponent::addChannel(const juce::String& name)
 {
     ChannelRow row;
     row.name = name;
-    channels.push_back(row);
+
+    const int ch = (int)channels.size();
+
+    // ---- Mute button
+    row.muteBtn = std::make_unique<juce::TextButton>("M");
+    row.muteBtn->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c54));
+    row.muteBtn->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    row.muteBtn->onClick = [this, ch]
+    {
+        channels[ch].muted = !channels[ch].muted;
+        channels[ch].muteBtn->setColour(juce::TextButton::buttonColourId,
+            channels[ch].muted ? juce::Colour(0xffe74c3c) : juce::Colour(0xff2c2c54));
+        if (onMuteChanged) onMuteChanged(ch, channels[ch].muted);
+    };
+    addAndMakeVisible(*row.muteBtn);
+
+    // ---- Solo button
+    row.soloBtn = std::make_unique<juce::TextButton>("S");
+    row.soloBtn->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c54));
+    row.soloBtn->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    row.soloBtn->onClick = [this, ch]
+    {
+        channels[ch].soloed = !channels[ch].soloed;
+        channels[ch].soloBtn->setColour(juce::TextButton::buttonColourId,
+            channels[ch].soloed ? juce::Colour(0xfff39c12) : juce::Colour(0xff2c2c54));
+        if (onSoloChanged) onSoloChanged(ch, channels[ch].soloed);
+    };
+    addAndMakeVisible(*row.soloBtn);
+
+    // ---- M1.1 Volume slider
+    row.volSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal,
+                                                    juce::Slider::NoTextBox);
+    row.volSlider->setRange(0.0, 1.0, 0.01);
+    row.volSlider->setValue(row.volume, juce::dontSendNotification);
+    row.volSlider->setColour(juce::Slider::thumbColourId,       juce::Colour(0xff3498db));
+    row.volSlider->setColour(juce::Slider::trackColourId,       juce::Colour(0xff3498db));
+    row.volSlider->setColour(juce::Slider::backgroundColourId,  juce::Colour(0xff1a1a2e));
+    row.volSlider->onValueChange = [this, ch]
+    {
+        float v = (float)channels[ch].volSlider->getValue();
+        channels[ch].volume = v;
+        if (onVolumeChanged) onVolumeChanged(ch, v);
+    };
+    addAndMakeVisible(*row.volSlider);
+
+    // ---- M1.1 Pan slider
+    row.panSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal,
+                                                    juce::Slider::NoTextBox);
+    row.panSlider->setRange(-1.0, 1.0, 0.01);
+    row.panSlider->setValue(row.pan, juce::dontSendNotification);
+    row.panSlider->setColour(juce::Slider::thumbColourId,      juce::Colour(0xffe67e22));
+    row.panSlider->setColour(juce::Slider::trackColourId,      juce::Colour(0xffe67e22));
+    row.panSlider->setColour(juce::Slider::backgroundColourId, juce::Colour(0xff1a1a2e));
+    row.panSlider->onValueChange = [this, ch]
+    {
+        float p = (float)channels[ch].panSlider->getValue();
+        channels[ch].pan = p;
+        if (onPanChanged) onPanChanged(ch, p);
+    };
+    addAndMakeVisible(*row.panSlider);
+
+    // ---- M1.2 Pitch slider (vertical: top = +24, bottom = -24)
+    row.pitchSlider = std::make_unique<juce::Slider>(juce::Slider::LinearVertical,
+                                                      juce::Slider::NoTextBox);
+    row.pitchSlider->setRange(-24.0, 24.0, 0.5);
+    row.pitchSlider->setValue(row.pitch, juce::dontSendNotification);
+    row.pitchSlider->setColour(juce::Slider::thumbColourId,      juce::Colour(0xff2ecc71));
+    row.pitchSlider->setColour(juce::Slider::trackColourId,      juce::Colour(0xff2ecc71));
+    row.pitchSlider->setColour(juce::Slider::backgroundColourId, juce::Colour(0xff1a1a2e));
+    row.pitchSlider->onValueChange = [this, ch]
+    {
+        float s = (float)channels[ch].pitchSlider->getValue();
+        channels[ch].pitch = s;
+        if (onPitchChanged) onPitchChanged(ch, s);
+    };
+    addAndMakeVisible(*row.pitchSlider);
+
+    channels.push_back(std::move(row));
 }
+
+// ---------------------------------------------------------------------------
+
+// M2.1 — Load pattern steps into the UI grid
+void ChannelRackComponent::loadPattern(const Pattern& pat)
+{
+    // Sync step count
+    stepCount = juce::jlimit(1, Pattern::kMaxSteps, pat.stepCount);
+
+    stepCountSlider.setValue(stepCount, juce::dontSendNotification);
+
+    // Copy step data for each channel
+    for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
+        for (int s = 0; s < Pattern::kMaxSteps; ++s)
+            channels[ch].steps[s] = pat.steps[ch][s];
+
+    repaint();
+}
+
+// M2.1 — Write UI grid state back into a Pattern
+void ChannelRackComponent::saveToPattern(Pattern& pat) const
+{
+    pat.stepCount = stepCount;
+    for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
+        for (int s = 0; s < Pattern::kMaxSteps; ++s)
+            pat.steps[ch][s] = channels[ch].steps[s];
+}
+
+// ---------------------------------------------------------------------------
 
 void ChannelRackComponent::timerCallback()
 {
     if (getCurrentStep)
         setPlaybackStep(getCurrentStep());
 }
+
+// ---------------------------------------------------------------------------
 
 void ChannelRackComponent::paint(juce::Graphics& g)
 {
@@ -78,11 +189,11 @@ void ChannelRackComponent::drawHeader(juce::Graphics& g)
     g.setColour(juce::Colour(0xff16213e));
     g.fillRect(0, 0, getWidth(), HEADER_HEIGHT);
 
-    float stepW = (getWidth() - LABEL_WIDTH) / (float)stepCount;
+    const float stepW = (getWidth() - LABEL_WIDTH) / (float)stepCount;
 
     for (int i = 0; i < stepCount; ++i)
     {
-        int x = LABEL_WIDTH + (int)(i * stepW);
+        const int x = LABEL_WIDTH + (int)(i * stepW);
 
         if (i == currentPlayStep)
         {
@@ -90,11 +201,7 @@ void ChannelRackComponent::drawHeader(juce::Graphics& g)
             g.fillRect(x, 0, (int)stepW, HEADER_HEIGHT);
         }
 
-        if (i % 4 == 0)
-            g.setColour(juce::Colours::white);
-        else
-            g.setColour(juce::Colours::grey);
-
+        g.setColour(i % 4 == 0 ? juce::Colours::white : juce::Colours::grey);
         g.setFont(juce::Font(juce::FontOptions().withHeight(12.0f)));
         g.drawText(juce::String(i + 1), x, 0, (int)stepW, HEADER_HEIGHT,
                    juce::Justification::centred);
@@ -105,62 +212,69 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
 {
     for (int i = 0; i < (int)channels.size(); ++i)
     {
-        int y = HEADER_HEIGHT + i * ROW_HEIGHT;
+        const int y = HEADER_HEIGHT + i * ROW_HEIGHT;
 
+        // Row background
         if (i == dragHoverChannel)
             g.setColour(juce::Colour(0xff2ecc71).withAlpha(0.3f));
         else
-            g.setColour(i % 2 == 0 ? juce::Colour(0xff1e1e3a)
-                                   : juce::Colour(0xff16213e));
+            g.setColour(i % 2 == 0 ? juce::Colour(0xff1e1e3a) : juce::Colour(0xff16213e));
         g.fillRect(0, y, LABEL_WIDTH, ROW_HEIGHT);
 
+        // Channel name (top half, left area)
         g.setColour(juce::Colours::white);
         g.setFont(juce::Font(juce::FontOptions().withHeight(13.0f)));
-        g.drawText(channels[i].name, 10, y, LABEL_WIDTH - 20, ROW_HEIGHT / 2,
+        g.drawText(channels[i].name, 8, y + 2, 86, 18,
                    juce::Justification::centredLeft);
 
+        // Sample name (bottom half, left area)
         g.setColour(juce::Colour(0xff3498db));
         g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
-        g.drawText(channels[i].sampleName, 10, y + ROW_HEIGHT / 2,
-                   LABEL_WIDTH - 20, ROW_HEIGHT / 2,
+        g.drawText(channels[i].sampleName, 8, y + 24, 86, 16,
                    juce::Justification::centredLeft);
 
+        // Small "V" / "P" / "pitch" labels above sliders
+        g.setColour(juce::Colours::grey);
+        g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+        g.drawText("V", 96, y + 2, 10, 10, juce::Justification::centred);
+        g.drawText("P", 96, y + 24, 10, 10, juce::Justification::centred);
+
+        // Separator line
         g.setColour(juce::Colour(0xff0f3460));
-        g.drawLine(0, y + ROW_HEIGHT, LABEL_WIDTH, y + ROW_HEIGHT, 1.0f);
+        g.drawLine(0.0f, (float)(y + ROW_HEIGHT), (float)LABEL_WIDTH,
+                   (float)(y + ROW_HEIGHT), 1.0f);
     }
 }
 
 void ChannelRackComponent::drawStepGrid(juce::Graphics& g)
 {
-    int stepAreaX = LABEL_WIDTH;
-    float stepW   = (getWidth() - stepAreaX) / (float)stepCount;
+    const int   stepAreaX = LABEL_WIDTH;
+    const float stepW     = (getWidth() - stepAreaX) / (float)stepCount;
 
     for (int ch = 0; ch < (int)channels.size(); ++ch)
     {
-        int y = HEADER_HEIGHT + ch * ROW_HEIGHT;
+        const int y = HEADER_HEIGHT + ch * ROW_HEIGHT;
 
         for (int s = 0; s < stepCount; ++s)
         {
-            int x = stepAreaX + (int)(s * stepW);
-            int w = (int)stepW - 2;
-            int h = ROW_HEIGHT - 4;
+            const int x = stepAreaX + (int)(s * stepW);
+            const int w = (int)stepW - 2;
+            const int h = ROW_HEIGHT - 4;
 
-            bool isCurrentStep = (s == currentPlayStep);
+            const bool isCurrentStep = (s == currentPlayStep);
 
             if (channels[ch].steps[s])
             {
                 juce::Colour c = isCurrentStep
                     ? juce::Colour(0xffffffff)
-                    : (s % 4 == 0 ? juce::Colour(0xff3498db)
-                                  : juce::Colour(0xff2980b9));
+                    : (s % 4 == 0 ? juce::Colour(0xff3498db) : juce::Colour(0xff2980b9));
                 g.setColour(c);
                 g.fillRoundedRectangle(x + 1, y + 2, w, h, 4.0f);
             }
             else
             {
-                juce::Colour c = isCurrentStep
-                    ? juce::Colour(0xff555588)
-                    : juce::Colour(0xff2c2c54);
+                juce::Colour c = isCurrentStep ? juce::Colour(0xff555588)
+                                               : juce::Colour(0xff2c2c54);
                 g.setColour(c);
                 g.fillRoundedRectangle(x + 1, y + 2, w, h, 4.0f);
 
@@ -174,51 +288,117 @@ void ChannelRackComponent::drawStepGrid(juce::Graphics& g)
     }
 }
 
+// ---------------------------------------------------------------------------
+
 void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
 {
-    int stepAreaX = LABEL_WIDTH;
-    float stepW   = (getWidth() - stepAreaX) / (float)stepCount;
+    const int stepAreaX = LABEL_WIDTH;
+    const float stepW   = (getWidth() - stepAreaX) / (float)stepCount;
 
-    int x = e.getPosition().getX();
-    int y = e.getPosition().getY() - HEADER_HEIGHT;
+    const int x = e.getPosition().getX();
+    const int y = e.getPosition().getY() - HEADER_HEIGHT;
 
     if (x < stepAreaX || y < 0) return;
 
-    int ch = y / ROW_HEIGHT;
-    int s  = (int)((x - stepAreaX) / stepW);
+    const int ch = y / ROW_HEIGHT;
+    const int s  = (int)((x - stepAreaX) / stepW);
 
-    if (ch >= 0 && ch < (int)channels.size() &&
-        s  >= 0 && s  < stepCount)
+    if (ch >= 0 && ch < (int)channels.size() && s >= 0 && s < stepCount)
     {
         channels[ch].steps[s] = !channels[ch].steps[s];
         repaint();
     }
 }
 
+// M1.5 — Double-click on channel name to rename
+void ChannelRackComponent::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    const int x = e.getPosition().getX();
+    const int y = e.getPosition().getY() - HEADER_HEIGHT;
+
+    // Only respond to clicks in the name text area (left 94px of label)
+    if (x > 94 || y < 0) return;
+
+    const int ch = y / ROW_HEIGHT;
+    if (ch < 0 || ch >= (int)channels.size()) return;
+
+    auto* dialog = new juce::AlertWindow("Rename Channel",
+                                          "Enter a new name:",
+                                          juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor("name", channels[ch].name);
+    dialog->addButton("OK",     1);
+    dialog->addButton("Cancel", 0);
+
+    const int chCapture = ch;
+    dialog->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, chCapture, dialog](int result)
+        {
+            if (result == 1)
+            {
+                channels[chCapture].name = dialog->getTextEditorContents("name");
+                repaint();
+            }
+            delete dialog;
+        }),
+        false  // deleteWhenDismissed = false (we delete in callback)
+    );
+}
+
+// ---------------------------------------------------------------------------
+
 void ChannelRackComponent::resized()
 {
-    int totalRows = (int)channels.size();
-    int contentH  = HEADER_HEIGHT + totalRows * ROW_HEIGHT + 50;
-    setSize(getWidth(), juce::jmax(contentH, getParentHeight()));
+    // Compute required height and self-size (enables Viewport scrolling)
+    const int needed  = getNeededHeight();
+    const int parentH = (getParentComponent() != nullptr)
+                            ? getParentComponent()->getHeight()
+                            : 400;
+    const int desired = juce::jmax(needed, parentH);
 
-    int controlsY = HEADER_HEIGHT + totalRows * ROW_HEIGHT + 8;
+    if (getHeight() != desired)
+    {
+        setSize(getWidth(), desired);
+        return;  // setSize triggers resized() again with correct dimensions
+    }
 
-    addChannelBtn.setBounds(10,
-                            controlsY,
-                            140, 30);
+    // Bottom controls
+    const int controlsY = HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 8;
+    addChannelBtn   .setBounds(10,  controlsY, 140, 30);
+    stepCountSlider .setBounds(160, controlsY, 100, 30);
 
-    stepCountBox.setBounds(160,
-                           controlsY,
-                           120, 30);
+    // Per-channel controls layout
+    for (int i = 0; i < (int)channels.size(); ++i)
+    {
+        const int y = HEADER_HEIGHT + i * ROW_HEIGHT;
+
+        // Vol slider  (M1.1) — top row, right of name
+        if (channels[i].volSlider)
+            channels[i].volSlider->setBounds(106, y + 4, 48, 14);
+
+        // Pan slider  (M1.1) — bottom row, right of name
+        if (channels[i].panSlider)
+            channels[i].panSlider->setBounds(106, y + 26, 48, 14);
+
+        // Pitch slider (M1.2) — vertical, centre column
+        if (channels[i].pitchSlider)
+            channels[i].pitchSlider->setBounds(156, y + 4, 12, ROW_HEIGHT - 8);
+
+        // Mute / Solo buttons — far right of label
+        if (channels[i].muteBtn)
+            channels[i].muteBtn->setBounds(170, y + 4, 14, 16);
+        if (channels[i].soloBtn)
+            channels[i].soloBtn->setBounds(170, y + 24, 14, 16);
+    }
 }
+
+// ---------------------------------------------------------------------------
 
 int ChannelRackComponent::getChannelIndexAt(int y) const
 {
-    int relY = y - HEADER_HEIGHT;
+    const int relY = y - HEADER_HEIGHT;
     if (relY < 0) return -1;
-    int ch = relY / ROW_HEIGHT;
-    if (ch >= (int)channels.size()) return -1;
-    return ch;
+    const int ch = relY / ROW_HEIGHT;
+    return (ch < (int)channels.size()) ? ch : -1;
 }
 
 bool ChannelRackComponent::isInterestedInFileDrag(const juce::StringArray&)
@@ -234,7 +414,7 @@ void ChannelRackComponent::fileDragEnter(const juce::StringArray&, int, int y)
 
 void ChannelRackComponent::fileDragMove(const juce::StringArray&, int, int y)
 {
-    int newHover = getChannelIndexAt(y);
+    const int newHover = getChannelIndexAt(y);
     if (newHover != dragHoverChannel)
     {
         dragHoverChannel = newHover;
@@ -252,11 +432,10 @@ void ChannelRackComponent::filesDropped(const juce::StringArray& files, int, int
 {
     dragHoverChannel = -1;
 
-    int ch = getChannelIndexAt(y);
+    const int ch = getChannelIndexAt(y);
     if (ch < 0) return;
 
     juce::File file(files[0]);
-
     channels[ch].sampleName = file.getFileNameWithoutExtension();
     repaint();
 

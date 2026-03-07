@@ -5,6 +5,13 @@
   <MAINGROUP id="spKQG8" name="Studio">
     <GROUP id="{DA7259DF-E127-698E-06F0-4EDFDB432B1E}" name="Source"/>
     <GROUP id="{2C34AE82-8316-18E7-58A8-A07010B1D135}" name="Source">
+      <FILE id="VU57uJ" name="PlaylistComponent.cpp" compile="1" resource="0"
+            file="Source/PlaylistComponent.cpp"/>
+      <FILE id="ro8NHZ" name="PlaylistComponent.h" compile="0" resource="0"
+            file="Source/PlaylistComponent.h"/>
+      <FILE id="lvdokd" name="ProjectModel.h" compile="0" resource="0" file="Source/ProjectModel.h"/>
+      <FILE id="PSer01" name="ProjectSerializer.h" compile="0" resource="0" file="Source/ProjectSerializer.h"/>
+      <FILE id="PSer02" name="ProjectSerializer.cpp" compile="1" resource="0" file="Source/ProjectSerializer.cpp"/>
       <GROUP id="{B250E479-C067-930A-5CB3-146F1368C278}" name="Audio">
         <FILE id="LYtVJ3" name="AudioEngine.cpp" compile="1" resource="0" file="Source/Audio/AudioEngine.cpp"/>
         <FILE id="Jwt7Sb" name="AudioEngine.h" compile="0" resource="0" file="Source/Audio/AudioEngine.h"/>

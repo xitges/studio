@@ -44,8 +44,8 @@ struct PlaylistClip
     int          id         = 0;
     int          patternId  = 0;
     int          trackIndex = 0;
-    int          startBar   = 0;
-    int          lengthBars = 1;
+    float        startBar   = 0.0f;
+    float        lengthBars = 1.0f;
 
     juce::String name;
 };

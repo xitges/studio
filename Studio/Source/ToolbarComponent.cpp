@@ -12,7 +12,7 @@
 
 ToolbarComponent::ToolbarComponent()
 {
-    // 재생 버튼
+    // ---- Row 1: Transport buttons
     addAndMakeVisible(playButton);
     addAndMakeVisible(stopButton);
     addAndMakeVisible(recordButton);
@@ -20,83 +20,182 @@ ToolbarComponent::ToolbarComponent()
     stopButton.addListener(this);
     recordButton.addListener(this);
 
-    // 버튼 색상
-    playButton.setColour(juce::TextButton::buttonColourId,
-                         juce::Colour(0xff2ecc71));
-    stopButton.setColour(juce::TextButton::buttonColourId,
-                         juce::Colour(0xffe74c3c));
-    recordButton.setColour(juce::TextButton::buttonColourId,
-                           juce::Colour(0xffe74c3c));
+    playButton  .setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2ecc71));
+    stopButton  .setColour(juce::TextButton::buttonColourId, juce::Colour(0xffe74c3c));
+    recordButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xffe74c3c));
 
-    // BPM 슬라이더
+    // ---- Row 1: Play mode combo
+    addAndMakeVisible(playModeBox);
+    playModeBox.addItem("Pattern", (int)PlayMode::Pattern + 1);
+    playModeBox.addItem("Song",    (int)PlayMode::Song    + 1);
+    playModeBox.setSelectedId((int)PlayMode::Pattern + 1, juce::dontSendNotification);
+    playModeBox.addListener(this);
+    playModeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
+    playModeBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
+    playModeBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
+
+    // ---- Row 1: BPM
     addAndMakeVisible(bpmSlider);
     bpmSlider.setRange(60.0, 200.0, 1.0);
-    bpmSlider.setValue(140.0);
+    bpmSlider.setValue(70.0);
     bpmSlider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     bpmSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 18);
     bpmSlider.addListener(this);
-    bpmSlider.setColour(juce::Slider::rotarySliderFillColourId,
-                        juce::Colour(0xff3498db));
+    bpmSlider.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(0xff3498db));
 
-    // BPM 라벨
     addAndMakeVisible(bpmLabel);
     bpmLabel.setText("BPM", juce::dontSendNotification);
     bpmLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     bpmLabel.setJustificationType(juce::Justification::centred);
 
-    // 타이틀
+    // ---- Row 1: Title
     addAndMakeVisible(titleLabel);
-    titleLabel.setText("Studio  MVP", juce::dontSendNotification);
+    titleLabel.setText("Studio", juce::dontSendNotification);
     titleLabel.setFont(juce::Font(juce::FontOptions().withHeight(18.0f).withStyle("Bold")));
-    titleLabel.setColour(juce::Label::textColourId,
-                         juce::Colour(0xffecf0f1));
+    titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffecf0f1));
     titleLabel.setJustificationType(juce::Justification::centredRight);
 
-    // 재생 모드 (Pattern / Song)
-    addAndMakeVisible(playModeBox);
-    playModeBox.addItem("Pattern", (int)PlayMode::Pattern + 1);
-    playModeBox.addItem("Song",    (int)PlayMode::Song + 1);
-    playModeBox.setSelectedId((int)PlayMode::Pattern + 1, juce::dontSendNotification);
-    playModeBox.addListener(this);
-    playModeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
-    playModeBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
-    playModeBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+    // ---- Row 2: Pattern label
+    addAndMakeVisible(patternLabel);
+    patternLabel.setText("PATTERN", juce::dontSendNotification);
+    patternLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+    patternLabel.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
+    patternLabel.setJustificationType(juce::Justification::centredRight);
+
+    // ---- Row 2: Pattern combo (items populated via updatePatternList)
+    addAndMakeVisible(patternBox);
+    patternBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
+    patternBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
+    patternBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
+    patternBox.onChange = [this]
+    {
+        const int id = patternBox.getSelectedId();
+        if (id > 0 && onPatternSelected)
+            onPatternSelected(id);
+    };
+
+    // ---- Row 2: New / Duplicate / Delete pattern buttons
+    addAndMakeVisible(newPatBtn);
+    newPatBtn.setTooltip("New pattern");
+    newPatBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a6b3a));
+    newPatBtn.onClick = [this] { if (onNewPattern) onNewPattern(); };
+
+    addAndMakeVisible(dupPatBtn);
+    dupPatBtn.setTooltip("Duplicate pattern");
+    dupPatBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff0f3460));
+    dupPatBtn.onClick = [this] { if (onDuplicatePattern) onDuplicatePattern(); };
+
+    addAndMakeVisible(delPatBtn);
+    delPatBtn.setTooltip("Delete pattern");
+    delPatBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff6b1a1a));
+    delPatBtn.onClick = [this] { if (onDeletePattern) onDeletePattern(); };
+
+    addAndMakeVisible(renamePatBtn);
+    renamePatBtn.setTooltip("Rename pattern");
+    renamePatBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c54));
+    renamePatBtn.onClick = [this] { if (onRenamePattern) onRenamePattern(); };
+
+    // ---- M4: File buttons (row 2, right side)
+    addAndMakeVisible(newFileBtn);
+    newFileBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c54));
+    newFileBtn.onClick = [this] { if (onNewFile) onNewFile(); };
+
+    addAndMakeVisible(openFileBtn);
+    openFileBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c54));
+    openFileBtn.onClick = [this] { if (onOpenFile) onOpenFile(); };
+
+    addAndMakeVisible(saveFileBtn);
+    saveFileBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a4a1a));
+    saveFileBtn.onClick = [this] { if (onSaveFile) onSaveFile(); };
+
+    addAndMakeVisible(saveAsFileBtn);
+    saveAsFileBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c54));
+    saveAsFileBtn.onClick = [this] { if (onSaveFileAs) onSaveFileAs(); };
+
+    addAndMakeVisible(exportBtn);
+    exportBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff4a2c6b));
+    exportBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    exportBtn.onClick = [this] { if (onExport) onExport(); };
 }
 
 ToolbarComponent::~ToolbarComponent() {}
+
+// ---------------------------------------------------------------------------
+
+void ToolbarComponent::setProjectTitle(const juce::String& filename, bool dirty)
+{
+    const juce::String name = filename.isEmpty() ? "Untitled" : filename;
+    const juce::String title = juce::String("Studio  -  ") + name + (dirty ? "  *" : "");
+    titleLabel.setText(title, juce::dontSendNotification);
+}
+
+void ToolbarComponent::updatePatternList(const std::vector<Pattern>& patterns, int selectedId)
+{
+    patternBox.clear(juce::dontSendNotification);
+    for (const auto& p : patterns)
+        patternBox.addItem(p.name, p.id);   // item ID == pattern ID
+    patternBox.setSelectedId(selectedId, juce::dontSendNotification);
+}
+
+// ---------------------------------------------------------------------------
 
 void ToolbarComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff16213e));
 
-    // 하단 구분선
+    // Divider between row 1 and row 2
     g.setColour(juce::Colour(0xff0f3460));
-    g.drawLine(0, getHeight() - 1, getWidth(), getHeight() - 1, 2.0f);
+    g.drawLine(0.0f, 40.0f, (float)getWidth(), 40.0f, 1.0f);
+
+    // Bottom border
+    g.drawLine(0.0f, (float)(getHeight() - 1), (float)getWidth(),
+               (float)(getHeight() - 1), 2.0f);
 }
 
 void ToolbarComponent::resized()
 {
-    auto area = getLocalBounds().reduced(8);
+    // ---- Row 1: top 40px
+    {
+        auto row = getLocalBounds().removeFromTop(40).reduced(6, 4);
 
-    // 왼쪽: 재생 버튼들
-    playButton.setBounds  (area.removeFromLeft(44).reduced(4));
-    stopButton.setBounds  (area.removeFromLeft(44).reduced(4));
-    recordButton.setBounds(area.removeFromLeft(44).reduced(4));
+        playButton  .setBounds(row.removeFromLeft(44).reduced(2));
+        stopButton  .setBounds(row.removeFromLeft(44).reduced(2));
+        recordButton.setBounds(row.removeFromLeft(44).reduced(2));
+        row.removeFromLeft(12);
 
-    area.removeFromLeft(12); // 여백
+        playModeBox.setBounds(row.removeFromLeft(90).reduced(2));
+        row.removeFromLeft(12);
 
-    // 재생 모드 콤보박스
-    playModeBox.setBounds(area.removeFromLeft(90).reduced(2));
+        bpmLabel .setBounds(row.removeFromLeft(36).reduced(2));
+        bpmSlider.setBounds(row.removeFromLeft(60).reduced(2));
 
-    area.removeFromLeft(12); // 여백
+        titleLabel.setBounds(row);
+    }
 
-    // BPM
-    bpmLabel.setBounds (area.removeFromLeft(40).reduced(2));
-    bpmSlider.setBounds(area.removeFromLeft(60).reduced(2));
+    // ---- Row 2: bottom 40px
+    {
+        auto row = getLocalBounds().removeFromBottom(40).reduced(6, 4);
 
-    // 오른쪽: 타이틀
-    titleLabel.setBounds(area);
+        patternLabel.setBounds(row.removeFromLeft(58).reduced(2));
+        patternBox  .setBounds(row.removeFromLeft(140).reduced(2));
+        row.removeFromLeft(6);
+
+        newPatBtn   .setBounds(row.removeFromLeft(28).reduced(2));
+        dupPatBtn   .setBounds(row.removeFromLeft(28).reduced(2));
+        delPatBtn   .setBounds(row.removeFromLeft(28).reduced(2));
+        row.removeFromLeft(6);
+        renamePatBtn.setBounds(row.removeFromLeft(56).reduced(2));
+
+        // File + Export buttons on the right side
+        exportBtn    .setBounds(row.removeFromRight(76).reduced(2));
+        saveAsFileBtn.setBounds(row.removeFromRight(58).reduced(2));
+        saveFileBtn  .setBounds(row.removeFromRight(46).reduced(2));
+        openFileBtn  .setBounds(row.removeFromRight(46).reduced(2));
+        newFileBtn   .setBounds(row.removeFromRight(40).reduced(2));
+    }
 }
+
+// ---------------------------------------------------------------------------
 
 void ToolbarComponent::buttonClicked(juce::Button* btn)
 {
@@ -118,16 +217,13 @@ void ToolbarComponent::sliderValueChanged(juce::Slider* slider)
         if (onBPMChanged) onBPMChanged(bpmSlider.getValue());
 }
 
-void ToolbarComponent::comboBoxChanged(juce::ComboBox* comboBoxThatHasChanged)
+void ToolbarComponent::comboBoxChanged(juce::ComboBox* box)
 {
-    if (comboBoxThatHasChanged == &playModeBox)
+    if (box == &playModeBox)
     {
-        auto id = playModeBox.getSelectedId();
-        playMode = (id == (int)PlayMode::Song + 1)
-            ? PlayMode::Song
-            : PlayMode::Pattern;
-
-        if (onPlayModeChanged)
-            onPlayModeChanged(playMode);
+        playMode = (playModeBox.getSelectedId() == (int)PlayMode::Song + 1)
+                   ? PlayMode::Song : PlayMode::Pattern;
+        if (onPlayModeChanged) onPlayModeChanged(playMode);
     }
+    // patternBox uses onChange lambda — no handling needed here
 }

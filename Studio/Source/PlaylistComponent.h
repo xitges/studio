@@ -5,9 +5,6 @@
     Created: 6 Mar 2026
     Author:  홍준영
 
-    간단한 FL 스타일 플레이리스트 UI (타임라인 + 패턴 클립)
-    - 아직 오디오 재생 로직과는 연결되지 않은 순수 UI 레벨 MVP
-
   ==============================================================================
 */
 
@@ -25,85 +22,140 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
 
-    void mouseDown(const juce::MouseEvent& e) override;
-    void mouseDrag(const juce::MouseEvent& e) override;
-    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseDown       (const juce::MouseEvent& e) override;
+    void mouseDrag       (const juce::MouseEvent& e) override;
+    void mouseUp         (const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
-    // 총 곡 길이(바)를 반환 (마지막 클립 기준)
     double getTotalBars() const;
 
-    // 외부 Project 모델을 연결 (nullptr 이면 내부 더미 클립 사용)
     void setProject(Project* projectToUse);
+
+    void setPlayheadBar(double bar)
+    {
+        if (playheadBar != bar) { playheadBar = bar; repaint(); }
+    }
+
+    // M2.2 — provide the currently selected pattern ID when creating a clip
+    std::function<int()> getActivePatternId;
 
 private:
     Project* project = nullptr;
 
-    // project 가 없을 때 사용하는 데모용 로컬 클립
     std::vector<PlaylistClip> localDemoClips;
 
-    static constexpr int headerHeight   = 24;
-    static constexpr int trackHeight    = 40;
-    static constexpr int trackGap       = 4;
-    static constexpr int trackCount     = 4;
-    static constexpr int barWidth       = 64;  // 한 바당 픽셀 수
+    static constexpr int headerHeight = 24;
+    static constexpr int trackHeight  = 40;
+    static constexpr int trackGap     = 4;
+    static constexpr int trackCount   = 8;   // expanded from 4
+    static constexpr int barWidth     = 64;
+    static constexpr int resizeHotspot = 10; // px from right edge = resize handle
 
-    int  draggingClipId   = -1;
-    int  dragStartBar     = 0;
-    int  dragStartMouseX  = 0;
+    // Snap
+    int            snapDivisor = 1;    // 1=1bar, 2=½bar, 4=¼bar, 0=free
+    juce::ComboBox snapBox;
 
+    // Drag state
+    int   draggingClipId  = -1;
+    bool  resizingClip    = false;
+    float dragStartBar    = 0.0f;
+    int   dragStartTrack  = 0;
+    float dragStartLength = 1.0f;
+    int   dragStartMouseX = 0;
+    int   dragStartMouseY = 0;
+
+    double playheadBar = -1.0;
+
+    // Drawing
     void drawBackground(juce::Graphics& g);
-    void drawTimeRuler(juce::Graphics& g);
-    void drawTracks(juce::Graphics& g);
-    void drawClips(juce::Graphics& g);
+    void drawTimeRuler (juce::Graphics& g);
+    void drawTracks    (juce::Graphics& g);
+    void drawClips     (juce::Graphics& g);
+    void drawPlayhead  (juce::Graphics& g);
 
+    // Hit testing
     PlaylistClip* findClipAt(int x, int y);
+    bool          isOnRightEdge(const PlaylistClip& clip, int mouseX) const;
+    int           trackIndexAt(int mouseY) const;
+
+    // Clip operations
+    void showContextMenu (int clipId);
+    void showRenameDialog(int clipId);
+
+    std::vector<PlaylistClip>& clipList()
+    {
+        return (project != nullptr) ? project->playlistClips : localDemoClips;
+    }
+    const std::vector<PlaylistClip>& clipList() const
+    {
+        return (project != nullptr) ? project->playlistClips : localDemoClips;
+    }
+    PlaylistClip* findClipById(int id)
+    {
+        for (auto& c : clipList()) if (c.id == id) return &c;
+        return nullptr;
+    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlaylistComponent)
 };
 
-//==============================================================================
-// Inline implementations to avoid linker issues if .cpp is not linked
+// ===========================================================================
+// Inline implementations
+// ===========================================================================
 
 inline PlaylistComponent::PlaylistComponent()
 {
-    // 데모용 더미 클립들 (Project 가 연결되지 않았을 때 사용)
-    PlaylistClip c1;
-    c1.id         = 1;
-    c1.patternId  = 1;
-    c1.name       = "Intro Beat";
-    c1.trackIndex = 0;
-    c1.startBar   = 0;
-    c1.lengthBars = 4;
-    localDemoClips.push_back(c1);
+    addAndMakeVisible(snapBox);
+    snapBox.addItem("1 Bar",   1);
+    snapBox.addItem("1/2 Bar", 2);
+    snapBox.addItem("1/4 Bar", 4);
+    snapBox.addItem("Free",    99);
+    snapBox.setSelectedId(1, juce::dontSendNotification);
+    snapBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
+    snapBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
+    snapBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
+    snapBox.onChange = [this]
+    {
+        const int id = snapBox.getSelectedId();
+        snapDivisor = (id == 99) ? 0 : id;
+        repaint();
+    };
 
-    PlaylistClip c2;
-    c2.id         = 2;
-    c2.patternId  = 1;
-    c2.name       = "Main Beat";
-    c2.trackIndex = 0;
-    c2.startBar   = 4;
-    c2.lengthBars = 8;
-    localDemoClips.push_back(c2);
+    PlaylistClip c1; c1.id=1; c1.patternId=1; c1.name="Intro Beat";
+    c1.trackIndex=0; c1.startBar=0;  c1.lengthBars=4; localDemoClips.push_back(c1);
 
-    PlaylistClip c3;
-    c3.id         = 3;
-    c3.patternId  = 1;
-    c3.name       = "Break";
-    c3.trackIndex = 1;
-    c3.startBar   = 8;
-    c3.lengthBars = 4;
-    localDemoClips.push_back(c3);
+    PlaylistClip c2; c2.id=2; c2.patternId=1; c2.name="Main Beat";
+    c2.trackIndex=0; c2.startBar=4;  c2.lengthBars=8; localDemoClips.push_back(c2);
 
-    PlaylistClip c4;
-    c4.id         = 4;
-    c4.patternId  = 1;
-    c4.name       = "Fill";
-    c4.trackIndex = 2;
-    c4.startBar   = 12;
-    c4.lengthBars = 2;
-    localDemoClips.push_back(c4);
+    PlaylistClip c3; c3.id=3; c3.patternId=1; c3.name="Break";
+    c3.trackIndex=1; c3.startBar=8;  c3.lengthBars=4; localDemoClips.push_back(c3);
+
+    PlaylistClip c4; c4.id=4; c4.patternId=1; c4.name="Fill";
+    c4.trackIndex=2; c4.startBar=12; c4.lengthBars=2; localDemoClips.push_back(c4);
 }
+
+inline void PlaylistComponent::resized()
+{
+    snapBox.setBounds(getWidth() - 112, 2, 110, headerHeight - 4);
+}
+
+inline double PlaylistComponent::getTotalBars() const
+{
+    double maxBar = 0.0;
+    for (const auto& c : clipList())
+        maxBar = juce::jmax(maxBar, (double)(c.startBar + c.lengthBars));
+    return maxBar;
+}
+
+inline void PlaylistComponent::setProject(Project* p)
+{
+    project = p;
+    repaint();
+}
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
 
 inline void PlaylistComponent::paint(juce::Graphics& g)
 {
@@ -111,164 +163,174 @@ inline void PlaylistComponent::paint(juce::Graphics& g)
     drawTimeRuler(g);
     drawTracks(g);
     drawClips(g);
-}
-
-inline void PlaylistComponent::resized()
-{
-}
-
-inline double PlaylistComponent::getTotalBars() const
-{
-    int maxBar = 0;
-
-    const auto& list = (project != nullptr) ? project->playlistClips
-                                            : localDemoClips;
-
-    for (const auto& clip : list)
-        maxBar = juce::jmax(maxBar, clip.startBar + clip.lengthBars);
-
-    return (double)maxBar;
-}
-
-inline void PlaylistComponent::setProject(Project* projectToUse)
-{
-    project = projectToUse;
-    repaint();
+    drawPlayhead(g);
 }
 
 inline void PlaylistComponent::drawBackground(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff11111f));
-
-    // 상단과 트랙 영역을 살짝 나눠주기
     g.setColour(juce::Colour(0xff0f3460));
     g.fillRect(0, 0, getWidth(), headerHeight);
 }
 
 inline void PlaylistComponent::drawTimeRuler(juce::Graphics& g)
 {
-    g.setColour(juce::Colours::white.withAlpha(0.8f));
     g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+    const int totalBars = juce::jmax(getWidth() / barWidth + 1, 32);
 
-    const int totalBarsToDraw = juce::jmax((getWidth() / barWidth) + 1, 16);
-
-    for (int bar = 0; bar < totalBarsToDraw; ++bar)
+    // Sub-bar grid lines
+    if (snapDivisor > 1)
     {
-        int x = bar * barWidth;
+        g.setColour(juce::Colour(0xff3498db).withAlpha(0.15f));
+        for (int bar = 0; bar < totalBars; ++bar)
+            for (int sub = 1; sub < snapDivisor; ++sub)
+            {
+                const float x = (bar + (float)sub / snapDivisor) * barWidth;
+                g.drawLine(x, (float)headerHeight, x, (float)getHeight(), 0.5f);
+            }
+    }
 
-        // 바 구분선
-        g.setColour(bar % 4 == 0
-                        ? juce::Colour(0xff3498db).withAlpha(0.4f)
-                        : juce::Colour(0xff2c3e50).withAlpha(0.6f));
+    for (int bar = 0; bar < totalBars; ++bar)
+    {
+        const int x = bar * barWidth;
+        g.setColour(bar % 4 == 0 ? juce::Colour(0xff3498db).withAlpha(0.4f)
+                                  : juce::Colour(0xff2c3e50).withAlpha(0.6f));
         g.drawLine((float)x, 0.0f, (float)x, (float)getHeight(), 1.0f);
 
-        // 상단 룰러 텍스트
         g.setColour(juce::Colours::white.withAlpha(0.9f));
-        juce::String label = juce::String(bar + 1);
-        g.drawText(label, x + 2, 0, barWidth - 4, headerHeight,
+        g.drawText(juce::String(bar + 1), x + 2, 0, barWidth - 4, headerHeight,
                    juce::Justification::centredLeft);
     }
 }
 
 inline void PlaylistComponent::drawTracks(juce::Graphics& g)
 {
-    int y = headerHeight;
-
-    for (int track = 0; track < trackCount; ++track)
+    for (int t = 0; t < trackCount; ++t)
     {
-        auto trackY = y + track * (trackHeight + trackGap);
+        const int trackY = headerHeight + t * (trackHeight + trackGap);
 
-        // 트랙 배경 (줄무늬 느낌)
-        juce::Colour base = (track % 2 == 0)
-                                ? juce::Colour(0xff1b1b30)
-                                : juce::Colour(0xff151528);
-        g.setColour(base);
+        g.setColour(t % 2 == 0 ? juce::Colour(0xff1b1b30) : juce::Colour(0xff151528));
         g.fillRect(0, trackY, getWidth(), trackHeight);
 
-        // 트랙 이름 자리
         g.setColour(juce::Colour(0xff0f3460));
         g.fillRect(0, trackY, 80, trackHeight);
 
         g.setColour(juce::Colours::white.withAlpha(0.8f));
-        g.setFont(juce::Font(juce::FontOptions().withHeight(12.0f)));
-        juce::String name = "Track " + juce::String(track + 1);
-        g.drawText(name, 8, trackY, 72, trackHeight,
+        g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+        g.drawText("Track " + juce::String(t + 1), 6, trackY, 72, trackHeight,
                    juce::Justification::centredLeft);
     }
 }
 
 inline void PlaylistComponent::drawClips(juce::Graphics& g)
 {
-    const auto& list = (project != nullptr) ? project->playlistClips
-                                            : localDemoClips;
+    // Colour palette: cycle per patternId so different patterns look distinct
+    static const juce::Colour palette[] = {
+        juce::Colour(0xff27ae60), juce::Colour(0xff2980b9),
+        juce::Colour(0xff8e44ad), juce::Colour(0xffd35400),
+        juce::Colour(0xff16a085), juce::Colour(0xffc0392b),
+    };
+    constexpr int paletteSize = (int)(sizeof(palette) / sizeof(palette[0]));
 
-    for (const auto& clip : list)
+    for (const auto& clip : clipList())
     {
-        if (clip.trackIndex < 0 || clip.trackIndex >= trackCount)
-            continue;
+        if (clip.trackIndex < 0 || clip.trackIndex >= trackCount) continue;
 
-        const int x  = clip.startBar * barWidth;
-        const int w  = clip.lengthBars * barWidth - 2;
-        const int ty = headerHeight
-            + clip.trackIndex * (trackHeight + trackGap)
-            + 3;
+        const int x  = (int)(clip.startBar  * barWidth);
+        const int w  = (int)(clip.lengthBars * barWidth) - 2;
+        const int ty = headerHeight + clip.trackIndex * (trackHeight + trackGap) + 3;
         const int h  = trackHeight - 6;
 
-        // 클립 본체
-        juce::Colour fill = juce::Colour(0xff27ae60);
-        juce::Colour border = juce::Colour(0xff2ecc71);
+        const juce::Colour fill   = palette[(clip.patternId - 1) % paletteSize];
+        const juce::Colour border = fill.brighter(0.4f);
 
-        g.setColour(fill.withAlpha(0.85f));
-        g.fillRoundedRectangle((float)x + 1.0f, (float)ty, (float)w, (float)h, 4.0f);
+        g.setColour(fill.withAlpha(clip.id == draggingClipId ? 0.6f : 0.85f));
+        g.fillRoundedRectangle((float)x + 1, (float)ty, (float)w, (float)h, 4.0f);
 
         g.setColour(border);
-        g.drawRoundedRectangle((float)x + 1.0f, (float)ty, (float)w, (float)h, 4.0f, 1.3f);
+        g.drawRoundedRectangle((float)x + 1, (float)ty, (float)w, (float)h, 4.0f, 1.3f);
 
-        // 클립 이름
+        // Resize handle indicator (right edge stripe)
+        g.setColour(border.withAlpha(0.5f));
+        g.fillRect(x + w - 4, ty + 2, 4, h - 4);
+
         g.setColour(juce::Colours::white);
         g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
-        g.drawText(clip.name, x + 6, ty, w - 12, h,
-                   juce::Justification::centredLeft);
+        g.drawText(clip.name, x + 6, ty, w - 14, h, juce::Justification::centredLeft);
     }
 }
+
+inline void PlaylistComponent::drawPlayhead(juce::Graphics& g)
+{
+    if (playheadBar < 0.0) return;
+    const int x = (int)(playheadBar * barWidth);
+    g.setColour(juce::Colour(0xffff3333));
+    g.drawLine((float)x, 0.0f, (float)x, (float)getHeight(), 2.0f);
+    juce::Path tri;
+    tri.addTriangle((float)x - 6, 0.0f, (float)x + 6, 0.0f, (float)x, 12.0f);
+    g.fillPath(tri);
+}
+
+// ---------------------------------------------------------------------------
+// Hit testing helpers
+// ---------------------------------------------------------------------------
 
 inline PlaylistClip* PlaylistComponent::findClipAt(int x, int y)
 {
-    auto& list = (project != nullptr) ? project->playlistClips
-                                      : localDemoClips;
-
-    for (auto& clip : list)
+    for (auto& clip : clipList())
     {
-        if (clip.trackIndex < 0 || clip.trackIndex >= trackCount)
-            continue;
-
-        const int clipX  = clip.startBar * barWidth;
-        const int clipW  = clip.lengthBars * barWidth - 2;
-        const int clipY  = headerHeight
-            + clip.trackIndex * (trackHeight + trackGap)
-            + 3;
-        const int clipH  = trackHeight - 6;
-
-        juce::Rectangle<int> bounds(clipX, clipY, clipW, clipH);
-        if (bounds.contains(x, y))
+        if (clip.trackIndex < 0 || clip.trackIndex >= trackCount) continue;
+        const int cx = (int)(clip.startBar   * barWidth);
+        const int cw = (int)(clip.lengthBars * barWidth) - 2;
+        const int cy = headerHeight + clip.trackIndex * (trackHeight + trackGap) + 3;
+        const int ch = trackHeight - 6;
+        if (juce::Rectangle<int>(cx, cy, cw, ch).contains(x, y))
             return &clip;
     }
-
     return nullptr;
 }
 
+inline bool PlaylistComponent::isOnRightEdge(const PlaylistClip& clip, int mouseX) const
+{
+    const int rightEdge = (int)((clip.startBar + clip.lengthBars) * barWidth);
+    return mouseX >= (rightEdge - resizeHotspot) && mouseX <= (rightEdge + 2);
+}
+
+inline int PlaylistComponent::trackIndexAt(int mouseY) const
+{
+    const int relY = mouseY - headerHeight;
+    if (relY < 0) return -1;
+    const int t = relY / (trackHeight + trackGap);
+    return juce::jlimit(0, trackCount - 1, t);
+}
+
+// ---------------------------------------------------------------------------
+// Mouse events
+// ---------------------------------------------------------------------------
+
 inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
 {
-    auto pos = e.getPosition();
-    if (pos.y < headerHeight)
-        return;
+    const auto pos = e.getPosition();
+    if (pos.y < headerHeight) return;
 
     PlaylistClip* clip = findClipAt(pos.x, pos.y);
+
+    // Right-click → context menu
+    if (e.mods.isRightButtonDown())
+    {
+        if (clip != nullptr) showContextMenu(clip->id);
+        return;
+    }
+
     if (clip != nullptr)
     {
         draggingClipId  = clip->id;
         dragStartBar    = clip->startBar;
+        dragStartTrack  = clip->trackIndex;
+        dragStartLength = clip->lengthBars;
         dragStartMouseX = pos.x;
+        dragStartMouseY = pos.y;
+        resizingClip    = isOnRightEdge(*clip, pos.x);
     }
     else
     {
@@ -278,23 +340,37 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
 
 inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
 {
-    if (draggingClipId < 0)
-        return;
+    if (draggingClipId < 0) return;
 
-    auto pos = e.getPosition();
-    int deltaX   = pos.x - dragStartMouseX;
-    int deltaBar = (int)std::round((double)deltaX / (double)barWidth);
+    const auto  pos    = e.getPosition();
+    const float deltaX = (float)(pos.x - dragStartMouseX);
 
-    auto& list = (project != nullptr) ? project->playlistClips
-                                      : localDemoClips;
+    PlaylistClip* clip = findClipById(draggingClipId);
+    if (clip == nullptr) return;
 
-    for (auto& clip : list)
+    // Snap helper: round to nearest snap unit (0 = free)
+    auto snap = [this](float bars) -> float
     {
-        if (clip.id == draggingClipId)
-        {
-            clip.startBar = juce::jmax(0, dragStartBar + deltaBar);
-            break;
-        }
+        if (snapDivisor == 0) return bars;
+        const float unit = 1.0f / (float)snapDivisor;
+        return unit * std::round(bars / unit);
+    };
+
+    const float minLength = (snapDivisor == 0) ? 0.01f : 1.0f / (float)snapDivisor;
+
+    if (resizingClip)
+    {
+        clip->lengthBars = juce::jmax(minLength,
+                                      snap(dragStartLength + deltaX / (float)barWidth));
+    }
+    else
+    {
+        clip->startBar = juce::jmax(0.0f,
+                                    snap(dragStartBar + deltaX / (float)barWidth));
+
+        const int deltaY     = pos.y - dragStartMouseY;
+        const int deltaTrack = (int)std::round((double)deltaY / (double)(trackHeight + trackGap));
+        clip->trackIndex = juce::jlimit(0, trackCount - 1, dragStartTrack + deltaTrack);
     }
 
     repaint();
@@ -307,36 +383,109 @@ inline void PlaylistComponent::mouseUp(const juce::MouseEvent&)
 
 inline void PlaylistComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    auto pos = e.getPosition();
-    if (pos.y < headerHeight)
+    const auto pos = e.getPosition();
+    if (pos.y < headerHeight) return;
+
+    PlaylistClip* existing = findClipAt(pos.x, pos.y);
+    if (existing != nullptr)
+    {
+        // Double-click on existing clip → rename
+        showRenameDialog(existing->id);
         return;
+    }
 
-    int trackYArea = pos.y - headerHeight;
-    int track      = trackYArea / (trackHeight + trackGap);
+    // Double-click on empty space → create new clip
+    const int track = trackIndexAt(pos.y);
+    if (track < 0 || track >= trackCount) return;
 
-    if (track < 0 || track >= trackCount)
-        return;
+    const float rawBar  = (float)pos.x / barWidth;
+    const float snapUnit = (snapDivisor == 0) ? 0.0f : 1.0f / (float)snapDivisor;
+    const float bar = (snapDivisor == 0)
+                        ? juce::jmax(0.0f, rawBar)
+                        : snapUnit * std::round(rawBar / snapUnit);
 
-    int bar = pos.x / barWidth;
-    if (bar < 0)
-        bar = 0;
-
-    auto& list = (project != nullptr) ? project->playlistClips
-                                      : localDemoClips;
-
+    auto& list = clipList();
     int newId = 1;
-    for (const auto& c : list)
-        newId = juce::jmax(newId, c.id + 1);
+    for (const auto& c : list) newId = juce::jmax(newId, c.id + 1);
 
     PlaylistClip clip;
     clip.id         = newId;
-    clip.patternId  = 1;
+    clip.patternId  = (getActivePatternId ? getActivePatternId() : 1);
     clip.trackIndex = track;
     clip.startBar   = bar;
-    clip.lengthBars = 4;
+    clip.lengthBars = 4.0f;
     clip.name       = "Clip " + juce::String(newId);
-
     list.push_back(clip);
     repaint();
 }
 
+// ---------------------------------------------------------------------------
+// Clip operations
+// ---------------------------------------------------------------------------
+
+inline void PlaylistComponent::showContextMenu(int clipId)
+{
+    PlaylistClip* clip = findClipById(clipId);
+    if (clip == nullptr) return;
+
+    juce::PopupMenu menu;
+    menu.addItem(1, "Rename");
+
+    // Assign Pattern submenu — lists all patterns in the project
+    if (project != nullptr && !project->patterns.empty())
+    {
+        juce::PopupMenu patMenu;
+        for (const auto& pat : project->patterns)
+            patMenu.addItem(100 + pat.id, pat.name, true, clip->patternId == pat.id);
+        menu.addSubMenu("Assign Pattern", patMenu);
+    }
+
+    menu.addSeparator();
+    menu.addItem(2, "Delete");
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
+        [this, clipId](int result)
+        {
+            if (result == 1)
+            {
+                showRenameDialog(clipId);
+            }
+            else if (result == 2)
+            {
+                auto& list = clipList();
+                list.erase(std::remove_if(list.begin(), list.end(),
+                    [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
+                repaint();
+            }
+            else if (result >= 100)
+            {
+                const int patId = result - 100;
+                if (auto* c = findClipById(clipId)) c->patternId = patId;
+            }
+        });
+}
+
+inline void PlaylistComponent::showRenameDialog(int clipId)
+{
+    PlaylistClip* clip = findClipById(clipId);
+    if (clip == nullptr) return;
+
+    auto* dialog = new juce::AlertWindow("Rename Clip", "Enter new name:",
+                                          juce::MessageBoxIconType::NoIcon);
+    dialog->addTextEditor("name", clip->name);
+    dialog->addButton("OK",     1);
+    dialog->addButton("Cancel", 0);
+
+    dialog->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, clipId, dialog](int result)
+        {
+            if (result == 1)
+            {
+                if (auto* c = findClipById(clipId))
+                    c->name = dialog->getTextEditorContents("name");
+                repaint();
+            }
+            delete dialog;
+        }),
+        false);
+}

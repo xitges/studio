@@ -51,26 +51,80 @@ void AudioEngine::play()
 void AudioEngine::stop()
 {
     if (playMode == PlayMode::Pattern)
-    {
         sequencer.stop();
-    }
     else
-    {
         songPlaying = false;
+}
+
+// ---- Mute / Solo -------------------------------------------------------
+
+void AudioEngine::setChannelMuted(int ch, bool muted)
+{
+    if (ch >= 0 && ch < 16)
+        players[ch].setMuted(muted);
+}
+
+void AudioEngine::setChannelSolo(int ch, bool soloed)
+{
+    if (ch < 0 || ch >= 16) return;
+
+    for (int i = 0; i < 16; ++i)
+    {
+        if (soloed)
+            players[i].setMuted(i != ch);
+        else
+            players[i].setMuted(false);
     }
 }
 
-void AudioEngine::setBPM(double bpm)
+// ---- M1.1 Volume / Pan -------------------------------------------------
+
+void AudioEngine::setChannelVolume(int ch, float volume)
 {
-    this->bpm = bpm;
-    sequencer.setBPM(bpm);
+    if (ch >= 0 && ch < 16)
+        players[ch].setVolume(volume);
+}
+
+void AudioEngine::setChannelPan(int ch, float pan)
+{
+    if (ch >= 0 && ch < 16)
+        players[ch].setPan(pan);
+}
+
+// ---- M1.2 Pitch --------------------------------------------------------
+
+void AudioEngine::setChannelPitch(int ch, float semitones)
+{
+    if (ch >= 0 && ch < 16)
+        players[ch].setPitch(semitones);
+}
+
+// ---- M1.3 Envelope -----------------------------------------------------
+
+void AudioEngine::setChannelAttack(int ch, float ms)
+{
+    if (ch >= 0 && ch < 16)
+        players[ch].setAttack(ms);
+}
+
+void AudioEngine::setChannelRelease(int ch, float ms)
+{
+    if (ch >= 0 && ch < 16)
+        players[ch].setRelease(ms);
+}
+
+// ---- BPM / Mode / Project ----------------------------------------------
+
+void AudioEngine::setBPM(double newBpm)
+{
+    bpm = newBpm;
+    sequencer.setBPM(newBpm);
 }
 
 bool AudioEngine::isPlaying() const
 {
     if (playMode == PlayMode::Pattern)
         return sequencer.isPlaying();
-
     return songPlaying;
 }
 
@@ -106,6 +160,8 @@ void AudioEngine::setStepPattern(int channelIndex, int stepIndex, bool active)
     sequencer.setStep(channelIndex, stepIndex, active);
 }
 
+// ---- Audio callbacks ---------------------------------------------------
+
 void AudioEngine::audioDeviceIOCallbackWithContext(
     const float* const*,
     int,
@@ -118,13 +174,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     buffer.clear();
 
     if (playMode == PlayMode::Pattern)
-    {
         processPatternMode(buffer, numSamples, numOutputChannels);
-    }
     else
-    {
         processSongMode(buffer, numSamples, numOutputChannels);
-    }
 }
 
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
@@ -143,6 +195,8 @@ void AudioEngine::audioDeviceStopped()
     for (auto& player : players)
         player.reset();
 }
+
+// ---- Render helpers ----------------------------------------------------
 
 void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
                                      int numSamples,
@@ -165,35 +219,32 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
         return;
 
     const double samplesPerBeat = sampleRate * 60.0 / bpm;
-    const double beatsPerBar    = 4.0;
-    const double samplesPerBar  = samplesPerBeat * beatsPerBar;
+    const double samplesPerBar  = samplesPerBeat * 4.0;
 
     auto barFromSample = [samplesPerBar](long s)
     {
         return (double)s / samplesPerBar;
     };
 
-    long startSample = songSamplePosition;
-    long endSample   = songSamplePosition + numSamples;
+    const long startSample = songSamplePosition;
+    const long endSample   = songSamplePosition + numSamples;
 
-    double startBar = barFromSample(startSample);
-    double endBar   = barFromSample(endSample);
+    const double startBar = barFromSample(startSample);
+    const double endBar   = barFromSample(endSample);
 
-    // 타임라인 상에서 16분음표 단위로 스텝 인덱스를 계산
     const int timelineStepsPerBar = 16;
-    int startStepIndex = (int)std::floor(startBar * timelineStepsPerBar);
-    int endStepIndex   = (int)std::floor(endBar   * timelineStepsPerBar);
+    const int startStep = (int)std::floor(startBar * timelineStepsPerBar);
+    const int endStep   = (int)std::floor(endBar   * timelineStepsPerBar);
 
-    for (int stepIndex = startStepIndex; stepIndex <= endStepIndex; ++stepIndex)
+    for (int stepIndex = startStep; stepIndex <= endStep; ++stepIndex)
     {
-        double stepBarPos  = (double)stepIndex / (double)timelineStepsPerBar;
-        long   stepSample  = (long)(stepBarPos * samplesPerBar);
-        int    offsetInBuf = (int)(stepSample - startSample);
+        const double stepBarPos  = (double)stepIndex / (double)timelineStepsPerBar;
+        const long   stepSample  = (long)(stepBarPos * samplesPerBar);
+        const int    offsetInBuf = (int)(stepSample - startSample);
 
         if (offsetInBuf < 0 || offsetInBuf >= numSamples)
             continue;
 
-        // 이 스텝에 해당하는 클립들 찾기
         for (const auto& clip : project->playlistClips)
         {
             if (stepBarPos < clip.startBar ||
@@ -204,25 +255,16 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
             if (pattern == nullptr || pattern->stepCount <= 0)
                 continue;
 
-            // 패턴 전체 길이 (bar 단위, 16분음표 기준)
-            const double patternBars = (double)pattern->stepCount / (double)timelineStepsPerBar;
-            if (patternBars <= 0.0)
-                continue;
-
-            const double localBarInClip = stepBarPos - clip.startBar; // 0.0 ~ lengthBars
-
-            // 패턴 내에서의 0~1 위치
-            double localInPatternBars = std::fmod(juce::jmax(0.0, localBarInClip), patternBars);
-            double pos01              = localInPatternBars / patternBars;
-
-            int localStep = (int)std::floor(pos01 * (double)pattern->stepCount);
-            localStep     = juce::jlimit(0, pattern->stepCount - 1, localStep);
+            const double patternBars    = (double)pattern->stepCount / (double)timelineStepsPerBar;
+            const double localBarInClip = stepBarPos - clip.startBar;
+            const double localInPat     = std::fmod(juce::jmax(0.0, localBarInClip), patternBars);
+            const double pos01          = localInPat / patternBars;
+            const int    localStep      = juce::jlimit(0, pattern->stepCount - 1,
+                                                       (int)std::floor(pos01 * (double)pattern->stepCount));
 
             for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
-            {
                 if (pattern->steps[ch][localStep])
                     players[ch].trigger();
-            }
         }
     }
 
@@ -232,15 +274,99 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     songSamplePosition += numSamples;
 }
 
+// ---------------------------------------------------------------------------
+// M10 — Offline render
+// ---------------------------------------------------------------------------
+
+bool AudioEngine::renderToFile(const juce::File& outputFile, PlayMode mode, int numBars)
+{
+    if (sampleRate <= 0.0 || numBars <= 0)
+        return false;
+
+    // Create WAV writer
+    juce::WavAudioFormat wavFormat;
+    auto fileStream = outputFile.createOutputStream();
+    if (fileStream == nullptr)
+        return false;
+
+    constexpr int numOutChannels = 2;
+    constexpr int bitDepth       = 24;
+
+    auto* rawWriter = wavFormat.createWriterFor(
+        fileStream.get(), sampleRate, numOutChannels, bitDepth, {}, 0);
+
+    if (rawWriter == nullptr)
+        return false;
+
+    fileStream.release();                                     // writer owns stream
+    std::unique_ptr<juce::AudioFormatWriter> writer(rawWriter);
+
+    // ---- Remove real-time callback so the audio thread doesn't race us ----
+    deviceManager.removeAudioCallback(this);
+
+    // Reset all sample players to a clean state
+    for (auto& p : players)
+        p.reset();
+
+    // Set up playback state for offline pass
+    const double samplesPerBar = (sampleRate * 60.0 / bpm) * 4.0;
+    const long   totalSamples  = (long)std::ceil((double)numBars * samplesPerBar);
+
+    if (mode == PlayMode::Pattern)
+    {
+        sequencer.start();
+    }
+    else
+    {
+        songSamplePosition = 0;
+        songPlaying        = true;
+    }
+
+    // ---- Render loop -------------------------------------------------------
+    constexpr int kBufSize = 512;
+    juce::AudioBuffer<float> buffer(numOutChannels, kBufSize);
+
+    long  rendered = 0;
+    bool  ok       = true;
+
+    while (rendered < totalSamples)
+    {
+        const int n = (int)juce::jmin((long)kBufSize, totalSamples - rendered);
+        buffer.clear();
+
+        if (mode == PlayMode::Pattern)
+            processPatternMode(buffer, n, numOutChannels);
+        else
+            processSongMode(buffer, n, numOutChannels);
+
+        if (!writer->writeFromAudioSampleBuffer(buffer, 0, n))
+        {
+            ok = false;
+            break;
+        }
+
+        rendered += n;
+    }
+
+    // ---- Tear down offline state -------------------------------------------
+    if (mode == PlayMode::Pattern)
+        sequencer.stop();
+    else
+        songPlaying = false;
+
+    // Re-attach real-time callback
+    deviceManager.addAudioCallback(this);
+
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+
 const Pattern* AudioEngine::findPatternById(int patternId) const
 {
-    if (project == nullptr)
-        return nullptr;
-
+    if (project == nullptr) return nullptr;
     for (const auto& p : project->patterns)
         if (p.id == patternId)
             return &p;
-
     return nullptr;
 }
-
