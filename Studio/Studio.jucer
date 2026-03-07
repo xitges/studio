@@ -35,6 +35,10 @@
             file="Source/MainComponent.cpp"/>
       <FILE id="PRoll1" name="PianoRollComponent.h" compile="0" resource="0" file="Source/PianoRollComponent.h"/>
       <FILE id="MixC01" name="MixerComponent.h" compile="0" resource="0" file="Source/MixerComponent.h"/>
+      <FILE id="Syn001" name="SynthEngine.h" compile="0" resource="0" file="Source/SynthEngine.h"/>
+      <FILE id="FXP001" name="FXProcessor.h" compile="0" resource="0" file="Source/FXProcessor.h"/>
+      <FILE id="SynE01" name="SynthEditorComponent.h" compile="0" resource="0" file="Source/SynthEditorComponent.h"/>
+      <FILE id="FXE001" name="FXEditorComponent.h" compile="0" resource="0" file="Source/FXEditorComponent.h"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>

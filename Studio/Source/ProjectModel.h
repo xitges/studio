@@ -24,6 +24,43 @@ struct NoteEvent
     float velocity    = 0.8f;  // 0.0 – 1.0
 };
 
+// M13 — synthesizer parameters per channel
+struct SynthParams
+{
+    bool  enabled   = false;
+    int   waveform  = 1;        // 0=Sine 1=Saw 2=Square 3=Triangle
+    float attack    = 5.0f;     // ms
+    float decay     = 80.0f;    // ms
+    float sustain   = 0.6f;     // 0.0 – 1.0
+    float release   = 200.0f;   // ms
+    float cutoff    = 4000.0f;  // Hz
+    float resonance = 0.3f;     // 0.0 – 1.0
+    float lfoRate   = 2.0f;     // Hz
+    float lfoDepth  = 0.0f;     // 0.0 – 1.0
+    int   lfoTarget = 0;        // 0 = cutoff, 1 = pitch
+};
+
+// M14 — FX chain parameters per mixer track
+struct FXParams
+{
+    bool  compEnabled   = false;
+    float compThreshDB  = -12.0f;
+    float compRatio     = 4.0f;
+    float compAttackMs  = 10.0f;
+    float compReleaseMs = 100.0f;
+
+    bool  delayEnabled  = false;
+    float delayBeats    = 0.5f;     // beat multiplier (0.5 = 8th note)
+    float delayFeedback = 0.3f;     // 0.0 – 1.0
+    float delayMix      = 0.25f;    // wet mix 0.0 – 1.0
+
+    bool  reverbEnabled = false;
+    float reverbRoom    = 0.5f;     // 0.0 – 1.0
+    float reverbDamp    = 0.5f;     // 0.0 – 1.0
+    float reverbWet     = 0.25f;    // 0.0 – 1.0
+    float reverbWidth   = 1.0f;     // 0.0 – 1.0
+};
+
 // M5 — one strip in the mixer
 struct MixerTrack
 {
@@ -84,4 +121,10 @@ struct Project
     std::vector<MixerTrack>   mixerTracks;                  // 8 tracks initialised in MainComponent
     float                     masterVolume         = 1.0f;
     float                     masterPan            = 0.0f;
+
+    // M13 — per-channel synth params
+    std::array<SynthParams, 16> synthParams = {};
+
+    // M14 — per-mixer-track FX params
+    std::array<FXParams, 8> fxParams = {};
 };

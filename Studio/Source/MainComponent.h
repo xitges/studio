@@ -8,6 +8,8 @@
 #include "PlaylistComponent.h"
 #include "PianoRollComponent.h"
 #include "MixerComponent.h"
+#include "SynthEditorComponent.h"
+#include "FXEditorComponent.h"
 
 class MainComponent : public juce::Component,
                       public juce::Timer
@@ -36,6 +38,12 @@ private:
     std::unique_ptr<PianoRollWindow> pianoRollWindow;
     int  pianoRollChannel = -1;
     bool showMixer = false;
+
+    // M13/M14 — floating synth + FX editors
+    std::unique_ptr<SynthEditorWindow> synthEditorWindow;
+    std::unique_ptr<FXEditorWindow>    fxEditorWindow;
+    int synthEditorChannel = -1;
+    int fxEditorTrack      = -1;
 
     // M2 — pattern management state
     int activePatternId = 1;

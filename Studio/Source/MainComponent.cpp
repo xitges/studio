@@ -440,6 +440,32 @@ MainComponent::MainComponent()
         markDirty();
     };
 
+    // ---- M13: Synth Editor
+    channelRack.onOpenSynthEditor = [this](int ch)
+    {
+        synthEditorChannel = ch;
+
+        if (synthEditorWindow == nullptr)
+        {
+            synthEditorWindow = std::make_unique<SynthEditorWindow>();
+            synthEditorWindow->centreWithSize(420, 330);
+        }
+
+        synthEditorWindow->setChannelName(
+            juce::String(ch + 1));   // simple "1"-based label for now
+
+        synthEditorWindow->panel.loadParams(project.synthParams[(size_t)ch]);
+
+        synthEditorWindow->panel.onParamsChanged = [this, ch]
+        {
+            synthEditorWindow->panel.applyToParams(project.synthParams[(size_t)ch]);
+            markDirty();
+        };
+
+        synthEditorWindow->setVisible(true);
+        synthEditorWindow->toFront(true);
+    };
+
     // ---- M5: Mixer
     addAndMakeVisible(mixer);
     mixer.setVisible(false);   // hidden until toolbar toggle
@@ -452,6 +478,30 @@ MainComponent::MainComponent()
     mixer.onTrackSoloChanged    = [this](int t, bool s)  { audioEngine.setMixerTrackSoloed(t, s); markDirty(); };
     mixer.onMasterVolumeChanged = [this](float v)        { audioEngine.setMasterVolume(v);         markDirty(); };
     mixer.onMasterPanChanged    = [this](float p)        { audioEngine.setMasterPan(p);            markDirty(); };
+
+    // M14 — FX editor per mixer track
+    mixer.onFXButtonClicked = [this](int t)
+    {
+        fxEditorTrack = t;
+
+        if (fxEditorWindow == nullptr)
+        {
+            fxEditorWindow = std::make_unique<FXEditorWindow>();
+            fxEditorWindow->centreWithSize(440, 420);
+        }
+
+        fxEditorWindow->setTrackName("Track " + juce::String(t + 1));
+        fxEditorWindow->panel.loadParams(project.fxParams[(size_t)t]);
+
+        fxEditorWindow->panel.onParamsChanged = [this, t]
+        {
+            fxEditorWindow->panel.applyToParams(project.fxParams[(size_t)t]);
+            markDirty();
+        };
+
+        fxEditorWindow->setVisible(true);
+        fxEditorWindow->toFront(true);
+    };
 
     toolbar.onToggleMixer = [this] { showMixer = !showMixer; resized(); };
 

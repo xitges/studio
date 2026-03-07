@@ -13,6 +13,8 @@
 #include "../ProjectModel.h"
 #include "SamplePlayer.h"
 #include "Sequencer.h"
+#include "../SynthEngine.h"
+#include "../FXProcessor.h"
 
 class AudioEngine : public juce::AudioIODeviceCallback
 {
@@ -77,6 +79,9 @@ public:
     // M3 — preview a note from the piano roll keyboard (does not alter channelBasePitch)
     void previewNote(int ch, int midiPitch);
 
+    // M13 — trigger a synth note directly (used by piano key preview for melodic synth channels)
+    void previewSynthNote(int ch, int midiPitch, const SynthParams& p);
+
     // M5 — mixer track controls
     void setMixerTrackVolume(int track, float vol);
     void setMixerTrackPan   (int track, float pan);
@@ -98,6 +103,8 @@ private:
     juce::MixerAudioSource   mixer;
 
     std::array<SamplePlayer, 16> players;
+    std::array<PolySynth, 16>   polySynths;    // M13
+    std::array<FXChain, 8>      fxChains;      // M14
     Sequencer sequencer;
 
     Project* project  = nullptr;

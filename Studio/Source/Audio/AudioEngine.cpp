@@ -128,8 +128,27 @@ void AudioEngine::setActivePattern(int patternId)
 void AudioEngine::previewNote(int ch, int midiPitch)
 {
     if (ch < 0 || ch >= 16) return;
-    players[ch].setPitch(channelBasePitch[ch] + (float)(midiPitch - 60));
-    players[ch].trigger();
+    // If channel has synth enabled, use PolySynth; otherwise use sample player
+    if (project && project->synthParams[(size_t)ch].enabled)
+    {
+        const double samplesPerBeat = sampleRate * 60.0 / bpm;
+        const int noteLenSamples = (int)(0.25 * samplesPerBeat);  // 16th note preview
+        polySynths[(size_t)ch].noteOn(midiPitch, 0.8f, sampleRate,
+                                       project->synthParams[(size_t)ch], noteLenSamples);
+    }
+    else
+    {
+        players[ch].setPitch(channelBasePitch[ch] + (float)(midiPitch - 60));
+        players[ch].trigger();
+    }
+}
+
+void AudioEngine::previewSynthNote(int ch, int midiPitch, const SynthParams& p)
+{
+    if (ch < 0 || ch >= 16) return;
+    const double samplesPerBeat = sampleRate * 60.0 / bpm;
+    const int noteLenSamples = (int)(0.5 * samplesPerBeat);  // 8th note preview
+    polySynths[(size_t)ch].noteOn(midiPitch, 0.8f, sampleRate, p, noteLenSamples);
 }
 
 // ---- M5 — Mixer track controls ------------------------------------------
@@ -239,6 +258,10 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     for (auto& player : players)
         player.prepare(sampleRate, bufferSize);
 
+    // M13/M14 — prepare synths and FX chains
+    for (auto& s : polySynths) s.prepare(sampleRate, bufferSize);
+    for (auto& fx : fxChains)  fx.prepare(sampleRate, bufferSize);
+
     // M5 — allocate mixer staging buffers
     stagingBuf.setSize(2, bufferSize);
     for (auto& tb : mixerTrackBufs)
@@ -249,6 +272,8 @@ void AudioEngine::audioDeviceStopped()
 {
     for (auto& player : players)
         player.reset();
+    for (auto& s : polySynths) s.reset();
+    for (auto& fx : fxChains)  fx.reset();
 }
 
 // ---- Render helpers ----------------------------------------------------
@@ -287,9 +312,20 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
                                            : (ns >= loopStart && ns < loopEnd);
                         if (fires)
                         {
-                            // Combine user base pitch with note pitch (C4=60 = 0 semitones offset)
-                            players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
-                            players[ch].trigger();
+                            const SynthParams& sp = project->synthParams[(size_t)ch];
+                            if (sp.enabled)
+                            {
+                                // Synth path — noteOn with auto-release length
+                                const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
+                                polySynths[(size_t)ch].noteOn(note.pitch, note.velocity,
+                                                               sampleRate, sp, noteLenSamples);
+                            }
+                            else
+                            {
+                                // Sample player path (original behaviour)
+                                players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
+                                players[ch].trigger();
+                            }
                         }
                     }
                 }
@@ -378,7 +414,22 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
     for (int ch = 0; ch < 16; ++ch)
     {
         stagingBuf.clear();
-        players[ch].renderNextBlock(stagingBuf, numSamples);
+
+        // M13 — route to PolySynth if synth is enabled for this channel
+        const bool useSynth = (project != nullptr) &&
+                               project->synthParams[(size_t)ch].enabled;
+
+        if (useSynth)
+        {
+            float* L = stagingBuf.getWritePointer(0);
+            float* R = stagingBuf.getWritePointer(1);
+            polySynths[(size_t)ch].renderNextBlock(L, R, numSamples, sampleRate,
+                                                    project->synthParams[(size_t)ch]);
+        }
+        else
+        {
+            players[ch].renderNextBlock(stagingBuf, numSamples);
+        }
 
         const int trackIdx = (project != nullptr)
                              ? juce::jlimit(0, 7, project->channelMixerRouting[ch])
@@ -389,6 +440,15 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
             mixerTrackBufs[(size_t)trackIdx].addSample(0, s, stagingBuf.getSample(0, s));
             mixerTrackBufs[(size_t)trackIdx].addSample(1, s, stagingBuf.getSample(1, s));
         }
+    }
+
+    // M14 — apply FX chains per mixer track bus
+    for (int t = 0; t < 8; ++t)
+    {
+        const FXParams& fp = (project != nullptr)
+                              ? project->fxParams[(size_t)t]
+                              : FXParams{};
+        fxChains[(size_t)t].processBlock(mixerTrackBufs[(size_t)t], numSamples, fp, bpm);
     }
 
     // Check if any track is soloed
@@ -467,9 +527,10 @@ bool AudioEngine::renderToFile(const juce::File& outputFile, PlayMode mode, int 
     // ---- Remove real-time callback so the audio thread doesn't race us ----
     deviceManager.removeAudioCallback(this);
 
-    // Reset all sample players to a clean state
-    for (auto& p : players)
-        p.reset();
+    // Reset all sample players and synths to a clean state
+    for (auto& p : players)   p.reset();
+    for (auto& s : polySynths) s.reset();
+    for (auto& fx : fxChains)  fx.reset();
 
     // Set up playback state for offline pass
     const double samplesPerBar = (sampleRate * 60.0 / bpm) * 4.0;

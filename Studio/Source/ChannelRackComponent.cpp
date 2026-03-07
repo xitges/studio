@@ -326,6 +326,8 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
         menu.addItem(2, isMelodic ? "Switch to Drum" : "Switch to Melodic");
         if (isMelodic)
             menu.addItem(3, "Open Piano Roll");
+        menu.addSeparator();
+        menu.addItem(4, "Open Synth Editor");   // M13
 
         menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
             [this, ch, isMelodic](int result)
@@ -354,6 +356,10 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
                 else if (result == 3)
                 {
                     if (onOpenPianoRoll) onOpenPianoRoll(ch);
+                }
+                else if (result == 4)
+                {
+                    if (onOpenSynthEditor) onOpenSynthEditor(ch);   // M13
                 }
             });
         return;

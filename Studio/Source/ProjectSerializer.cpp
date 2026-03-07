@@ -103,6 +103,49 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         tEl->setAttribute("colour", (int)t.colour.getARGB());
     }
 
+    // ---- SynthParams (M13)
+    auto* synthEl = root.createNewChildElement("SynthParams");
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        const auto& sp = project.synthParams[(size_t)ch];
+        auto* sEl = synthEl->createNewChildElement("Ch");
+        sEl->setAttribute("i",          ch);
+        sEl->setAttribute("enabled",    sp.enabled   ? 1 : 0);
+        sEl->setAttribute("waveform",   sp.waveform);
+        sEl->setAttribute("attack",     (double)sp.attack);
+        sEl->setAttribute("decay",      (double)sp.decay);
+        sEl->setAttribute("sustain",    (double)sp.sustain);
+        sEl->setAttribute("release",    (double)sp.release);
+        sEl->setAttribute("cutoff",     (double)sp.cutoff);
+        sEl->setAttribute("resonance",  (double)sp.resonance);
+        sEl->setAttribute("lfoRate",    (double)sp.lfoRate);
+        sEl->setAttribute("lfoDepth",   (double)sp.lfoDepth);
+        sEl->setAttribute("lfoTarget",  sp.lfoTarget);
+    }
+
+    // ---- FXParams (M14)
+    auto* fxEl = root.createNewChildElement("FXParams");
+    for (int t = 0; t < 8; ++t)
+    {
+        const auto& fp = project.fxParams[(size_t)t];
+        auto* fEl = fxEl->createNewChildElement("Track");
+        fEl->setAttribute("i",              t);
+        fEl->setAttribute("compEnabled",    fp.compEnabled   ? 1 : 0);
+        fEl->setAttribute("compThreshDB",   (double)fp.compThreshDB);
+        fEl->setAttribute("compRatio",      (double)fp.compRatio);
+        fEl->setAttribute("compAttackMs",   (double)fp.compAttackMs);
+        fEl->setAttribute("compReleaseMs",  (double)fp.compReleaseMs);
+        fEl->setAttribute("delayEnabled",   fp.delayEnabled  ? 1 : 0);
+        fEl->setAttribute("delayBeats",     (double)fp.delayBeats);
+        fEl->setAttribute("delayFeedback",  (double)fp.delayFeedback);
+        fEl->setAttribute("delayMix",       (double)fp.delayMix);
+        fEl->setAttribute("reverbEnabled",  fp.reverbEnabled ? 1 : 0);
+        fEl->setAttribute("reverbRoom",     (double)fp.reverbRoom);
+        fEl->setAttribute("reverbDamp",     (double)fp.reverbDamp);
+        fEl->setAttribute("reverbWet",      (double)fp.reverbWet);
+        fEl->setAttribute("reverbWidth",    (double)fp.reverbWidth);
+    }
+
     return root.writeTo(file);
 }
 
@@ -225,6 +268,53 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                            tEl->getIntAttribute("colour",
                                (int)juce::Colour(0xff3498db).getARGB()));
             loaded.playlistTracks.push_back(t);
+        }
+    }
+
+    // ---- SynthParams (M13)
+    if (auto* synthEl = xml->getChildByName("SynthParams"))
+    {
+        for (auto* sEl : synthEl->getChildIterator())
+        {
+            const int ch = sEl->getIntAttribute("i", -1);
+            if (ch < 0 || ch >= 16) continue;
+            auto& sp       = loaded.synthParams[(size_t)ch];
+            sp.enabled     = sEl->getIntAttribute("enabled",   0) != 0;
+            sp.waveform    = sEl->getIntAttribute("waveform",  1);
+            sp.attack      = (float)sEl->getDoubleAttribute("attack",    5.0);
+            sp.decay       = (float)sEl->getDoubleAttribute("decay",     80.0);
+            sp.sustain     = (float)sEl->getDoubleAttribute("sustain",   0.6);
+            sp.release     = (float)sEl->getDoubleAttribute("release",   200.0);
+            sp.cutoff      = (float)sEl->getDoubleAttribute("cutoff",    4000.0);
+            sp.resonance   = (float)sEl->getDoubleAttribute("resonance", 0.3);
+            sp.lfoRate     = (float)sEl->getDoubleAttribute("lfoRate",   2.0);
+            sp.lfoDepth    = (float)sEl->getDoubleAttribute("lfoDepth",  0.0);
+            sp.lfoTarget   = sEl->getIntAttribute("lfoTarget", 0);
+        }
+    }
+
+    // ---- FXParams (M14)
+    if (auto* fxEl = xml->getChildByName("FXParams"))
+    {
+        for (auto* fEl : fxEl->getChildIterator())
+        {
+            const int t = fEl->getIntAttribute("i", -1);
+            if (t < 0 || t >= 8) continue;
+            auto& fp          = loaded.fxParams[(size_t)t];
+            fp.compEnabled    = fEl->getIntAttribute("compEnabled",   0) != 0;
+            fp.compThreshDB   = (float)fEl->getDoubleAttribute("compThreshDB",  -12.0);
+            fp.compRatio      = (float)fEl->getDoubleAttribute("compRatio",       4.0);
+            fp.compAttackMs   = (float)fEl->getDoubleAttribute("compAttackMs",   10.0);
+            fp.compReleaseMs  = (float)fEl->getDoubleAttribute("compReleaseMs", 100.0);
+            fp.delayEnabled   = fEl->getIntAttribute("delayEnabled",  0) != 0;
+            fp.delayBeats     = (float)fEl->getDoubleAttribute("delayBeats",    0.5);
+            fp.delayFeedback  = (float)fEl->getDoubleAttribute("delayFeedback", 0.3);
+            fp.delayMix       = (float)fEl->getDoubleAttribute("delayMix",      0.25);
+            fp.reverbEnabled  = fEl->getIntAttribute("reverbEnabled", 0) != 0;
+            fp.reverbRoom     = (float)fEl->getDoubleAttribute("reverbRoom",    0.5);
+            fp.reverbDamp     = (float)fEl->getDoubleAttribute("reverbDamp",    0.5);
+            fp.reverbWet      = (float)fEl->getDoubleAttribute("reverbWet",     0.25);
+            fp.reverbWidth    = (float)fEl->getDoubleAttribute("reverbWidth",   1.0);
         }
     }
 

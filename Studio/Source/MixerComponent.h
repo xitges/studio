@@ -23,6 +23,7 @@ public:
     std::function<void(int track, bool soloed)> onTrackSoloChanged;
     std::function<void(float)>                  onMasterVolumeChanged;
     std::function<void(float)>                  onMasterPanChanged;
+    std::function<void(int track)>              onFXButtonClicked;    // M14
 
     MixerComponent()
     {
@@ -87,6 +88,7 @@ private:
     std::unique_ptr<juce::Slider>     pans      [numTracks + 1];
     std::unique_ptr<juce::TextButton> muteBtns  [numTracks + 1];
     std::unique_ptr<juce::TextButton> soloBtns  [numTracks + 1];
+    std::unique_ptr<juce::TextButton> fxBtns    [numTracks];     // M14 FX open button
     std::unique_ptr<juce::Label>      routeLabel[numTracks];     // "ch: 0,8" info
 
     void buildStrip(int t)
@@ -157,6 +159,16 @@ private:
             };
             addAndMakeVisible(*soloBtns[t]);
 
+            // M14 — FX button
+            fxBtns[t] = std::make_unique<juce::TextButton>("FX");
+            fxBtns[t]->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c54));
+            fxBtns[t]->setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+            fxBtns[t]->onClick = [this, t]
+            {
+                if (onFXButtonClicked) onFXButtonClicked(t);
+            };
+            addAndMakeVisible(*fxBtns[t]);
+
             routeLabel[t] = std::make_unique<juce::Label>();
             routeLabel[t]->setFont(juce::Font(juce::FontOptions().withHeight(8.5f)));
             routeLabel[t]->setColour(juce::Label::textColourId, juce::Colour(0xff7f8c8d));
@@ -173,6 +185,9 @@ private:
         labels[t]->setBounds(area.removeFromTop(16));
         if (!isMaster && routeLabel[t])
             routeLabel[t]->setBounds(area.removeFromBottom(14));
+        // FX button row (M14)
+        if (!isMaster && fxBtns[t])
+            fxBtns[t]->setBounds(area.removeFromBottom(18).reduced(1, 0));
         const auto btnRow = area.removeFromBottom(22);
         if (!isMaster && muteBtns[t] && soloBtns[t])
         {

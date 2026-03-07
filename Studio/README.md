@@ -157,6 +157,78 @@ The red vertical line shows the current playback position in Song mode. Updates 
 
 ---
 
+## Built-in Synthesizer (M13)
+
+Right-click any channel in the Channel Rack → **Open Synth Editor** to open the synth parameter window.
+
+### Enabling the Synth
+
+Toggle **Enable Synth** in the editor. When enabled, the channel renders audio from the built-in synthesizer instead of a loaded sample file.
+
+- For **Drum channels**: the synth fires on each active step at a fixed pitch (C4).
+- For **Melodic channels**: the synth fires on Piano Roll NoteEvents with the correct pitch and duration.
+
+### Synth Parameters
+
+| Parameter | Description |
+|---|---|
+| **Waveform** | Oscillator shape: Sine / Saw / Square / Triangle |
+| **Attack** | Envelope attack time (ms) |
+| **Decay** | Envelope decay time (ms) |
+| **Sustain** | Envelope sustain level (0 – 1) |
+| **Release** | Envelope release time (ms) |
+| **Cutoff** | Low-pass filter cutoff frequency (Hz) |
+| **Resonance** | Filter resonance / Q (0 – 1) |
+| **LFO Rate** | LFO oscillation speed (Hz) |
+| **LFO Depth** | LFO modulation amount (0 = off) |
+| **LFO Target** | What the LFO modulates: Cutoff or Pitch |
+
+The synth is 8-voice polyphonic with round-robin voice stealing.
+
+---
+
+## Built-in FX (M14)
+
+Open the **Mixer** panel, then click the purple **FX** button on any mixer track strip. This opens the FX chain editor for that track.
+
+### FX Chain Order
+
+```
+Compressor → Delay → Reverb
+```
+
+Each effect can be enabled/disabled independently.
+
+### Compressor
+
+| Parameter | Description |
+|---|---|
+| **Threshold (dB)** | Level above which gain reduction kicks in |
+| **Ratio** | Compression ratio (1 = bypass, 20 = hard limit) |
+| **Attack (ms)** | How fast the compressor responds to transients |
+| **Release (ms)** | How fast the compressor recovers |
+
+### Delay
+
+| Parameter | Description |
+|---|---|
+| **Time (beats)** | Delay time as a beat fraction (0.25 = 16th, 0.5 = 8th, 1.0 = quarter) |
+| **Feedback** | How much of the delayed signal feeds back (0 – 0.95) |
+| **Mix** | Wet/dry blend (0 = dry, 1 = full wet) |
+
+The delay is BPM-synced — it automatically adjusts to the current project BPM.
+
+### Reverb
+
+| Parameter | Description |
+|---|---|
+| **Room Size** | Size of the simulated space (0 – 1) |
+| **Damping** | High-frequency absorption (0 = bright, 1 = dark) |
+| **Wet Mix** | Reverb return level (0 = dry, 1 = fully wet) |
+| **Width** | Stereo width of the reverb tail (0 = mono, 1 = full stereo) |
+
+---
+
 ## Save / Load
 
 Projects are saved as `.studioproj` files (XML format). All patterns, steps, playlist clips, and BPM are saved.
@@ -179,8 +251,8 @@ Projects are saved as `.studioproj` files (XML format). All patterns, steps, pla
 | M10 | Export / Render to WAV | **Done** |
 | M11 | UI Polish, Zoom, Track Management, Pattern Preview | **Partial** (M11.3 + M11.5 done) |
 | M12 | MIDI Input / Output | Planned |
-| M13 | Built-in Instruments (synth, sampler) | Planned |
-| M14 | Built-in FX (EQ, Compressor, Reverb, Delay) | Planned |
+| M13 | Built-in Instruments (synth, sampler) | **Done** |
+| M14 | Built-in FX (EQ, Compressor, Reverb, Delay) | **Partial** (Compressor, Delay, Reverb done — no EQ yet) |
 | M15 | Sample Browser / Library Panel | Planned |
 | M16 | Auto-save, Recent Files, Project Templates | Planned |
 
