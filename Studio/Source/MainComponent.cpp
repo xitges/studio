@@ -45,6 +45,9 @@ MainComponent::MainComponent()
         project.playlistTracks.push_back(pt);
     }
 
+    // Reserve capacity so push_back is less likely to reallocate mid-session
+    project.patterns.reserve(64);
+
     Pattern p1;
     p1.id = 1; p1.name = "Pattern 1"; p1.lengthBars = 1; p1.stepCount = 16;
     // Default beat
@@ -117,31 +120,39 @@ MainComponent::MainComponent()
 
     toolbar.onNewPattern = [this]
     {
-        // Save current state first
-        if (auto* cur = findPattern(activePatternId))
-            channelRack.saveToPattern(*cur);
+        // selectPattern will save the current rack before switching.
+        // Capture id/name BEFORE push_back in case it reallocates.
+        const int newId   = nextPatternId();
+        const int newNum  = (int)project.patterns.size() + 1;
 
         Pattern np;
-        np.id        = nextPatternId();
-        np.name      = "Pattern " + juce::String(project.patterns.size() + 1);
+        np.id        = newId;
+        np.name      = "Pattern " + juce::String(newNum);
         np.stepCount = 16;
-        project.patterns.push_back(np);
+        project.patterns.push_back(np);  // may reallocate — no live pointers at this point
 
-        selectPattern(np.id);
+        selectPattern(newId);
+        markDirty();
     };
 
     toolbar.onDuplicatePattern = [this]
     {
+        // Save current rack into the active pattern first
         if (auto* src = findPattern(activePatternId))
-        {
             channelRack.saveToPattern(*src);
 
-            Pattern dup = *src;
-            dup.id   = nextPatternId();
+        // Re-find after save (safe — no reallocation yet)
+        if (auto* src = findPattern(activePatternId))
+        {
+            // Copy by value and capture name BEFORE push_back may reallocate
+            Pattern dup  = *src;
+            const int newId = nextPatternId();
+            dup.id   = newId;
             dup.name = src->name + " (copy)";
-            project.patterns.push_back(dup);
+            project.patterns.push_back(dup);   // src may dangle after this — not used again
 
-            selectPattern(dup.id);
+            selectPattern(newId);
+            markDirty();
         }
     };
 
@@ -152,11 +163,20 @@ MainComponent::MainComponent()
     {
         if (project.patterns.size() <= 1) return; // always keep at least one
 
+        const int deletedId = activePatternId;
+
         auto& pats = project.patterns;
         pats.erase(std::remove_if(pats.begin(), pats.end(),
-            [this](const Pattern& p){ return p.id == activePatternId; }), pats.end());
+            [deletedId](const Pattern& p){ return p.id == deletedId; }), pats.end());
 
-        selectPattern(pats.front().id);
+        // Reassign any playlist clips that referenced the deleted pattern
+        // to the first remaining pattern so they don't become orphans.
+        const int fallbackId = pats.front().id;
+        for (auto& clip : project.playlistClips)
+            if (clip.patternId == deletedId)
+                clip.patternId = fallbackId;
+
+        selectPattern(fallbackId);
         markDirty();
     };
 
@@ -362,14 +382,17 @@ MainComponent::MainComponent()
             [this, patId, ch, step, newState]() -> bool {
                 if (auto* p = findPattern(patId)) {
                     p->steps[ch][step] = newState;
-                    if (patId == activePatternId) channelRack.loadPattern(*p);
+                    // Only update the one step in the UI — no full reload
+                    if (patId == activePatternId)
+                        channelRack.setStep(ch, step, newState);
                 }
                 markDirty(); return true;
             },
             [this, patId, ch, step, oldState]() -> bool {
                 if (auto* p = findPattern(patId)) {
                     p->steps[ch][step] = oldState;
-                    if (patId == activePatternId) channelRack.loadPattern(*p);
+                    if (patId == activePatternId)
+                        channelRack.setStep(ch, step, oldState);
                 }
                 markDirty(); return true;
             }));
@@ -380,6 +403,38 @@ MainComponent::MainComponent()
     playlist.onTrackAdded   = [this]()      { markDirty(); resized(); };
     playlist.onTrackRenamed = [this](int)   { markDirty(); };
     playlist.onTrackDeleted = [this](int)   { markDirty(); resized(); };
+
+    // Pattern copy — duplicate the assigned pattern and reassign this clip to the copy
+    playlist.onClipDetach = [this](int clipId)
+    {
+        // Find the clip
+        PlaylistClip* clip = nullptr;
+        for (auto& c : project.playlistClips)
+            if (c.id == clipId) { clip = &c; break; }
+        if (clip == nullptr) return;
+
+        // Find the source pattern
+        Pattern* src = findPattern(clip->patternId);
+        if (src == nullptr) return;
+
+        // Flush the rack into the source pattern if it's currently active
+        if (src->id == activePatternId)
+            channelRack.saveToPattern(*src);
+
+        // Copy the pattern with a new unique ID
+        const int newId = nextPatternId();
+        Pattern copy    = *src;              // value copy — safe before push_back
+        copy.id         = newId;
+        copy.name       = src->name + " (copy)";
+        project.patterns.push_back(copy);   // src may dangle — not used again
+
+        // Reassign this clip to the new pattern copy
+        clip->patternId = newId;
+
+        toolbar.updatePatternList(project.patterns, activePatternId);
+        playlist.repaint();
+        markDirty();
+    };
 
     playlist.onClipAdded = [this](PlaylistClip clip)
     {
@@ -884,6 +939,7 @@ void MainComponent::newProject()
                 {
                     project = Project{};
                     project.bpm = 70.0;
+                    project.patterns.reserve(64);
                     Pattern def; def.id = 1; def.name = "Pattern 1"; def.stepCount = 16;
                     project.patterns.push_back(def);
                     currentFile = juce::File{};
@@ -896,6 +952,7 @@ void MainComponent::newProject()
 
     project = Project{};
     project.bpm = 70.0;
+    project.patterns.reserve(64);
     Pattern def; def.id = 1; def.name = "Pattern 1"; def.stepCount = 16;
     project.patterns.push_back(def);
     currentFile = juce::File{};
@@ -923,6 +980,7 @@ void MainComponent::openProject()
             if (ProjectSerializer::load(chosen, loaded))
             {
                 project     = std::move(loaded);
+                project.patterns.reserve(64);   // avoid reallocation on add
                 currentFile = chosen;
                 audioEngine.setProject(&project);
                 reloadProjectIntoUI();

@@ -591,7 +591,7 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
             {
                 if (!pattern->steps[ch][localStep]) continue;
 
-                // Swap to this pattern's sample if not already loaded
+                // Swap to this pattern's sample + settings if not already loaded
                 if (songPlayerPatternId[ch] != clip.patternId)
                 {
                     auto cit = songSampleCache.find(clip.patternId);
@@ -600,6 +600,12 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                         players[ch].loadBuffer(cit->second[(size_t)ch]);
                     else
                         players[ch].clear();
+
+                    // Apply per-pattern channel settings so each clip sounds right
+                    players[ch].setVolume(pattern->channelVolume[ch]);
+                    players[ch].setPan   (pattern->channelPan   [ch]);
+                    players[ch].setPitch (channelBasePitch[ch] + pattern->channelPitch[ch]);
+
                     songPlayerPatternId[ch] = clip.patternId;
                 }
 

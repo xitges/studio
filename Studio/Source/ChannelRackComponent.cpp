@@ -138,8 +138,8 @@ void ChannelRackComponent::addChannel(const juce::String& name)
     row.pitchSlider->setTextValueSuffix(" st");
     row.pitchSlider->setRange(-24.0, 24.0, 0.5);
     row.pitchSlider->setValue(row.pitch, juce::dontSendNotification);
-    row.pitchSlider->setColour(juce::Slider::thumbColourId,             juce::Colour(0xff2ecc71));
-    row.pitchSlider->setColour(juce::Slider::trackColourId,             juce::Colour(0xff2ecc71));
+    row.pitchSlider->setColour(juce::Slider::thumbColourId,             juce::Colour(0xffb0b0b8));
+    row.pitchSlider->setColour(juce::Slider::trackColourId,             juce::Colour(0xffb0b0b8));
     row.pitchSlider->setColour(juce::Slider::backgroundColourId,        juce::Colour(0xff2c2c2e));
     row.pitchSlider->setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
     row.pitchSlider->setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff1c1c1e));

@@ -99,6 +99,10 @@ public:
     std::function<void(int idx)> onTrackRenamed;
     std::function<void(int idx)> onTrackDeleted;
 
+    // Pattern copy — fired when user chooses "Detach to New Pattern" on a clip.
+    // Host should duplicate the clip's patternId to a new pattern and update clip.patternId.
+    std::function<void(int clipId)> onClipDetach;
+
 private:
     Project* project = nullptr;
 
@@ -690,7 +694,8 @@ inline void PlaylistComponent::showContextMenu(int clipId)
     }
 
     menu.addSeparator();
-    menu.addItem(3, "Copy");
+    menu.addItem(3, "Copy Clip");
+    menu.addItem(4, "Detach to New Pattern");
     menu.addItem(2, "Delete");
 
     menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
@@ -708,6 +713,11 @@ inline void PlaylistComponent::showContextMenu(int clipId)
                     hasClipboard   = true;
                     selectedClipId = clipId;
                 }
+            }
+            else if (result == 4)
+            {
+                // Detach: duplicate the assigned pattern, reassign this clip to the copy
+                if (onClipDetach) onClipDetach(clipId);
             }
             else if (result == 2)
             {

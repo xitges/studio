@@ -86,6 +86,17 @@ public:
         return false;
     }
 
+    // Set a single step in the UI without reloading the whole pattern
+    void setStep(int channel, int step, bool val)
+    {
+        if (channel >= 0 && channel < (int)channels.size()
+            && step >= 0 && step < stepCount)
+        {
+            channels[(size_t)channel].steps[(size_t)step] = val;
+            repaint();
+        }
+    }
+
     int getStepCount() const { return stepCount; }
 
     void setPlaybackStep(int step)
