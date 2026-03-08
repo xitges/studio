@@ -12,7 +12,11 @@
 class PianoRollComponent : public juce::Component
 {
 public:
-    PianoRollComponent()  { setSize(getNeededWidth(), getNeededHeight()); }
+    PianoRollComponent()
+    {
+        setSize(getNeededWidth(), getNeededHeight());
+        setWantsKeyboardFocus(true);
+    }
 
     // Call whenever the active pattern / channel changes
     void setPattern(Pattern* p, int ch, double bpmValue)
@@ -168,6 +172,67 @@ public:
         if (hoverPitch != -1) { hoverPitch = -1; repaint(); }
     }
 
+    void mouseEnter(const juce::MouseEvent&) override
+    {
+        grabKeyboardFocus();
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        const int kc = key.getKeyCode();
+        if (kc == 'z' || kc == 'Z')
+        {
+            octaveOffset = juce::jmax(-3, octaveOffset - 1);
+            repaint();
+            return true;
+        }
+        if (kc == 'x' || kc == 'X')
+        {
+            octaveOffset = juce::jmin(3, octaveOffset + 1);
+            repaint();
+            return true;
+        }
+        return false;
+    }
+
+    bool keyStateChanged(bool /*isKeyDown*/) override
+    {
+        // Map: key char → semitone offset from C4 (60)
+        struct KeyMap { int keyCode; int semitone; };
+        static const KeyMap kmap[] = {
+            { 'a', 0  }, { 'w', 1  }, { 's', 2  }, { 'e', 3  },
+            { 'd', 4  }, { 'f', 5  }, { 't', 6  }, { 'g', 7  },
+            { 'y', 8  }, { 'h', 9  }, { 'u', 10 }, { 'j', 11 },
+            { 'k', 12 }, { 'o', 13 }, { 'l', 14 }, { 'p', 15 },
+        };
+
+        bool needRepaint = false;
+        for (const auto& km : kmap)
+        {
+            const bool down  = juce::KeyPress::isKeyCurrentlyDown(km.keyCode);
+            const int  idx   = km.keyCode & 0xff;
+            const int  pitch = 60 + octaveOffset * 12 + km.semitone;
+            const int  pidx  = juce::jlimit(0, 127, pitch);
+
+            if (down && !heldKeyState[idx])
+            {
+                heldKeyState[idx]      = true;
+                keyboardHeldPitch[pidx] = true;
+                needRepaint = true;
+                if (pitch >= minPitch && pitch <= maxPitch && onKeyPreview)
+                    onKeyPreview(pitch);
+            }
+            else if (!down && heldKeyState[idx])
+            {
+                heldKeyState[idx]      = false;
+                keyboardHeldPitch[pidx] = false;
+                needRepaint = true;
+            }
+        }
+        if (needRepaint) repaint();
+        return true;
+    }
+
     // -----------------------------------------------------------------------
 private:
     Pattern* pattern      = nullptr;
@@ -183,6 +248,10 @@ private:
     static constexpr int minPitch    = 21;    // A0
     static constexpr int maxPitch    = 108;   // C8
     static constexpr int resizeZone  = 8;     // px from right edge
+
+    int   octaveOffset    = 0;
+    bool  heldKeyState[256] = {};
+    bool  keyboardHeldPitch[128] = {};
 
     int   hoverPitch      = -1;
     int   draggingIdx     = -1;
@@ -221,10 +290,12 @@ private:
             const int y = yFromPitch(pitch);
             const bool black = isBlackKey(pitch);
 
-            const bool hovered = (pitch == hoverPitch);
-            g.setColour(hovered        ? juce::Colour(0xff3498db)
-                        : black        ? juce::Colour(0xff2a2a2a)
-                                       : juce::Colour(0xff3a3a4a));
+            const bool hovered  = (pitch == hoverPitch);
+            const bool kbActive = (pitch >= 0 && pitch < 128 && keyboardHeldPitch[pitch]);
+            g.setColour(kbActive        ? juce::Colour(0xffff9500)
+                        : hovered       ? juce::Colour(0xff3498db)
+                        : black         ? juce::Colour(0xff2a2a2a)
+                                        : juce::Colour(0xff3a3a4a));
             g.fillRect(0, y, keyWidth, noteH);
 
             g.setColour(juce::Colour(0xff111122));
