@@ -188,7 +188,22 @@ private:
             if (item.type != Item::Type::AudioFile) return;
 
             if (auto* dc = juce::DragAndDropContainer::findParentDragContainerFor(this))
-                dc->startDragging(item.file.getFullPathName(), this);
+            {
+                // Small drag image showing just the filename
+                const juce::String name = item.file.getFileNameWithoutExtension();
+                const int imgW = juce::jmin(180, name.length() * 7 + 20);
+                juce::Image dragImg(juce::Image::ARGB, imgW, 20, true);
+                {
+                    juce::Graphics dg(dragImg);
+                    dg.setColour(juce::Colour(0xff2ecc71).withAlpha(0.9f));
+                    dg.fillRoundedRectangle(dragImg.getBounds().toFloat(), 4.0f);
+                    dg.setColour(juce::Colours::white);
+                    dg.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+                    dg.drawText(name, dragImg.getBounds(), juce::Justification::centred);
+                }
+                dc->startDragging(item.file.getFullPathName(), this,
+                                  juce::ScaledImage(dragImg), true);
+            }
 
             mouseDownIdx = -1;
         }

@@ -14,7 +14,8 @@
 // ============================================================================
 class LaunchpadPanel : public juce::Component,
                        public juce::Timer,
-                       public juce::FileDragAndDropTarget
+                       public juce::FileDragAndDropTarget,
+                       public juce::DragAndDropTarget
 {
 public:
     static constexpr int kRows = 8;
@@ -94,7 +95,7 @@ public:
     void mouseMove(const juce::MouseEvent& e) override;
     void mouseExit(const juce::MouseEvent&)  override;
 
-    // FileDragAndDropTarget
+    // FileDragAndDropTarget (OS file drag from Finder etc.)
     bool isInterestedInFileDrag(const juce::StringArray&) override { return true; }
     void fileDragEnter(const juce::StringArray&, int x, int y) override
         { dragOverPad = padIndexAt(x, y - kTopBarH); repaint(); }
@@ -103,6 +104,29 @@ public:
     void fileDragExit(const juce::StringArray&) override
         { dragOverPad = -1; repaint(); }
     void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    // DragAndDropTarget (internal JUCE drag from SampleBrowser)
+    bool isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& d) override
+    {
+        return juce::File(d.description.toString()).existsAsFile();
+    }
+    void itemDragEnter(const juce::DragAndDropTarget::SourceDetails& d) override
+        { dragOverPad = padIndexAt(d.localPosition.x, d.localPosition.y - kTopBarH); repaint(); }
+    void itemDragMove(const juce::DragAndDropTarget::SourceDetails& d) override
+        { dragOverPad = padIndexAt(d.localPosition.x, d.localPosition.y - kTopBarH); repaint(); }
+    void itemDragExit(const juce::DragAndDropTarget::SourceDetails&) override
+        { dragOverPad = -1; repaint(); }
+    void itemDropped(const juce::DragAndDropTarget::SourceDetails& d) override
+    {
+        dragOverPad = -1;
+        if (project == nullptr) return;
+        const int idx = padIndexAt(d.localPosition.x, d.localPosition.y - kTopBarH);
+        if (idx < 0) return;
+        const juce::File file(d.description.toString());
+        project->launchpadPads[(size_t)idx].filePath = file.getFullPathName();
+        repaint();
+        if (onSampleDropped) onSampleDropped(idx, file);
+    }
 
     // Callbacks set by MainComponent
     std::function<void(int padIdx)>                                      onPadTriggered;
