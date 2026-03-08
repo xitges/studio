@@ -40,6 +40,9 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             chEl->setAttribute("i",          ch);
             chEl->setAttribute("steps",      bits);
             chEl->setAttribute("samplePath", pat.samplePaths[ch]);
+            chEl->setAttribute("volume",     (double)pat.channelVolume[ch]);
+            chEl->setAttribute("pan",        (double)pat.channelPan[ch]);
+            chEl->setAttribute("pitch",      (double)pat.channelPitch[ch]);
         }
 
         // NoteEvents (M3)
@@ -57,6 +60,12 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             }
         }
     }
+
+    // ---- Channel rack (count + names)
+    auto* crEl = root.createNewChildElement("ChannelRack");
+    crEl->setAttribute("count", project.channelCount);
+    for (int ch = 0; ch < project.channelCount && ch < 16; ++ch)
+        crEl->setAttribute("name" + juce::String(ch), project.channelNames[ch]);
 
     // ---- Playlist clips
     auto* clipsEl = root.createNewChildElement("PlaylistClips");
@@ -198,7 +207,10 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 for (int s = 0; s < juce::jmin(bits.length(), Pattern::kMaxSteps); ++s)
                     pat.steps[ch][s] = (bits[s] == '1');
 
-                pat.samplePaths[ch] = chEl->getStringAttribute("samplePath");
+                pat.samplePaths[ch]    = chEl->getStringAttribute("samplePath");
+                pat.channelVolume[ch]  = (float)chEl->getDoubleAttribute("volume", 0.8);
+                pat.channelPan[ch]     = (float)chEl->getDoubleAttribute("pan",    0.0);
+                pat.channelPitch[ch]   = (float)chEl->getDoubleAttribute("pitch",  0.0);
             }
 
             // NoteEvents (M3)
@@ -220,6 +232,36 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
 
             loaded.patterns.push_back(pat);
         }
+    }
+
+    // ---- Channel rack (count + names)
+    if (auto* crEl = xml->getChildByName("ChannelRack"))
+    {
+        loaded.channelCount = juce::jlimit(1, 16, crEl->getIntAttribute("count", 3));
+        for (int ch = 0; ch < loaded.channelCount; ++ch)
+            loaded.channelNames[ch] = crEl->getStringAttribute("name" + juce::String(ch));
+    }
+    else
+    {
+        // Old file: infer channel count from pattern data (highest channel with a sample
+        // or any active step)
+        int maxCh = 2; // minimum 3 channels
+        for (const auto& pat : loaded.patterns)
+        {
+            for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+            {
+                if (pat.samplePaths[ch].isNotEmpty())
+                {
+                    maxCh = juce::jmax(maxCh, ch);
+                    continue;
+                }
+                for (int s = 0; s < pat.stepCount; ++s)
+                {
+                    if (pat.steps[ch][s]) { maxCh = juce::jmax(maxCh, ch); break; }
+                }
+            }
+        }
+        loaded.channelCount = maxCh + 1;
     }
 
     // Ensure at least one pattern exists

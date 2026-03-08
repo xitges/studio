@@ -90,12 +90,17 @@ void ChannelRackComponent::addChannel(const juce::String& name)
 
     // ---- M1.1 Volume slider
     row.volSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal,
-                                                    juce::Slider::NoTextBox);
+                                                    juce::Slider::TextBoxRight);
+    row.volSlider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 38, 14);
+    row.volSlider->setNumDecimalPlacesToDisplay(2);
     row.volSlider->setRange(0.0, 1.0, 0.01);
     row.volSlider->setValue(row.volume, juce::dontSendNotification);
-    row.volSlider->setColour(juce::Slider::thumbColourId,       juce::Colour(0xff3498db));
-    row.volSlider->setColour(juce::Slider::trackColourId,       juce::Colour(0xff3498db));
-    row.volSlider->setColour(juce::Slider::backgroundColourId,  juce::Colour(0xff1a1a2e));
+    row.volSlider->setColour(juce::Slider::thumbColourId,             juce::Colour(0xff3498db));
+    row.volSlider->setColour(juce::Slider::trackColourId,             juce::Colour(0xff3498db));
+    row.volSlider->setColour(juce::Slider::backgroundColourId,        juce::Colour(0xff1a1a2e));
+    row.volSlider->setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
+    row.volSlider->setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16213e));
+    row.volSlider->setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff0f3460));
     row.volSlider->onValueChange = [this, ch]
     {
         float v = (float)channels[ch].volSlider->getValue();
@@ -106,12 +111,17 @@ void ChannelRackComponent::addChannel(const juce::String& name)
 
     // ---- M1.1 Pan slider
     row.panSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal,
-                                                    juce::Slider::NoTextBox);
+                                                    juce::Slider::TextBoxRight);
+    row.panSlider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 38, 14);
+    row.panSlider->setNumDecimalPlacesToDisplay(2);
     row.panSlider->setRange(-1.0, 1.0, 0.01);
     row.panSlider->setValue(row.pan, juce::dontSendNotification);
-    row.panSlider->setColour(juce::Slider::thumbColourId,      juce::Colour(0xffe67e22));
-    row.panSlider->setColour(juce::Slider::trackColourId,      juce::Colour(0xffe67e22));
-    row.panSlider->setColour(juce::Slider::backgroundColourId, juce::Colour(0xff1a1a2e));
+    row.panSlider->setColour(juce::Slider::thumbColourId,             juce::Colour(0xffe67e22));
+    row.panSlider->setColour(juce::Slider::trackColourId,             juce::Colour(0xffe67e22));
+    row.panSlider->setColour(juce::Slider::backgroundColourId,        juce::Colour(0xff1a1a2e));
+    row.panSlider->setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
+    row.panSlider->setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16213e));
+    row.panSlider->setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff0f3460));
     row.panSlider->onValueChange = [this, ch]
     {
         float p = (float)channels[ch].panSlider->getValue();
@@ -120,14 +130,20 @@ void ChannelRackComponent::addChannel(const juce::String& name)
     };
     addAndMakeVisible(*row.panSlider);
 
-    // ---- M1.2 Pitch slider (vertical: top = +24, bottom = -24)
-    row.pitchSlider = std::make_unique<juce::Slider>(juce::Slider::LinearVertical,
-                                                      juce::Slider::NoTextBox);
+    // ---- M1.2 Pitch slider (horizontal, third row)
+    row.pitchSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal,
+                                                      juce::Slider::TextBoxRight);
+    row.pitchSlider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 38, 14);
+    row.pitchSlider->setNumDecimalPlacesToDisplay(1);
+    row.pitchSlider->setTextValueSuffix(" st");
     row.pitchSlider->setRange(-24.0, 24.0, 0.5);
     row.pitchSlider->setValue(row.pitch, juce::dontSendNotification);
-    row.pitchSlider->setColour(juce::Slider::thumbColourId,      juce::Colour(0xff2ecc71));
-    row.pitchSlider->setColour(juce::Slider::trackColourId,      juce::Colour(0xff2ecc71));
-    row.pitchSlider->setColour(juce::Slider::backgroundColourId, juce::Colour(0xff1a1a2e));
+    row.pitchSlider->setColour(juce::Slider::thumbColourId,             juce::Colour(0xff2ecc71));
+    row.pitchSlider->setColour(juce::Slider::trackColourId,             juce::Colour(0xff2ecc71));
+    row.pitchSlider->setColour(juce::Slider::backgroundColourId,        juce::Colour(0xff1a1a2e));
+    row.pitchSlider->setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
+    row.pitchSlider->setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16213e));
+    row.pitchSlider->setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff0f3460));
     row.pitchSlider->onValueChange = [this, ch]
     {
         float s = (float)channels[ch].pitchSlider->getValue();
@@ -146,10 +162,9 @@ void ChannelRackComponent::loadPattern(const Pattern& pat)
 {
     // Sync step count
     stepCount = juce::jlimit(1, Pattern::kMaxSteps, pat.stepCount);
-
     stepCountSlider.setValue(stepCount, juce::dontSendNotification);
 
-    // Copy step data and sample name for each channel
+    // Copy step data, sample name, and per-pattern vol/pan/pitch for each channel
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
     {
         for (int s = 0; s < Pattern::kMaxSteps; ++s)
@@ -159,6 +174,17 @@ void ChannelRackComponent::loadPattern(const Pattern& pat)
             channels[ch].sampleName = juce::File(pat.samplePaths[ch]).getFileNameWithoutExtension();
         else
             channels[ch].sampleName = "Drop Sample";
+
+        // Restore vol/pan/pitch — fires onValueChange → audio engine syncs
+        channels[ch].volume = pat.channelVolume[ch];
+        channels[ch].pan    = pat.channelPan[ch];
+        channels[ch].pitch  = pat.channelPitch[ch];
+        if (channels[ch].volSlider)
+            channels[ch].volSlider->setValue(pat.channelVolume[ch], juce::sendNotification);
+        if (channels[ch].panSlider)
+            channels[ch].panSlider->setValue(pat.channelPan[ch], juce::sendNotification);
+        if (channels[ch].pitchSlider)
+            channels[ch].pitchSlider->setValue(pat.channelPitch[ch], juce::sendNotification);
     }
 
     repaint();
@@ -169,8 +195,41 @@ void ChannelRackComponent::saveToPattern(Pattern& pat) const
 {
     pat.stepCount = stepCount;
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
+    {
         for (int s = 0; s < Pattern::kMaxSteps; ++s)
             pat.steps[ch][s] = channels[ch].steps[s];
+
+        pat.channelVolume[ch] = channels[ch].volume;
+        pat.channelPan[ch]    = channels[ch].pan;
+        pat.channelPitch[ch]  = channels[ch].pitch;
+    }
+}
+
+// Reset channel list to match a saved project's channel count and names
+void ChannelRackComponent::resetToChannelCount(int count, const juce::String* names)
+{
+    // Remove all existing child components
+    for (auto& row : channels)
+    {
+        if (row.muteBtn)    removeChildComponent(row.muteBtn.get());
+        if (row.soloBtn)    removeChildComponent(row.soloBtn.get());
+        if (row.volSlider)  removeChildComponent(row.volSlider.get());
+        if (row.panSlider)  removeChildComponent(row.panSlider.get());
+        if (row.pitchSlider) removeChildComponent(row.pitchSlider.get());
+    }
+    channels.clear();
+
+    const int n = juce::jlimit(1, Pattern::kMaxChannels, count);
+    for (int i = 0; i < n; ++i)
+    {
+        const juce::String nm = (names != nullptr && names[i].isNotEmpty())
+                                    ? names[i]
+                                    : "Channel " + juce::String(i + 1);
+        addChannel(nm);
+    }
+
+    resized();
+    repaint();
 }
 
 // ---------------------------------------------------------------------------
@@ -253,11 +312,12 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
                        juce::Justification::centredLeft);
         }
 
-        // Small "V" / "P" / "pitch" labels above sliders
+        // Small labels left of sliders
         g.setColour(juce::Colours::grey);
         g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
-        g.drawText("V", 96, y + 2, 10, 10, juce::Justification::centred);
-        g.drawText("P", 96, y + 24, 10, 10, juce::Justification::centred);
+        g.drawText("V", 88, y + 4,  8, 10, juce::Justification::centred);
+        g.drawText("P", 88, y + 22, 8, 10, juce::Justification::centred);
+        g.drawText("T", 88, y + 40, 8, 10, juce::Justification::centred);
 
         // Separator line
         g.setColour(juce::Colour(0xff0f3460));
@@ -456,23 +516,21 @@ void ChannelRackComponent::resized()
     {
         const int y = HEADER_HEIGHT + i * ROW_HEIGHT;
 
-        // Vol slider  (M1.1) — top row, right of name
+        // Three horizontal sliders stacked, each with text box on right
         if (channels[i].volSlider)
-            channels[i].volSlider->setBounds(106, y + 4, 48, 14);
+            channels[i].volSlider->setBounds(98, y + 4, 136, 14);
 
-        // Pan slider  (M1.1) — bottom row, right of name
         if (channels[i].panSlider)
-            channels[i].panSlider->setBounds(106, y + 26, 48, 14);
+            channels[i].panSlider->setBounds(98, y + 22, 136, 14);
 
-        // Pitch slider (M1.2) — vertical, centre column
         if (channels[i].pitchSlider)
-            channels[i].pitchSlider->setBounds(156, y + 4, 12, ROW_HEIGHT - 8);
+            channels[i].pitchSlider->setBounds(98, y + 40, 136, 14);
 
-        // Mute / Solo buttons — far right of label
+        // Mute / Solo buttons — far right, aligned to rows 1 & 2
         if (channels[i].muteBtn)
-            channels[i].muteBtn->setBounds(170, y + 4, 14, 16);
+            channels[i].muteBtn->setBounds(236, y + 4, 12, 16);
         if (channels[i].soloBtn)
-            channels[i].soloBtn->setBounds(170, y + 24, 14, 16);
+            channels[i].soloBtn->setBounds(236, y + 22, 12, 16);
     }
 }
 

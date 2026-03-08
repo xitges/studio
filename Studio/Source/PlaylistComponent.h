@@ -41,6 +41,29 @@ public:
     int getNeededWidth()  const { return (int)(juce::jmax(200.0, getTotalBars() + 8.0)) * barWidth; }
     int getNeededHeight() const { return headerHeight + getTrackCount() * (trackHeight + trackGap); }
 
+    // Clip copy/paste (called from MainComponent on Cmd+C / Cmd+V)
+    void copySelectedClip()
+    {
+        if (auto* c = findClipById(selectedClipId))
+        {
+            clipboardClip = *c;
+            hasClipboard  = true;
+        }
+    }
+    void pasteClipboard()
+    {
+        if (!hasClipboard) return;
+        auto& list = clipList();
+        int newId = 1;
+        for (const auto& c : list) newId = juce::jmax(newId, c.id + 1);
+        PlaylistClip nc  = clipboardClip;
+        nc.id            = newId;
+        nc.startBar      = clipboardClip.startBar + clipboardClip.lengthBars;
+        list.push_back(nc);
+        repaint();
+        if (onClipAdded) onClipAdded(nc);
+    }
+
     // M11 — horizontal zoom (pixels per bar)
     void setBarWidth(int w) { barWidth = juce::jlimit(20, 256, w); repaint(); }
     int  getBarWidth() const { return barWidth; }
@@ -53,6 +76,9 @@ public:
 
     // M2.2 — provide the currently selected pattern ID when creating a clip
     std::function<int()> getActivePatternId;
+
+    // Seek callback — fired when user clicks on the time ruler
+    std::function<void(double bar)> onSeekToBar;
 
     // M6 — undo/redo hooks
     std::function<void(PlaylistClip)>                                           onClipAdded;
@@ -90,6 +116,11 @@ private:
     int   dragStartMouseY = 0;
 
     double playheadBar = -1.0;
+
+    // Clip clipboard (copy/paste)
+    PlaylistClip clipboardClip;
+    bool         hasClipboard  = false;
+    int          selectedClipId = -1;
 
     // Drawing
     void drawBackground(juce::Graphics& g);
@@ -350,14 +381,25 @@ inline int PlaylistComponent::trackIndexAt(int mouseY) const
 inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
 {
     const auto pos = e.getPosition();
-    if (pos.y < headerHeight) return;
+
+    // Click on time ruler → seek
+    if (pos.y < headerHeight)
+    {
+        if (!e.mods.isRightButtonDown())
+        {
+            const double bar = (double)pos.x / barWidth;
+            if (onSeekToBar) onSeekToBar(bar);
+            setPlayheadBar(bar);
+        }
+        return;
+    }
 
     PlaylistClip* clip = findClipAt(pos.x, pos.y);
 
     // Right-click → context or track menu
     if (e.mods.isRightButtonDown())
     {
-        if (pos.x < 80 && pos.y >= headerHeight)
+        if (pos.x < 80)
         {
             const int t = (pos.y - headerHeight) / (trackHeight + trackGap);
             if (t >= 0 && t < getTrackCount())
@@ -365,13 +407,37 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
         }
         else if (clip != nullptr)
         {
+            selectedClipId = clip->id;
             showContextMenu(clip->id);
+        }
+        else if (hasClipboard)
+        {
+            const float pasteBar   = (float)pos.x / barWidth;
+            const int   pasteTrack = trackIndexAt(pos.y);
+            juce::PopupMenu m;
+            m.addItem(1, "Paste Clip");
+            m.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
+                [this, pasteBar, pasteTrack](int r)
+                {
+                    if (r != 1) return;
+                    auto& list = clipList();
+                    int newId = 1;
+                    for (const auto& c : list) newId = juce::jmax(newId, c.id + 1);
+                    PlaylistClip nc  = clipboardClip;
+                    nc.id            = newId;
+                    nc.startBar      = pasteBar;
+                    nc.trackIndex    = pasteTrack;
+                    list.push_back(nc);
+                    repaint();
+                    if (onClipAdded) onClipAdded(nc);
+                });
         }
         return;
     }
 
     if (clip != nullptr)
     {
+        selectedClipId  = clip->id;
         draggingClipId  = clip->id;
         dragStartBar    = clip->startBar;
         dragStartTrack  = clip->trackIndex;
@@ -506,6 +572,7 @@ inline void PlaylistComponent::showContextMenu(int clipId)
     }
 
     menu.addSeparator();
+    menu.addItem(3, "Copy");
     menu.addItem(2, "Delete");
 
     menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
@@ -514,6 +581,15 @@ inline void PlaylistComponent::showContextMenu(int clipId)
             if (result == 1)
             {
                 showRenameDialog(clipId);
+            }
+            else if (result == 3)
+            {
+                if (auto* c = findClipById(clipId))
+                {
+                    clipboardClip  = *c;
+                    hasClipboard   = true;
+                    selectedClipId = clipId;
+                }
             }
             else if (result == 2)
             {

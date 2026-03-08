@@ -103,6 +103,18 @@ struct Pattern
 
     // per-channel sample paths (each pattern has its own set)
     juce::String samplePaths[kMaxChannels];
+
+    // per-pattern channel mixer values (independent per pattern)
+    float channelVolume[kMaxChannels];
+    float channelPan   [kMaxChannels];
+    float channelPitch [kMaxChannels];
+
+    Pattern()
+    {
+        std::fill_n(channelVolume, kMaxChannels, 0.8f);
+        std::fill_n(channelPan,    kMaxChannels, 0.0f);
+        std::fill_n(channelPitch,  kMaxChannels, 0.0f);
+    }
 };
 
 struct PlaylistClip
@@ -119,6 +131,10 @@ struct PlaylistClip
 struct Project
 {
     double bpm = 140.0;
+
+    // channel rack state (shared across patterns — count and names)
+    int          channelCount = 3;
+    juce::String channelNames[16];
 
     std::vector<Pattern>      patterns;
     std::vector<PlaylistClip>  playlistClips;

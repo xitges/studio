@@ -31,6 +31,14 @@ public:
     PlayMode getPlayMode() const { return playMode; }
     double   getBPM()      const { return bpmSlider.getValue(); }
 
+    // Toggle Song ↔ Pattern mode and fire onPlayModeChanged
+    void togglePlayMode()
+    {
+        playMode = (playMode == PlayMode::Pattern) ? PlayMode::Song : PlayMode::Pattern;
+        playModeBox.setSelectedId((int)playMode + 1, juce::dontSendNotification);
+        if (onPlayModeChanged) onPlayModeChanged(playMode);
+    }
+
     // M2.1 — refresh pattern list in the combo; call whenever patterns change
     void updatePatternList(const std::vector<Pattern>& patterns, int selectedId);
 

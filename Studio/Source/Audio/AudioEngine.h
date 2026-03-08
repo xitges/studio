@@ -48,6 +48,13 @@ public:
     long   getSongSamplePosition() const { return songSamplePosition; }
     double getPatternBeatPos()     const { return patternBeatPos; }   // M3
 
+    // Seek song playback to an arbitrary bar position
+    void seekSongToBar(double bar)
+    {
+        const double samplesPerBar = (sampleRate * 60.0 / bpm) * 4.0;
+        songSamplePosition = (long)(bar * samplesPerBar);
+    }
+
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext(
         const float* const* inputChannelData,

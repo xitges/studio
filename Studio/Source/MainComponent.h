@@ -61,6 +61,7 @@ private:
     int      nextPatternId() const;
     void     selectPattern(int id);
     void     syncPatternToEngine();
+    void     syncChannelRackToProject();
 
     // M6 — undo/redo
     juce::UndoManager undoManager;

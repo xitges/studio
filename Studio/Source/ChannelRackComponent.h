@@ -102,8 +102,16 @@ public:
     void loadPattern(const Pattern& pat);
     void saveToPattern(Pattern& pat) const;
 
-    static constexpr int ROW_HEIGHT    = 44;
-    static constexpr int LABEL_WIDTH   = 200;
+    // Channel count / name management
+    int          getChannelCount() const { return (int)channels.size(); }
+    juce::String getChannelName(int ch) const
+    {
+        return (ch >= 0 && ch < (int)channels.size()) ? channels[(size_t)ch].name : "";
+    }
+    void resetToChannelCount(int count, const juce::String* names);
+
+    static constexpr int ROW_HEIGHT    = 58;
+    static constexpr int LABEL_WIDTH   = 250;
     static constexpr int HEADER_HEIGHT = 30;
 
 private:

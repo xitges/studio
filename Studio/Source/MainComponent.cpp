@@ -20,7 +20,11 @@ MainComponent::MainComponent()
     juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
 
     // ---- Seed project with initial data
-    project.bpm = 70.0;
+    project.bpm          = 70.0;
+    project.channelCount = 3;
+    project.channelNames[0] = "Kick";
+    project.channelNames[1] = "Snare";
+    project.channelNames[2] = "HiHat";
 
     // M5 — default 8 mixer tracks
     for (int t = 0; t < 8; ++t)
@@ -251,6 +255,11 @@ MainComponent::MainComponent()
     // ---- Playlist inside Viewport
     playlist.setProject(&project);
     playlist.getActivePatternId = [this]() { return activePatternId; };
+
+    playlist.onSeekToBar = [this](double bar)
+    {
+        audioEngine.seekSongToBar(bar);
+    };
 
     playlistViewport.setViewedComponent(&playlist, false);
     playlistViewport.setScrollBarsShown(true, true);
@@ -670,7 +679,7 @@ MainComponent::MainComponent()
 
     setWantsKeyboardFocus(true);
     startTimerHz(30);
-    setSize(1280, 780);
+    setSize(1600, 900);
 }
 
 MainComponent::~MainComponent()
@@ -781,6 +790,11 @@ void MainComponent::reloadProjectIntoUI()
 
     // Set active pattern to first in list
     activePatternId = project.patterns.empty() ? 1 : project.patterns.front().id;
+
+    // Restore channel count and names, then load pattern data
+    {
+        channelRack.resetToChannelCount(project.channelCount, project.channelNames);
+    }
 
     // Load first pattern into channel rack and restore its samples
     if (!project.patterns.empty())
@@ -910,6 +924,14 @@ void MainComponent::openProject()
         });
 }
 
+// Sync channel rack's channel count + names into the project model before saving
+void MainComponent::syncChannelRackToProject()
+{
+    project.channelCount = channelRack.getChannelCount();
+    for (int ch = 0; ch < project.channelCount && ch < 16; ++ch)
+        project.channelNames[ch] = channelRack.getChannelName(ch);
+}
+
 void MainComponent::saveProject()
 {
     if (currentFile.existsAsFile())
@@ -917,6 +939,7 @@ void MainComponent::saveProject()
         // Flush current channel rack → active pattern before saving
         if (auto* pat = findPattern(activePatternId))
             channelRack.saveToPattern(*pat);
+        syncChannelRackToProject();
 
         if (ProjectSerializer::save(project, currentFile))
         {
@@ -941,6 +964,7 @@ void MainComponent::saveProjectAs()
     // Flush before showing dialog
     if (auto* pat = findPattern(activePatternId))
         channelRack.saveToPattern(*pat);
+    syncChannelRackToProject();
 
     fileChooser = std::make_shared<juce::FileChooser>(
         "Save Project As",
@@ -1000,6 +1024,28 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         undoManager.redo();
         return true;
     }
+    // Tab — toggle Song / Pattern mode
+    if (key == juce::KeyPress(juce::KeyPress::tabKey))
+    {
+        toolbar.togglePlayMode();
+        audioEngine.setPlayMode(toolbar.getPlayMode());
+        return true;
+    }
+
+    // Cmd+C — copy selected playlist clip
+    if (key == juce::KeyPress('c', cmd, 0))
+    {
+        playlist.copySelectedClip();
+        return true;
+    }
+
+    // Cmd+V — paste clipboard clip
+    if (key == juce::KeyPress('v', cmd, 0))
+    {
+        playlist.pasteClipboard();
+        return true;
+    }
+
     // Space — play / stop
     if (key == juce::KeyPress(juce::KeyPress::spaceKey))
     {
