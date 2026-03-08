@@ -9,13 +9,19 @@ Goal: feature parity with FL Studio, with a focus on being even more intuitive a
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Toolbar Row 1 — Transport: Play / Stop / Rec / BPM / Mode   │
+│  Toolbar Row 1 — Transport: Play / Stop / Rec / BPM / Mode / │
+│                  Mixer / MIDI / Pad                          │
 │  Toolbar Row 2 — Patterns / File / Export                    │
 ├──────────────────────────────────────────────────────────────┤
 │  Playlist  (scrollable — bars × tracks timeline)             │
 ├──────────────────────────────────────────────────────────────┤
 │  Channel Rack  (scrollable step sequencer)                   │
+├──────────────────────────────────────────────────────────────┤
+│  Mixer  (optional panel — 8 insert tracks + master)          │
 └──────────────────────────────────────────────────────────────┘
+
+Floating windows (opened on demand):
+  Piano Roll · Synth Editor · FX Editor · Launchpad
 ```
 
 ---
@@ -40,10 +46,13 @@ Goal: feature parity with FL Studio, with a focus on being even more intuitive a
 | Control | How to use |
 |---|---|
 | **Play** | Starts playback. Pattern mode loops the active pattern; Song mode plays the full timeline from bar 0. |
-| **Stop** | Stops playback and resets the playhead. |
+| **Stop** | Stops playback, resets the playhead, and silences all voices immediately. |
 | **Rec** | Planned — Audio Recording (M7). |
 | **BPM slider** | Drag to change tempo (60–200 BPM). Takes effect immediately, even during playback. Default: 70. |
 | **Pattern / Song** | Switches play mode. |
+| **Mixer** | Toggles the Mixer panel at the bottom of the window. |
+| **MIDI** | Opens a popup to select a MIDI input device and target channel. |
+| **Pad** | Opens the Launchpad — an 8×8 pad grid for one-shot sample performance and sequence recording. |
 
 ### Row 2 — Pattern Management
 
@@ -96,6 +105,8 @@ The step sequencer. Each row is one instrument channel (Kick, Snare, HiHat, etc.
 
 Drag & drop any **WAV, AIFF, or MP3** file from Finder onto a channel row.
 The row highlights green on hover. On drop the sample loads immediately and the filename appears in the label.
+
+**Samples are stored per pattern.** Changing a sample in Pattern 1 does not affect Pattern 2. Switching patterns restores each pattern's own samples automatically.
 
 ### Renaming a Channel
 
@@ -229,9 +240,60 @@ The delay is BPM-synced — it automatically adjusts to the current project BPM.
 
 ---
 
+## Mixer
+
+Open/close with the **Mixer** button in the toolbar. Shows 8 insert tracks (Track 1–8) and a Master strip.
+
+| Control | What it does |
+|---|---|
+| **Volume fader** | Sets the track output level |
+| **Pan knob** | Stereo position |
+| **M (Mute)** | Silences the track |
+| **S (Solo)** | Solos the track |
+| **FX (purple button)** | Opens the FX chain editor for that track |
+
+Each channel in the Channel Rack routes to a mixer track. The routing label is shown under the channel name and can be changed in the mixer.
+
+---
+
+## Launchpad
+
+Open with the **Pad** button in the toolbar. An 8×8 grid of one-shot sample pads for live performance and beat recording.
+
+### Assigning Samples to Pads
+
+- **Drag & drop** an audio file from Finder onto any pad cell.
+- **Right-click** a pad → **Load Sample...** to browse for a file, or **Clear** to remove it.
+
+Loaded pads glow green; empty pads are dark.
+
+### Triggering Pads
+
+- **Click** a pad with the mouse.
+- **Keyboard** (while the Launchpad window is focused):
+
+| Keyboard row | Pads |
+|---|---|
+| `1 2 3 4 5 6 7 8` | Row 1 (pads 0–7) |
+| `Q W E R T Y U I` | Row 2 (pads 8–15) |
+| `A S D F G H J K` | Row 3 (pads 16–23) |
+| `Z X C V B N M ,` | Row 4 (pads 24–31) |
+
+### Recording a Sequence
+
+1. Set the **Bars** dropdown to the desired recording length (1, 2, or 4 bars).
+2. Click **REC** — the button turns red and a countdown label shows the beat position.
+3. Press pads in time. Each hit is recorded with beat-accurate timing.
+4. Recording stops automatically after the set number of bars (or click **REC** again to stop early).
+5. Click **> Pattern** to convert the recording to a new pattern. A dialog asks for a name.
+
+The converted pattern maps each unique pad to its own channel, copies the pad's sample, and quantizes hits to the nearest 16th note. The new pattern appears immediately in the pattern list.
+
+---
+
 ## Save / Load
 
-Projects are saved as `.studioproj` files (XML format). All patterns, steps, playlist clips, and BPM are saved.
+Projects are saved as `.studioproj` files (XML format). Saved data includes: patterns (steps + notes + per-channel samples), playlist clips, playlist tracks, mixer tracks, channel routing, synth parameters, FX parameters, and launchpad pad assignments.
 
 ---
 
@@ -249,12 +311,14 @@ Projects are saved as `.studioproj` files (XML format). All patterns, steps, pla
 | M8 | VST / AU Plugin Hosting | Planned |
 | M9 | Automation (parameter curves on timeline) | Planned |
 | M10 | Export / Render to WAV | **Done** |
-| M11 | UI Polish, Zoom, Track Management, Pattern Preview | **Partial** (M11.3 + M11.5 done) |
-| M12 | MIDI Input / Output | Planned |
+| M11 | UI Polish, Zoom, Track Management, Pattern Preview | **Partial** (dark theme, zoom, track management done) |
+| M12 | MIDI Input / Output | **Partial** (MIDI input device selection + live trigger done) |
 | M13 | Built-in Instruments (synth, sampler) | **Done** |
 | M14 | Built-in FX (EQ, Compressor, Reverb, Delay) | **Partial** (Compressor, Delay, Reverb done — no EQ yet) |
 | M15 | Sample Browser / Library Panel | Planned |
 | M16 | Auto-save, Recent Files, Project Templates | Planned |
+| — | Launchpad (8×8 sample pads + sequence recording) | **Done** |
+| — | Per-pattern sample isolation | **Done** |
 
 ---
 
