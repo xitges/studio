@@ -40,6 +40,10 @@ public:
 
     int getNeededWidth()  const { return 200 * barWidth; }
     int getNeededHeight() const { return headerHeight + getTrackCount() * (trackHeight + trackGap); }
+
+    // M11 — horizontal zoom (pixels per bar)
+    void setBarWidth(int w) { barWidth = juce::jlimit(20, 256, w); repaint(); }
+    int  getBarWidth() const { return barWidth; }
     int getTrackCount()   const
     {
         if (project != nullptr && !project->playlistTracks.empty())
@@ -66,11 +70,12 @@ private:
 
     std::vector<PlaylistClip> localDemoClips;
 
-    static constexpr int headerHeight = 24;
-    static constexpr int trackHeight  = 40;
-    static constexpr int trackGap     = 4;
-    static constexpr int barWidth     = 64;
+    static constexpr int headerHeight  = 24;
+    static constexpr int trackHeight   = 40;
+    static constexpr int trackGap      = 4;
     static constexpr int resizeHotspot = 10; // px from right edge = resize handle
+
+    int barWidth = 64;  // M11 zoom: pixels per bar (variable)
 
     // Snap
     int snapDivisor = 1;    // 1=1bar, 2=½bar, 4=¼bar, 0=free

@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "ProjectModel.h"
 #include "ProjectSerializer.h"
+#include "StudioLookAndFeel.h"
 #include "ToolbarComponent.h"
 #include "ChannelRackComponent.h"
 #include "Audio/AudioEngine.h"
@@ -10,6 +11,7 @@
 #include "MixerComponent.h"
 #include "SynthEditorComponent.h"
 #include "FXEditorComponent.h"
+#include "LaunchpadComponent.h"
 
 class MainComponent : public juce::Component,
                       public juce::Timer
@@ -24,12 +26,16 @@ public:
     bool keyPressed(const juce::KeyPress& key) override;
 
 private:
+    StudioLookAndFeel    lookAndFeel;    // M11 — must be first so it outlives all components
+
     Project              project;
     AudioEngine          audioEngine;
     ToolbarComponent     toolbar;
     PlaylistComponent    playlist;
     juce::Viewport       playlistViewport;
     juce::ComboBox       playlistSnapBox;
+    juce::TextButton     playlistZoomInBtn  { "+" };
+    juce::TextButton     playlistZoomOutBtn { "-" };
     ChannelRackComponent channelRack;
     juce::Viewport       channelRackViewport;
     MixerComponent       mixer;
@@ -44,6 +50,9 @@ private:
     std::unique_ptr<FXEditorWindow>    fxEditorWindow;
     int synthEditorChannel = -1;
     int fxEditorTrack      = -1;
+
+    // Launchpad — floating performance pad window
+    std::unique_ptr<LaunchpadWindow> launchpadWindow;
 
     // M2 — pattern management state
     int activePatternId = 1;

@@ -37,8 +37,9 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
                 bits += pat.steps[ch][s] ? "1" : "0";
 
             auto* chEl = patEl->createNewChildElement("Ch");
-            chEl->setAttribute("i",     ch);
-            chEl->setAttribute("steps", bits);
+            chEl->setAttribute("i",          ch);
+            chEl->setAttribute("steps",      bits);
+            chEl->setAttribute("samplePath", pat.samplePaths[ch]);
         }
 
         // NoteEvents (M3)
@@ -146,6 +147,21 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         fEl->setAttribute("reverbWidth",    (double)fp.reverbWidth);
     }
 
+    // ---- Launchpad pad assignments
+    auto* lpEl = root.createNewChildElement("Launchpad");
+    for (int i = 0; i < 64; ++i)
+    {
+        const auto& pad = project.launchpadPads[(size_t)i];
+        if (pad.filePath.isNotEmpty())
+        {
+            auto* padEl = lpEl->createNewChildElement("Pad");
+            padEl->setAttribute("i",      i);
+            padEl->setAttribute("file",   pad.filePath);
+            padEl->setAttribute("volume", (double)pad.volume);
+            padEl->setAttribute("pitch",  (double)pad.pitch);
+        }
+    }
+
     return root.writeTo(file);
 }
 
@@ -181,6 +197,8 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 const juce::String bits = chEl->getStringAttribute("steps");
                 for (int s = 0; s < juce::jmin(bits.length(), Pattern::kMaxSteps); ++s)
                     pat.steps[ch][s] = (bits[s] == '1');
+
+                pat.samplePaths[ch] = chEl->getStringAttribute("samplePath");
             }
 
             // NoteEvents (M3)
@@ -315,6 +333,22 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
             fp.reverbDamp     = (float)fEl->getDoubleAttribute("reverbDamp",    0.5);
             fp.reverbWet      = (float)fEl->getDoubleAttribute("reverbWet",     0.25);
             fp.reverbWidth    = (float)fEl->getDoubleAttribute("reverbWidth",   1.0);
+        }
+    }
+
+    // ---- Launchpad pad assignments
+    if (auto* lpEl = xml->getChildByName("Launchpad"))
+    {
+        for (auto* padEl : lpEl->getChildIterator())
+        {
+            const int i = padEl->getIntAttribute("i", -1);
+            if (i < 0 || i >= 64) continue;
+            loaded.launchpadPads[(size_t)i].filePath =
+                padEl->getStringAttribute("file");
+            loaded.launchpadPads[(size_t)i].volume =
+                (float)padEl->getDoubleAttribute("volume", 0.8);
+            loaded.launchpadPads[(size_t)i].pitch =
+                (float)padEl->getDoubleAttribute("pitch",  0.0);
         }
     }
 

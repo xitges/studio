@@ -16,7 +16,8 @@
 #include "../SynthEngine.h"
 #include "../FXProcessor.h"
 
-class AudioEngine : public juce::AudioIODeviceCallback
+class AudioEngine : public juce::AudioIODeviceCallback,
+                    public juce::MidiInputCallback
 {
 public:
     AudioEngine();
@@ -36,7 +37,8 @@ public:
     void setProject(Project* projectPtr);
 
     // Sample management
-    void loadSample(int channelIndex, const juce::File& file);
+    void loadSample   (int channelIndex, const juce::File& file);
+    void unloadSample (int channelIndex);   // clear player so channel plays nothing
     void triggerChannel(int channelIndex);
 
     // Step pattern
@@ -79,6 +81,9 @@ public:
     // M3 — preview a note from the piano roll keyboard (does not alter channelBasePitch)
     void previewNote(int ch, int midiPitch);
 
+    // Silence all synth voices immediately (called on Stop)
+    void allSynthNotesOff();
+
     // M13 — trigger a synth note directly (used by piano key preview for melodic synth channels)
     void previewSynthNote(int ch, int midiPitch, const SynthParams& p);
 
@@ -89,6 +94,20 @@ public:
     void setMixerTrackSoloed(int track, bool soloed);
     void setMasterVolume    (float vol);
     void setMasterPan       (float pan);
+
+    // M12 — MIDI input
+    juce::Array<juce::MidiDeviceInfo> getMidiInputDevices() const;
+    void openMidiDevice (const juce::String& deviceId);
+    void closeMidiDevice();
+    void setMidiTargetChannel(int ch);   // which DAW channel receives live MIDI (0-based)
+    juce::String getOpenMidiDeviceId() const;
+
+    // MidiInputCallback (called on MIDI thread — posts into collector)
+    void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& msg) override;
+
+    // Launchpad — trigger one-shot sample on a pad; load sample file
+    void triggerLaunchpadPad  (int padIdx);
+    void loadLaunchpadSample  (int padIdx, const juce::File& file);
 
     // M10 — Offline render to WAV file
     // Temporarily removes the real-time audio callback to avoid thread conflicts.
@@ -103,8 +122,14 @@ private:
     juce::MixerAudioSource   mixer;
 
     std::array<SamplePlayer, 16> players;
-    std::array<PolySynth, 16>   polySynths;    // M13
-    std::array<FXChain, 8>      fxChains;      // M14
+    std::array<PolySynth, 16>   polySynths;       // M13
+    std::array<FXChain, 8>      fxChains;         // M14
+    std::array<SamplePlayer, 64> launchpadPlayers; // Launchpad one-shot players
+
+    // M12 — MIDI
+    juce::MidiMessageCollector  midiCollector;
+    std::unique_ptr<juce::MidiInput> midiInput;
+    int  midiTargetChannel = 0;   // DAW channel index (0-based)
     Sequencer sequencer;
 
     Project* project  = nullptr;

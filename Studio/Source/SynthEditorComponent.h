@@ -90,8 +90,6 @@ public:
         makeLabel(lfoRateLbl,   "LFO Rate (Hz)");
         makeLabel(lfoDepthLbl,  "LFO Depth");
         makeLabel(lfoTargetLbl, "LFO Target");
-
-        setSize(420, 330);
     }
 
     void loadParams(const SynthParams& p)
@@ -131,7 +129,7 @@ public:
         auto sectionHeader = [&](const juce::String& text, int y)
         {
             g.setColour(juce::Colour(0xff3498db));
-            g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f).withStyle("Bold")));
+            g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
             g.drawText(text, 10, y, 400, 14, juce::Justification::centredLeft);
             g.setColour(juce::Colour(0xff3498db).withAlpha(0.4f));
             g.drawLine(10.0f, (float)(y + 14), 410.0f, (float)(y + 14), 1.0f);
@@ -204,12 +202,12 @@ public:
     {
         setContentNonOwned(&panel, false);
         setResizable(false, false);
-        setSize(420, 330);
+        setSize(430, 370);
     }
 
     void setChannelName(const juce::String& name)
     {
-        setName("Synth Editor — " + name);
+        setName("Synth Editor - " + name);
     }
 
     void closeButtonPressed() override { setVisible(false); }

@@ -16,6 +16,9 @@ struct LambdaAction : public juce::UndoableAction
 
 MainComponent::MainComponent()
 {
+    // M11 — apply custom dark LookAndFeel globally
+    juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
+
     // ---- Seed project with initial data
     project.bpm = 70.0;
 
@@ -85,6 +88,7 @@ MainComponent::MainComponent()
     toolbar.onStop = [this]
     {
         audioEngine.stop();
+        audioEngine.allSynthNotesOff();
         channelRack.setPlaybackStep(-1);
         playlist.setPlayheadBar(-1.0);
         if (pianoRollWindow != nullptr)
@@ -259,15 +263,28 @@ MainComponent::MainComponent()
     playlistSnapBox.addItem("1/4 Bar", 4);
     playlistSnapBox.addItem("Free",    99);
     playlistSnapBox.setSelectedId(1, juce::dontSendNotification);
-    playlistSnapBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
-    playlistSnapBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
-    playlistSnapBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
     playlistSnapBox.onChange = [this]
     {
         const int id = playlistSnapBox.getSelectedId();
         playlist.setSnapDivisor(id == 99 ? 0 : id);
     };
     addAndMakeVisible(playlistSnapBox);
+
+    // M11 — zoom buttons (anchored alongside snap box)
+    playlistZoomInBtn.setTooltip("Zoom in");
+    playlistZoomOutBtn.setTooltip("Zoom out");
+    playlistZoomInBtn.onClick = [this]
+    {
+        playlist.setBarWidth(playlist.getBarWidth() + 16);
+        resized();
+    };
+    playlistZoomOutBtn.onClick = [this]
+    {
+        playlist.setBarWidth(playlist.getBarWidth() - 16);
+        resized();
+    };
+    addAndMakeVisible(playlistZoomInBtn);
+    addAndMakeVisible(playlistZoomOutBtn);
 
     // ---- Channel Rack inside Viewport
     channelRack.loadPattern(project.patterns[0]);   // load initial pattern into grid
@@ -285,6 +302,9 @@ MainComponent::MainComponent()
     channelRack.onSampleDropped = [this](int ch, juce::File file)
     {
         audioEngine.loadSample(ch, file);
+        if (auto* pat = findPattern(activePatternId))
+            pat->samplePaths[ch] = file.getFullPathName();
+        markDirty();
     };
 
     channelRack.onMuteChanged = [this](int ch, bool muted)
@@ -448,7 +468,7 @@ MainComponent::MainComponent()
         if (synthEditorWindow == nullptr)
         {
             synthEditorWindow = std::make_unique<SynthEditorWindow>();
-            synthEditorWindow->centreWithSize(420, 330);
+            synthEditorWindow->centreWithSize(430, 370);
         }
 
         synthEditorWindow->setChannelName(
@@ -505,6 +525,149 @@ MainComponent::MainComponent()
 
     toolbar.onToggleMixer = [this] { showMixer = !showMixer; resized(); };
 
+    // Launchpad toggle
+    toolbar.onToggleLaunchpad = [this]
+    {
+        if (launchpadWindow == nullptr)
+        {
+            launchpadWindow = std::make_unique<LaunchpadWindow>();
+            launchpadWindow->panel.setProject(&project);
+
+            // Pad pressed → trigger one-shot sample
+            launchpadWindow->panel.onPadTriggered = [this](int padIdx)
+            {
+                audioEngine.triggerLaunchpadPad(padIdx);
+            };
+
+            // Sample dropped / assigned → load into audio engine
+            launchpadWindow->panel.onSampleDropped = [this](int padIdx, juce::File file)
+            {
+                audioEngine.loadLaunchpadSample(padIdx, file);
+                markDirty();
+            };
+
+            // Convert recorded sequence → new pattern
+            launchpadWindow->panel.onConvertToPattern =
+                [this](const std::vector<LaunchpadPanel::RecordedHit>& hits, int numBars)
+            {
+                // Ask for a name before creating the pattern
+                auto* dialog = new juce::AlertWindow("Save as Pattern", "Pattern name:",
+                                                      juce::MessageBoxIconType::NoIcon);
+                dialog->addTextEditor("name", "Pad Recording");
+                dialog->addButton("OK",     1);
+                dialog->addButton("Cancel", 0);
+
+                auto hitsCopy = hits;
+                dialog->enterModalState(true,
+                    juce::ModalCallbackFunction::create(
+                        [this, hitsCopy, numBars, dialog](int result)
+                    {
+                        if (result == 1)
+                        {
+                            juce::String patName = dialog->getTextEditorContents("name").trim();
+                            if (patName.isEmpty()) patName = "Pad Recording";
+
+                            Pattern newPat;
+                            newPat.id         = nextPatternId();
+                            newPat.name       = patName;
+                            newPat.stepCount  = numBars * 16;
+                            newPat.lengthBars = numBars;
+
+                            // Map each unique pad to a channel
+                            std::map<int, int> padToChannel;
+                            int nextCh = 0;
+                            for (const auto& hit : hitsCopy)
+                            {
+                                if (padToChannel.count(hit.padIdx) == 0 &&
+                                    nextCh < Pattern::kMaxChannels)
+                                {
+                                    padToChannel[hit.padIdx] = nextCh;
+                                    const auto fp = project.launchpadPads[(size_t)hit.padIdx].filePath;
+                                    if (fp.isNotEmpty())
+                                    {
+                                        // Store path in pattern so selectPattern can reload it
+                                        newPat.samplePaths[nextCh] = fp;
+                                        audioEngine.loadSample(nextCh, juce::File(fp));
+                                    }
+                                    ++nextCh;
+                                }
+                            }
+
+                            // Quantize hits to nearest 16th-note step
+                            for (const auto& hit : hitsCopy)
+                            {
+                                auto it = padToChannel.find(hit.padIdx);
+                                if (it == padToChannel.end()) continue;
+                                const int ch   = it->second;
+                                const int step = (int)std::round(hit.beatPos / 0.25)
+                                                 % newPat.stepCount;
+                                if (step >= 0 && step < newPat.stepCount)
+                                    newPat.steps[ch][step] = true;
+                            }
+
+                            project.patterns.push_back(newPat);
+                            toolbar.updatePatternList(project.patterns, newPat.id);
+                            selectPattern(newPat.id);
+                            markDirty();
+
+                            juce::AlertWindow::showMessageBoxAsync(
+                                juce::MessageBoxIconType::InfoIcon,
+                                "Pattern Created",
+                                "\"" + newPat.name + "\" added with "
+                                + juce::String(nextCh) + " channel(s).");
+                        }
+                        delete dialog;
+                    }), false);
+            };
+
+            // Provide BPM to the panel for beat-accurate recording
+            launchpadWindow->panel.getBPM = [this]() { return project.bpm; };
+        }
+
+        const bool nowVisible = !launchpadWindow->isVisible();
+        launchpadWindow->setVisible(nowVisible);
+        if (nowVisible) launchpadWindow->toFront(true);
+    };
+
+    // M12 — MIDI device selection popup
+    toolbar.onMidiButton = [this]
+    {
+        const auto devices = audioEngine.getMidiInputDevices();
+        const juce::String currentId = audioEngine.getOpenMidiDeviceId();
+
+        juce::PopupMenu menu;
+
+        // Device list
+        menu.addSectionHeader("MIDI Input Device");
+        menu.addItem(1, "(None)", true, currentId.isEmpty());
+        for (int i = 0; i < devices.size(); ++i)
+            menu.addItem(100 + i, devices[i].name, true, devices[i].identifier == currentId);
+
+        // Target channel submenu
+        juce::PopupMenu chanMenu;
+        for (int ch = 0; ch < 16; ++ch)
+            chanMenu.addItem(200 + ch, "Ch " + juce::String(ch + 1));
+        menu.addSeparator();
+        menu.addSubMenu("MIDI Target Channel", chanMenu);
+
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(nullptr),
+            [this, devices](int result)
+            {
+                if (result == 1)
+                {
+                    audioEngine.closeMidiDevice();
+                }
+                else if (result >= 100 && result < 100 + devices.size())
+                {
+                    audioEngine.openMidiDevice(devices[result - 100].identifier);
+                }
+                else if (result >= 200 && result < 216)
+                {
+                    audioEngine.setMidiTargetChannel(result - 200);
+                }
+            });
+    };
+
     setWantsKeyboardFocus(true);
     startTimerHz(30);
     setSize(1280, 780);
@@ -512,6 +675,7 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     audioEngine.shutdown();
 }
 
@@ -542,9 +706,19 @@ void MainComponent::selectPattern(int id)
 
     activePatternId = id;
 
-    // Load new pattern into channel rack
+    // Load new pattern into channel rack and restore its samples
     if (auto* newPat = findPattern(activePatternId))
+    {
         channelRack.loadPattern(*newPat);
+
+        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+        {
+            if (newPat->samplePaths[ch].isNotEmpty())
+                audioEngine.loadSample(ch, juce::File(newPat->samplePaths[ch]));
+            else
+                audioEngine.unloadSample(ch);
+        }
+    }
 
     toolbar.updatePatternList(project.patterns, activePatternId);
     audioEngine.setActivePattern(activePatternId);
@@ -562,6 +736,8 @@ void MainComponent::syncPatternToEngine()
 
     // Flush channel rack UI → pattern model
     channelRack.saveToPattern(*pat);
+
+    audioEngine.setActivePattern(activePatternId);   // ensure NoteEvent loop uses current pattern
 
     if (toolbar.getPlayMode() == PlayMode::Pattern)
     {
@@ -589,15 +765,36 @@ void MainComponent::reloadProjectIntoUI()
     // Stop the audio engine before touching shared project data —
     // processSongMode reads project->patterns on the audio thread.
     audioEngine.stop();
+    audioEngine.allSynthNotesOff();
     channelRack.setPlaybackStep(-1);
     playlist.setPlayheadBar(-1.0);
+
+    // Reload launchpad samples
+    for (int i = 0; i < 64; ++i)
+    {
+        const auto& pad = project.launchpadPads[(size_t)i];
+        if (pad.filePath.isNotEmpty())
+            audioEngine.loadLaunchpadSample(i, juce::File(pad.filePath));
+    }
+    if (launchpadWindow != nullptr)
+        launchpadWindow->panel.setProject(&project);
 
     // Set active pattern to first in list
     activePatternId = project.patterns.empty() ? 1 : project.patterns.front().id;
 
-    // Load first pattern into channel rack
+    // Load first pattern into channel rack and restore its samples
     if (!project.patterns.empty())
-        channelRack.loadPattern(project.patterns.front());
+    {
+        const auto& firstPat = project.patterns.front();
+        channelRack.loadPattern(firstPat);
+        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+        {
+            if (firstPat.samplePaths[ch].isNotEmpty())
+                audioEngine.loadSample(ch, juce::File(firstPat.samplePaths[ch]));
+            else
+                audioEngine.unloadSample(ch);
+        }
+    }
 
     // Refresh toolbar
     toolbar.updatePatternList(project.patterns, activePatternId);
@@ -785,6 +982,11 @@ void MainComponent::saveProjectAs()
 
 bool MainComponent::keyPressed(const juce::KeyPress& key)
 {
+    // Forward to launchpad if the window is open (works even when main window is focused)
+    if (launchpadWindow != nullptr && launchpadWindow->isVisible())
+        if (launchpadWindow->panel.handleKey(key))
+            return true;
+
     const auto cmd   = juce::ModifierKeys::commandModifier;
     const auto shift = juce::ModifierKeys::shiftModifier;
 
@@ -804,6 +1006,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         if (audioEngine.isPlaying())
         {
             audioEngine.stop();
+            audioEngine.allSynthNotesOff();
             channelRack.setPlaybackStep(-1);
             playlist.setPlayheadBar(-1.0);
             if (pianoRollWindow != nullptr)
@@ -843,8 +1046,12 @@ void MainComponent::resized()
     const int playlistHeight = (int)(area.getHeight() * 0.38f);
     auto playlistArea = area.removeFromTop(playlistHeight);
 
-    // Snap box anchored to top-right, outside the scrollable area
-    playlistSnapBox.setBounds(playlistArea.getRight() - 114, playlistArea.getY() + 2, 112, 20);
+    // Snap + zoom controls anchored to top-right, outside the scrollable area
+    const int ctrlY = playlistArea.getY() + 2;
+    const int ctrlR = playlistArea.getRight() - 2;
+    playlistSnapBox    .setBounds(ctrlR - 114,       ctrlY, 112, 20);
+    playlistZoomInBtn  .setBounds(ctrlR - 114 - 46,  ctrlY,  22, 20);
+    playlistZoomOutBtn .setBounds(ctrlR - 114 - 70,  ctrlY,  22, 20);
 
     playlistViewport.setBounds(playlistArea);
     playlist.setSize(juce::jmax(playlistArea.getWidth(),  playlist.getNeededWidth()),

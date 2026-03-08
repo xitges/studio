@@ -31,6 +31,7 @@ void AudioEngine::initialise()
 
 void AudioEngine::shutdown()
 {
+    closeMidiDevice();
     deviceManager.removeAudioCallback(this);
     deviceManager.closeAudioDevice();
 }
@@ -123,6 +124,31 @@ void AudioEngine::setActivePattern(int patternId)
 {
     activePatternId = patternId;
     patternBeatPos  = 0.0;
+}
+
+void AudioEngine::triggerLaunchpadPad(int padIdx)
+{
+    if (padIdx < 0 || padIdx >= 64) return;
+    if (project != nullptr)
+    {
+        launchpadPlayers[(size_t)padIdx].setVolume(project->launchpadPads[(size_t)padIdx].volume);
+        launchpadPlayers[(size_t)padIdx].setPitch (project->launchpadPads[(size_t)padIdx].pitch);
+    }
+    launchpadPlayers[(size_t)padIdx].trigger();
+}
+
+void AudioEngine::loadLaunchpadSample(int padIdx, const juce::File& file)
+{
+    if (padIdx < 0 || padIdx >= 64) return;
+    launchpadPlayers[(size_t)padIdx].loadFile(file);
+}
+
+void AudioEngine::allSynthNotesOff()
+{
+    for (auto& ps : polySynths)
+        ps.allNotesOff();
+    for (auto& fx : fxChains)
+        fx.reset();
 }
 
 void AudioEngine::previewNote(int ch, int midiPitch)
@@ -218,6 +244,12 @@ void AudioEngine::loadSample(int channelIndex, const juce::File& file)
         players[channelIndex].loadFile(file);
 }
 
+void AudioEngine::unloadSample(int channelIndex)
+{
+    if (channelIndex >= 0 && channelIndex < 16)
+        players[channelIndex].clear();
+}
+
 void AudioEngine::triggerChannel(int channelIndex)
 {
     if (channelIndex >= 0 && channelIndex < 16)
@@ -227,6 +259,46 @@ void AudioEngine::triggerChannel(int channelIndex)
 void AudioEngine::setStepPattern(int channelIndex, int stepIndex, bool active)
 {
     sequencer.setStep(channelIndex, stepIndex, active);
+}
+
+// ---- M12 — MIDI input -------------------------------------------------------
+
+juce::Array<juce::MidiDeviceInfo> AudioEngine::getMidiInputDevices() const
+{
+    return juce::MidiInput::getAvailableDevices();
+}
+
+void AudioEngine::openMidiDevice(const juce::String& deviceId)
+{
+    closeMidiDevice();
+    midiInput = juce::MidiInput::openDevice(deviceId, this);
+    if (midiInput != nullptr)
+        midiInput->start();
+}
+
+void AudioEngine::closeMidiDevice()
+{
+    if (midiInput != nullptr)
+    {
+        midiInput->stop();
+        midiInput.reset();
+    }
+}
+
+void AudioEngine::setMidiTargetChannel(int ch)
+{
+    midiTargetChannel = juce::jlimit(0, 15, ch);
+}
+
+juce::String AudioEngine::getOpenMidiDeviceId() const
+{
+    return midiInput != nullptr ? midiInput->getIdentifier() : juce::String{};
+}
+
+void AudioEngine::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& msg)
+{
+    // Called on the MIDI thread — push into thread-safe collector
+    midiCollector.addMessageToQueue(msg);
 }
 
 // ---- Audio callbacks ---------------------------------------------------
@@ -242,10 +314,66 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     juce::AudioBuffer<float> buffer(outputChannelData, numOutputChannels, numSamples);
     buffer.clear();
 
+    // M12 — process incoming MIDI messages
+    {
+        juce::MidiBuffer midiBuf;
+        midiCollector.removeNextBlockOfMessages(midiBuf, numSamples);
+
+        const int ch = juce::jlimit(0, 15, midiTargetChannel);
+
+        for (const auto meta : midiBuf)
+        {
+            const auto msg = meta.getMessage();
+            if (msg.isNoteOn())
+            {
+                const int   pitch = msg.getNoteNumber();
+                const float vel   = msg.getFloatVelocity();
+
+                const bool useSynth = (project != nullptr) &&
+                                       project->synthParams[(size_t)ch].enabled;
+                if (useSynth)
+                {
+                    // noteLenSamples=0 → sustain until noteOff
+                    polySynths[(size_t)ch].noteOn(pitch, vel, sampleRate,
+                                                   project->synthParams[(size_t)ch], 0);
+                }
+                else
+                {
+                    players[ch].setPitch(channelBasePitch[ch] + (float)(pitch - 60));
+                    players[ch].trigger();
+                }
+            }
+            else if (msg.isNoteOff())
+            {
+                polySynths[(size_t)ch].noteOff(msg.getNoteNumber());
+            }
+            else if (msg.isAllNotesOff() || msg.isAllSoundOff())
+            {
+                polySynths[(size_t)ch].allNotesOff();
+            }
+        }
+    }
+
     if (playMode == PlayMode::Pattern)
         processPatternMode(buffer, numSamples, numOutputChannels);
     else
         processSongMode(buffer, numSamples, numOutputChannels);
+
+    // Launchpad one-shot players — render directly into output (bypass mixer)
+    const float mv = project ? project->masterVolume : 1.0f;
+    for (auto& lp : launchpadPlayers)
+    {
+        if (!lp.isLoaded()) continue;
+        stagingBuf.clear();
+        lp.renderNextBlock(stagingBuf, numSamples);
+        for (int s = 0; s < numSamples; ++s)
+        {
+            if (buffer.getNumChannels() > 0)
+                buffer.addSample(0, s, stagingBuf.getSample(0, s) * mv);
+            if (buffer.getNumChannels() > 1)
+                buffer.addSample(1, s, stagingBuf.getSample(1, s) * mv);
+        }
+    }
 }
 
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
@@ -258,9 +386,15 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     for (auto& player : players)
         player.prepare(sampleRate, bufferSize);
 
+    // M12 — reset MIDI collector to current sample rate
+    midiCollector.reset(sampleRate);
+
     // M13/M14 — prepare synths and FX chains
     for (auto& s : polySynths) s.prepare(sampleRate, bufferSize);
     for (auto& fx : fxChains)  fx.prepare(sampleRate, bufferSize);
+
+    // Launchpad players
+    for (auto& lp : launchpadPlayers) lp.prepare(sampleRate, bufferSize);
 
     // M5 — allocate mixer staging buffers
     stagingBuf.setSize(2, bufferSize);
@@ -270,10 +404,10 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 
 void AudioEngine::audioDeviceStopped()
 {
-    for (auto& player : players)
-        player.reset();
-    for (auto& s : polySynths) s.reset();
-    for (auto& fx : fxChains)  fx.reset();
+    for (auto& player : players)       player.reset();
+    for (auto& s : polySynths)         s.reset();
+    for (auto& fx : fxChains)          fx.reset();
+    for (auto& lp : launchpadPlayers)  lp.reset();
 }
 
 // ---- Render helpers ----------------------------------------------------
@@ -284,8 +418,8 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
 {
     sequencer.processBlock(numSamples);
 
-    // M3 — trigger NoteEvents for Melodic channels
-    if (project != nullptr)
+    // M3 — trigger NoteEvents for Melodic channels (only while sequencer is playing)
+    if (sequencer.isPlaying() && project != nullptr)
     {
         const Pattern* pat = findPatternById(activePatternId);
         if (pat != nullptr && sampleRate > 0.0)
@@ -329,9 +463,9 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
                         }
                     }
                 }
-            }
 
-            patternBeatPos += numSamples / samplesPerBeat;
+                patternBeatPos += numSamples / samplesPerBeat;
+            }
         }
     }
 

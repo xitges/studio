@@ -52,6 +52,12 @@ public:
             envState_ = Env::Release;
     }
 
+    void kill()
+    {
+        envState_ = Env::Idle;
+        envLevel_ = 0.0f;
+    }
+
     bool isActive()  const { return envState_ != Env::Idle; }
     int  getPitch()  const { return pitch_; }
 
@@ -224,7 +230,7 @@ public:
     void allNotesOff()
     {
         for (auto& v : voices_)
-            v.noteOff();
+            v.kill();
     }
 
     bool isAnyActive() const

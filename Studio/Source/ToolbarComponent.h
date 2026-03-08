@@ -62,6 +62,12 @@ public:
     // M5 — Mixer toggle
     std::function<void()>  onToggleMixer;
 
+    // M12 — MIDI device selector button
+    std::function<void()>  onMidiButton;
+
+    // Launchpad toggle
+    std::function<void()>  onToggleLaunchpad;
+
 private:
     // Row 1 — transport
     juce::TextButton playButton   { "Play" };
@@ -91,6 +97,12 @@ private:
 
     // M5 — mixer toggle button
     juce::TextButton mixerBtn      { "Mixer" };
+
+    // M12 — MIDI button
+    juce::TextButton midiBtn          { "MIDI" };
+
+    // Launchpad button
+    juce::TextButton launchpadBtn     { "Pad" };
 
     bool     playing  = false;
     PlayMode playMode = PlayMode::Pattern;

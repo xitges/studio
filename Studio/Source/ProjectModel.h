@@ -40,6 +40,14 @@ struct SynthParams
     int   lfoTarget = 0;        // 0 = cutoff, 1 = pitch
 };
 
+// Launchpad — one pad cell in the 8×8 performance grid
+struct LaunchpadPad
+{
+    juce::String filePath;   // empty = not assigned
+    float        volume = 0.8f;
+    float        pitch  = 0.0f;   // semitones offset
+};
+
 // M14 — FX chain parameters per mixer track
 struct FXParams
 {
@@ -92,6 +100,9 @@ struct Pattern
 
     // M3 — per-channel note lists (for Melodic channels)
     std::vector<NoteEvent> notes[kMaxChannels];
+
+    // per-channel sample paths (each pattern has its own set)
+    juce::String samplePaths[kMaxChannels];
 };
 
 struct PlaylistClip
@@ -127,4 +138,7 @@ struct Project
 
     // M14 — per-mixer-track FX params
     std::array<FXParams, 8> fxParams = {};
+
+    // Launchpad — 8×8 pad assignments
+    std::array<LaunchpadPad, 64> launchpadPads = {};
 };

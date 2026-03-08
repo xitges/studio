@@ -23,6 +23,7 @@ public:
     void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int numSamples);
 
     bool isLoaded() const { return fileBuffer.getNumSamples() > 0; }
+    void clear()          { fileBuffer.setSize(0, 0); playPosition = -1.0; }
 
     // M1.1 — Volume & Pan
     void  setVolume(float v)  { volume = juce::jlimit(0.0f, 1.0f, v); }

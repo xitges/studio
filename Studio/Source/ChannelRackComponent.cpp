@@ -149,10 +149,17 @@ void ChannelRackComponent::loadPattern(const Pattern& pat)
 
     stepCountSlider.setValue(stepCount, juce::dontSendNotification);
 
-    // Copy step data for each channel
+    // Copy step data and sample name for each channel
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
+    {
         for (int s = 0; s < Pattern::kMaxSteps; ++s)
             channels[ch].steps[s] = pat.steps[ch][s];
+
+        if (pat.samplePaths[ch].isNotEmpty())
+            channels[ch].sampleName = juce::File(pat.samplePaths[ch]).getFileNameWithoutExtension();
+        else
+            channels[ch].sampleName = "Drop Sample";
+    }
 
     repaint();
 }

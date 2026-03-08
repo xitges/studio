@@ -85,8 +85,6 @@ public:
         makeLabel(reverbDampLbl,  "Damping");
         makeLabel(reverbWetLbl,   "Wet Mix");
         makeLabel(reverbWidthLbl, "Width");
-
-        setSize(440, 420);
     }
 
     void loadParams(const FXParams& p)
@@ -136,7 +134,7 @@ public:
         auto sectionHeader = [&](const juce::String& text, int y)
         {
             g.setColour(juce::Colour(0xff9b59b6));
-            g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f).withStyle("Bold")));
+            g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
             g.drawText(text, 10, y, 420, 14, juce::Justification::centredLeft);
             g.setColour(juce::Colour(0xff9b59b6).withAlpha(0.4f));
             g.drawLine(10.0f, (float)(y + 14), 430.0f, (float)(y + 14), 1.0f);
@@ -217,7 +215,7 @@ public:
 
     void setTrackName(const juce::String& name)
     {
-        setName("FX — " + name);
+        setName("FX - " + name);
     }
 
     void closeButtonPressed() override { setVisible(false); }

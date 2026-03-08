@@ -121,6 +121,16 @@ ToolbarComponent::ToolbarComponent()
     mixerBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a4060));
     mixerBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     mixerBtn.onClick = [this] { if (onToggleMixer) onToggleMixer(); };
+
+    addAndMakeVisible(midiBtn);
+    midiBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3d1a60));
+    midiBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    midiBtn.onClick = [this] { if (onMidiButton) onMidiButton(); };
+
+    addAndMakeVisible(launchpadBtn);
+    launchpadBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a5040));
+    launchpadBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    launchpadBtn.onClick = [this] { if (onToggleLaunchpad) onToggleLaunchpad(); };
 }
 
 ToolbarComponent::~ToolbarComponent() {}
@@ -175,6 +185,10 @@ void ToolbarComponent::resized()
         bpmSlider.setBounds(row.removeFromLeft(60).reduced(2));
         row.removeFromLeft(8);
         mixerBtn .setBounds(row.removeFromLeft(54).reduced(2));
+        row.removeFromLeft(4);
+        midiBtn     .setBounds(row.removeFromLeft(48).reduced(2));
+        row.removeFromLeft(4);
+        launchpadBtn.setBounds(row.removeFromLeft(44).reduced(2));
 
         titleLabel.setBounds(row);
     }
