@@ -117,6 +117,43 @@ struct Pattern
     }
 };
 
+// M9 — one breakpoint in an automation lane
+struct AutomationPoint
+{
+    double beat  = 0.0;   // song beat position
+    float  value = 0.0f;  // normalised 0..1
+};
+
+// M9 — one automation lane (one parameter, one list of breakpoints)
+struct AutomationLane
+{
+    // paramId: "masterVolume", "bpm", "ch0vol", "ch1vol", … "ch15vol"
+    juce::String            paramId;
+    float                   minVal = 0.0f;
+    float                   maxVal = 1.0f;
+    std::vector<AutomationPoint> points;
+
+    // Evaluate the lane at a given song beat using linear interpolation
+    float evaluate(double beat) const
+    {
+        if (points.empty()) return minVal;
+        if (beat <= points.front().beat) return minVal + points.front().value * (maxVal - minVal);
+        if (beat >= points.back().beat)  return minVal + points.back().value  * (maxVal - minVal);
+
+        for (size_t i = 0; i + 1 < points.size(); ++i)
+        {
+            const auto& a = points[i];
+            const auto& b = points[i + 1];
+            if (beat >= a.beat && beat <= b.beat)
+            {
+                const double t = (beat - a.beat) / (b.beat - a.beat);
+                return minVal + (a.value + (float)t * (b.value - a.value)) * (maxVal - minVal);
+            }
+        }
+        return minVal;
+    }
+};
+
 struct PlaylistClip
 {
     int          id         = 0;
@@ -157,4 +194,7 @@ struct Project
 
     // Launchpad — 8×8 pad assignments
     std::array<LaunchpadPad, 64> launchpadPads = {};
+
+    // M9 — automation lanes
+    std::vector<AutomationLane> automationLanes;
 };

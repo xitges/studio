@@ -32,6 +32,7 @@ struct ChannelRow
 
 class ChannelRackComponent : public juce::Component,
                              public juce::FileDragAndDropTarget,
+                             public juce::DragAndDropTarget,
                              public juce::Timer
 {
 public:
@@ -44,12 +45,16 @@ public:
     void mouseDoubleClick(const juce::MouseEvent&) override;   // M1.5 rename
     void timerCallback() override;
 
-    // Drag & drop
+    // OS file drag & drop
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
     void fileDragEnter(const juce::StringArray&, int, int) override;
     void fileDragExit(const juce::StringArray&) override;
     void fileDragMove(const juce::StringArray&, int, int y) override;
+
+    // M15 — internal drag from SampleBrowserComponent
+    bool isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDropped(const juce::DragAndDropTarget::SourceDetails& details) override;
 
     // Callbacks → MainComponent → AudioEngine
     std::function<void(int ch, bool muted)>   onMuteChanged;

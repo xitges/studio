@@ -261,7 +261,19 @@ MainComponent::MainComponent()
         audioEngine.seekSongToBar(bar);
     };
 
+    playlist.onZoomChanged = [this] { resized(); };
+
     playlistViewport.setViewedComponent(&playlist, false);
+
+    // M15 — sample browser
+    sampleBrowser.onPreviewFile = [this](const juce::File& f)
+    {
+        audioEngine.previewBrowserFile(f);
+    };
+    browserViewport.setViewedComponent(&sampleBrowser, false);
+    browserViewport.setScrollBarsShown(true, false);
+    browserViewport.setScrollBarThickness(6);
+    addAndMakeVisible(browserViewport);
     playlistViewport.setScrollBarsShown(true, true);
     playlistViewport.setScrollBarThickness(8);
     addAndMakeVisible(playlistViewport);
@@ -532,7 +544,8 @@ MainComponent::MainComponent()
         fxEditorWindow->toFront(true);
     };
 
-    toolbar.onToggleMixer = [this] { showMixer = !showMixer; resized(); };
+    toolbar.onToggleMixer   = [this] { showMixer   = !showMixer;   resized(); };
+    toolbar.onToggleBrowser = [this] { showBrowser = !showBrowser; resized(); };
 
     // Launchpad toggle
     toolbar.onToggleLaunchpad = [this]
@@ -1088,6 +1101,15 @@ void MainComponent::resized()
     mixer.setVisible(showMixer);
     if (showMixer)
         mixer.setBounds(area.removeFromBottom(160));
+
+    // M15 — sample browser: left panel (220px wide, full remaining height)
+    browserViewport.setVisible(showBrowser);
+    if (showBrowser)
+    {
+        auto browserArea = area.removeFromLeft(220);
+        browserViewport.setBounds(browserArea);
+        sampleBrowser.setSize(220, juce::jmax(browserArea.getHeight(), 800));
+    }
 
     const int playlistHeight = (int)(area.getHeight() * 0.38f);
     auto playlistArea = area.removeFromTop(playlistHeight);

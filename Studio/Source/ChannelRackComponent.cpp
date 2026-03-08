@@ -585,3 +585,27 @@ void ChannelRackComponent::filesDropped(const juce::StringArray& files, int, int
     if (onSampleDropped)
         onSampleDropped(ch, file);
 }
+
+// M15 — internal drag from SampleBrowserComponent
+bool ChannelRackComponent::isInterestedInDragSource(
+    const juce::DragAndDropTarget::SourceDetails& details)
+{
+    const juce::File f(details.description.toString());
+    return f.existsAsFile();
+}
+
+void ChannelRackComponent::itemDropped(
+    const juce::DragAndDropTarget::SourceDetails& details)
+{
+    const juce::File f(details.description.toString());
+    if (!f.existsAsFile()) return;
+
+    const int ch = getChannelIndexAt(details.localPosition.y);
+    if (ch < 0 || ch >= (int)channels.size()) return;
+
+    channels[(size_t)ch].sampleName = f.getFileNameWithoutExtension();
+    repaint();
+
+    if (onSampleDropped)
+        onSampleDropped(ch, f);
+}

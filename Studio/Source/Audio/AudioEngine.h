@@ -116,6 +116,9 @@ public:
     void triggerLaunchpadPad  (int padIdx);
     void loadLaunchpadSample  (int padIdx, const juce::File& file);
 
+    // M15 — preview a file from the sample browser (dedicated player, no channel affected)
+    void previewBrowserFile(const juce::File& f);
+
     // M10 — Offline render to WAV file
     // Temporarily removes the real-time audio callback to avoid thread conflicts.
     // mode: Pattern = loops the sequencer, Song = renders the full timeline.
@@ -132,6 +135,7 @@ private:
     std::array<PolySynth, 16>   polySynths;       // M13
     std::array<FXChain, 8>      fxChains;         // M14
     std::array<SamplePlayer, 64> launchpadPlayers; // Launchpad one-shot players
+    SamplePlayer browserPreviewPlayer;              // M15 — dedicated browser preview
 
     // M12 — MIDI
     juce::MidiMessageCollector  midiCollector;

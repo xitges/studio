@@ -76,6 +76,9 @@ public:
     // Launchpad toggle
     std::function<void()>  onToggleLaunchpad;
 
+    // M15 — Sample browser toggle
+    std::function<void()>  onToggleBrowser;
+
 private:
     // Row 1 — transport
     juce::TextButton playButton   { "Play" };
@@ -111,6 +114,9 @@ private:
 
     // Launchpad button
     juce::TextButton launchpadBtn     { "Pad" };
+
+    // M15 — Sample browser button
+    juce::TextButton browserBtn       { "Browse" };
 
     bool     playing  = false;
     PlayMode playMode = PlayMode::Pattern;

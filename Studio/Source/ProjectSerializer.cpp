@@ -171,6 +171,22 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         }
     }
 
+    // ---- M9: Automation lanes
+    auto* autoEl = root.createNewChildElement("Automation");
+    for (const auto& lane : project.automationLanes)
+    {
+        auto* laneEl = autoEl->createNewChildElement("Lane");
+        laneEl->setAttribute("paramId", lane.paramId);
+        laneEl->setAttribute("minVal",  (double)lane.minVal);
+        laneEl->setAttribute("maxVal",  (double)lane.maxVal);
+        for (const auto& pt : lane.points)
+        {
+            auto* ptEl = laneEl->createNewChildElement("Pt");
+            ptEl->setAttribute("beat",  pt.beat);
+            ptEl->setAttribute("value", (double)pt.value);
+        }
+    }
+
     return root.writeTo(file);
 }
 
@@ -391,6 +407,26 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 (float)padEl->getDoubleAttribute("volume", 0.8);
             loaded.launchpadPads[(size_t)i].pitch =
                 (float)padEl->getDoubleAttribute("pitch",  0.0);
+        }
+    }
+
+    // ---- M9: Automation lanes
+    if (auto* autoEl = xml->getChildByName("Automation"))
+    {
+        for (auto* laneEl : autoEl->getChildIterator())
+        {
+            AutomationLane lane;
+            lane.paramId = laneEl->getStringAttribute("paramId");
+            lane.minVal  = (float)laneEl->getDoubleAttribute("minVal", 0.0);
+            lane.maxVal  = (float)laneEl->getDoubleAttribute("maxVal", 1.0);
+            for (auto* ptEl : laneEl->getChildIterator())
+            {
+                AutomationPoint pt;
+                pt.beat  = ptEl->getDoubleAttribute("beat",  0.0);
+                pt.value = (float)ptEl->getDoubleAttribute("value", 0.0);
+                lane.points.push_back(pt);
+            }
+            loaded.automationLanes.push_back(lane);
         }
     }
 

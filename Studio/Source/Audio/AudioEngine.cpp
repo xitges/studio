@@ -179,6 +179,14 @@ void AudioEngine::previewNote(int ch, int midiPitch)
     }
 }
 
+void AudioEngine::previewBrowserFile(const juce::File& f)
+{
+    browserPreviewPlayer.loadFile(f);
+    browserPreviewPlayer.setVolume(0.8f);
+    browserPreviewPlayer.setPitch(0.0f);
+    browserPreviewPlayer.trigger();
+}
+
 void AudioEngine::previewSynthNote(int ch, int midiPitch, const SynthParams& p)
 {
     if (ch < 0 || ch >= 16) return;
@@ -410,6 +418,20 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 buffer.addSample(1, s, stagingBuf.getSample(1, s) * mv);
         }
     }
+
+    // M15 — browser preview player (bypass mixer, always audible)
+    if (browserPreviewPlayer.isLoaded())
+    {
+        stagingBuf.clear();
+        browserPreviewPlayer.renderNextBlock(stagingBuf, numSamples);
+        for (int s = 0; s < numSamples; ++s)
+        {
+            if (buffer.getNumChannels() > 0)
+                buffer.addSample(0, s, stagingBuf.getSample(0, s));
+            if (buffer.getNumChannels() > 1)
+                buffer.addSample(1, s, stagingBuf.getSample(1, s));
+        }
+    }
 }
 
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
@@ -431,6 +453,9 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 
     // Launchpad players
     for (auto& lp : launchpadPlayers) lp.prepare(sampleRate, bufferSize);
+
+    // M15 — browser preview player
+    browserPreviewPlayer.prepare(sampleRate, bufferSize);
 
     // M5 — allocate mixer staging buffers
     stagingBuf.setSize(2, bufferSize);
@@ -630,6 +655,32 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // M9 — apply automation lanes at the midpoint of this buffer
+    if (!project->automationLanes.empty())
+    {
+        const double midBeat = ((double)startSample + numSamples * 0.5) / samplesPerBeat;
+
+        for (const auto& lane : project->automationLanes)
+        {
+            const float v = lane.evaluate(midBeat);
+
+            if (lane.paramId == "masterVolume")
+            {
+                project->masterVolume = v;
+            }
+            else if (lane.paramId == "bpm")
+            {
+                bpm = (double)v;
+            }
+            else if (lane.paramId.startsWith("ch") && lane.paramId.endsWith("vol"))
+            {
+                const int ch = lane.paramId.substring(2, lane.paramId.length() - 3).getIntValue();
+                if (ch >= 0 && ch < 16)
+                    players[ch].setVolume(v);
             }
         }
     }

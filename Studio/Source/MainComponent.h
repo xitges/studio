@@ -12,9 +12,11 @@
 #include "SynthEditorComponent.h"
 #include "FXEditorComponent.h"
 #include "LaunchpadComponent.h"
+#include "SampleBrowserComponent.h"
 
 class MainComponent : public juce::Component,
-                      public juce::Timer
+                      public juce::Timer,
+                      public juce::DragAndDropContainer
 {
 public:
     MainComponent();
@@ -39,6 +41,11 @@ private:
     ChannelRackComponent channelRack;
     juce::Viewport       channelRackViewport;
     MixerComponent       mixer;
+
+    // M15 — sample browser panel
+    SampleBrowserComponent sampleBrowser;
+    juce::Viewport         browserViewport;
+    bool showBrowser = false;
 
     // M3 — floating piano roll window
     std::unique_ptr<PianoRollWindow> pianoRollWindow;

@@ -88,6 +88,16 @@ public:
         g.setColour(fill);
         g.fillRoundedRectangle(bounds, corner);
 
+        // Subtle top-edge inner highlight for depth
+        if (!isButtonDown)
+        {
+            juce::Rectangle<float> topLine(bounds.getX() + corner,
+                                           bounds.getY() + 1.0f,
+                                           bounds.getWidth() - corner * 2.0f, 1.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.07f));
+            g.fillRect(topLine);
+        }
+
         g.setColour(fill.brighter(0.22f));
         g.drawRoundedRectangle(bounds, corner, 1.0f);
     }
@@ -151,17 +161,41 @@ public:
     // -------------------------------------------------------------------------
     void drawLinearSliderBackground(juce::Graphics& g,
                                     int x, int y, int width, int height,
-                                    float, float, float,
-                                    juce::Slider::SliderStyle,
-                                    juce::Slider&) override
+                                    float sliderPos, float /*minPos*/, float /*maxPos*/,
+                                    juce::Slider::SliderStyle style,
+                                    juce::Slider& slider) override
     {
-        const float trackH = 3.0f;
-        const juce::Rectangle<float> track(
-            (float)x,
-            (float)y + (float)height * 0.5f - trackH * 0.5f,
-            (float)width, trackH);
+        const float trackThick = 3.0f;
+        const bool  isVert     = (style == juce::Slider::LinearVertical);
+
+        // Track background
+        juce::Rectangle<float> track;
+        if (isVert)
+            track = { (float)x + (float)width * 0.5f - trackThick * 0.5f,
+                      (float)y, trackThick, (float)height };
+        else
+            track = { (float)x,
+                      (float)y + (float)height * 0.5f - trackThick * 0.5f,
+                      (float)width, trackThick };
+
         g.setColour(juce::Colour(0xff2c2c54));
-        g.fillRoundedRectangle(track, trackH * 0.5f);
+        g.fillRoundedRectangle(track, trackThick * 0.5f);
+
+        // Filled portion (origin → thumb)
+        const juce::Colour fillCol = slider.findColour(juce::Slider::trackColourId);
+        juce::Rectangle<float> fill;
+        if (isVert)
+            fill = { track.getX(), sliderPos, trackThick,
+                     (float)(y + height) - sliderPos };
+        else
+            fill = { track.getX(), track.getY(),
+                     sliderPos - (float)x, trackThick };
+
+        if (fill.getWidth() > 0.0f && fill.getHeight() > 0.0f)
+        {
+            g.setColour(fillCol);
+            g.fillRoundedRectangle(fill, trackThick * 0.5f);
+        }
     }
 
     void drawLinearSliderThumb(juce::Graphics& g,

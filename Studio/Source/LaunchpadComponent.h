@@ -44,6 +44,14 @@ public:
         convertBtn.onClick = [this] { onConvertClicked(); };
         addAndMakeVisible(convertBtn);
 
+        saveDefaultBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a3a1a));
+        saveDefaultBtn.onClick = [this] { saveDefaultPads(); };
+        addAndMakeVisible(saveDefaultBtn);
+
+        loadDefaultBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a2a3a));
+        loadDefaultBtn.onClick = [this] { loadDefaultPads(); };
+        addAndMakeVisible(loadDefaultBtn);
+
         statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff888888));
         statusLabel.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
         statusLabel.setText("Drop samples onto pads", juce::dontSendNotification);
@@ -131,10 +139,53 @@ private:
     double recordStartTime = 0.0;
     std::vector<RecordedHit> recordedHits;
 
-    juce::TextButton recBtn     { "REC" };
-    juce::TextButton convertBtn { "> Pattern" };
+    juce::TextButton recBtn        { "REC" };
+    juce::TextButton convertBtn   { "> Pattern" };
+    juce::TextButton saveDefaultBtn { "Save Default" };
+    juce::TextButton loadDefaultBtn { "Load Default" };
     juce::ComboBox   barsBox;
     juce::Label      statusLabel;
+
+    // ---- default pad persistence ----------------------------------------
+    static juce::PropertiesFile* getSettings()
+    {
+        static juce::ApplicationProperties props;
+        static bool init = false;
+        if (!init)
+        {
+            juce::PropertiesFile::Options o;
+            o.applicationName     = "Studio";
+            o.filenameSuffix      = ".settings";
+            o.osxLibrarySubFolder = "Application Support";
+            props.setStorageParameters(o);
+            init = true;
+        }
+        return props.getUserSettings();
+    }
+
+    void saveDefaultPads()
+    {
+        if (project == nullptr) return;
+        auto* s = getSettings();
+        if (s == nullptr) return;
+        for (int i = 0; i < kPads; ++i)
+            s->setValue("launchpadDefault" + juce::String(i),
+                        project->launchpadPads[(size_t)i].filePath);
+        s->save();
+        statusLabel.setText("Default saved!", juce::dontSendNotification);
+    }
+
+    void loadDefaultPads()
+    {
+        if (project == nullptr) return;
+        auto* s = getSettings();
+        if (s == nullptr) return;
+        for (int i = 0; i < kPads; ++i)
+            project->launchpadPads[(size_t)i].filePath =
+                s->getValue("launchpadDefault" + juce::String(i), {});
+        repaint();
+        statusLabel.setText("Defaults loaded!", juce::dontSendNotification);
+    }
 
     static constexpr int kTopBarH = 42;
     static constexpr int kGap     = 4;
@@ -241,13 +292,17 @@ private:
 inline void LaunchpadPanel::resized()
 {
     auto bar = getLocalBounds().removeFromTop(kTopBarH).reduced(6, 6);
-    recBtn    .setBounds(bar.removeFromLeft(64).reduced(1));
+    recBtn         .setBounds(bar.removeFromLeft(50).reduced(1));
+    bar.removeFromLeft(4);
+    barsBox        .setBounds(bar.removeFromLeft(68).reduced(1));
+    bar.removeFromLeft(4);
+    convertBtn     .setBounds(bar.removeFromLeft(80).reduced(1));
+    bar.removeFromLeft(4);
+    saveDefaultBtn .setBounds(bar.removeFromLeft(84).reduced(1));
+    bar.removeFromLeft(4);
+    loadDefaultBtn .setBounds(bar.removeFromLeft(84).reduced(1));
     bar.removeFromLeft(6);
-    barsBox   .setBounds(bar.removeFromLeft(72).reduced(1));
-    bar.removeFromLeft(6);
-    convertBtn.setBounds(bar.removeFromLeft(90).reduced(1));
-    bar.removeFromLeft(8);
-    statusLabel.setBounds(bar);
+    statusLabel    .setBounds(bar);
 }
 
 inline void LaunchpadPanel::paint(juce::Graphics& g)

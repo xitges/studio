@@ -26,6 +26,7 @@ public:
     void mouseDrag       (const juce::MouseEvent& e) override;
     void mouseUp         (const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
+    void mouseWheelMove  (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override;
 
     double getTotalBars() const;
 
@@ -39,7 +40,11 @@ public:
     void setSnapDivisor(int d) { snapDivisor = d; repaint(); }
 
     int getNeededWidth()  const { return (int)(juce::jmax(200.0, getTotalBars() + 8.0)) * barWidth; }
-    int getNeededHeight() const { return headerHeight + getTrackCount() * (trackHeight + trackGap); }
+    int getNeededHeight() const
+    {
+        const int autoH = project ? (int)project->automationLanes.size() * autoLaneHeight : 0;
+        return headerHeight + getTrackCount() * (trackHeight + trackGap) + autoH;
+    }
 
     // Clip copy/paste (called from MainComponent on Cmd+C / Cmd+V)
     void copySelectedClip()
@@ -80,6 +85,9 @@ public:
     // Seek callback — fired when user clicks on the time ruler
     std::function<void(double bar)> onSeekToBar;
 
+    // Zoom callback — fired when barWidth changes so the host can resize the viewport
+    std::function<void()> onZoomChanged;
+
     // M6 — undo/redo hooks
     std::function<void(PlaylistClip)>                                           onClipAdded;
     std::function<void(PlaylistClip)>                                           onClipDeleted;
@@ -100,6 +108,7 @@ private:
     static constexpr int trackHeight   = 40;
     static constexpr int trackGap      = 4;
     static constexpr int resizeHotspot = 10; // px from right edge = resize handle
+    static constexpr int autoLaneHeight = 60; // M9 — height of each automation lane
 
     int barWidth = 64;  // M11 zoom: pixels per bar (variable)
 
@@ -123,11 +132,20 @@ private:
     int          selectedClipId = -1;
 
     // Drawing
-    void drawBackground(juce::Graphics& g);
-    void drawTimeRuler (juce::Graphics& g);
-    void drawTracks    (juce::Graphics& g);
-    void drawClips     (juce::Graphics& g);
-    void drawPlayhead  (juce::Graphics& g);
+    void drawBackground    (juce::Graphics& g);
+    void drawTimeRuler     (juce::Graphics& g);
+    void drawTracks        (juce::Graphics& g);
+    void drawClips         (juce::Graphics& g);
+    void drawPlayhead      (juce::Graphics& g);
+    void drawAutomationLanes(juce::Graphics& g);   // M9
+    void addAutomationLane(const juce::String& paramId, float minVal, float maxVal,
+                           const juce::String& displayName);
+    void removeAutomationLane(int laneIdx);
+    int  autoLanesY() const;
+
+    // M9 — automation editing state
+    int   dragLaneIdx   = -1;
+    int   dragPointIdx  = -1;
 
     // Hit testing
     PlaylistClip* findClipAt(int x, int y);
@@ -191,6 +209,7 @@ inline void PlaylistComponent::paint(juce::Graphics& g)
     drawTimeRuler(g);
     drawTracks(g);
     drawClips(g);
+    drawAutomationLanes(g);
     drawPlayhead(g);
 }
 
@@ -410,30 +429,104 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
             selectedClipId = clip->id;
             showContextMenu(clip->id);
         }
-        else if (hasClipboard)
+        else if (pos.y < autoLanesY())
         {
+            // Right-click on empty track area → paste clip or add automation lane
             const float pasteBar   = (float)pos.x / barWidth;
             const int   pasteTrack = trackIndexAt(pos.y);
             juce::PopupMenu m;
-            m.addItem(1, "Paste Clip");
+            if (hasClipboard) m.addItem(1, "Paste Clip");
+            m.addSeparator();
+
+            juce::PopupMenu autoMenu;
+            autoMenu.addItem(10, "Master Volume  (0–1)");
+            autoMenu.addItem(11, "BPM  (60–200)");
+            autoMenu.addItem(12, "Ch 1 Volume");
+            autoMenu.addItem(13, "Ch 2 Volume");
+            autoMenu.addItem(14, "Ch 3 Volume");
+            m.addSubMenu("Add Automation Lane", autoMenu);
+
             m.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
                 [this, pasteBar, pasteTrack](int r)
                 {
-                    if (r != 1) return;
-                    auto& list = clipList();
-                    int newId = 1;
-                    for (const auto& c : list) newId = juce::jmax(newId, c.id + 1);
-                    PlaylistClip nc  = clipboardClip;
-                    nc.id            = newId;
-                    nc.startBar      = pasteBar;
-                    nc.trackIndex    = pasteTrack;
-                    list.push_back(nc);
-                    repaint();
-                    if (onClipAdded) onClipAdded(nc);
+                    if (r == 1 && hasClipboard)
+                    {
+                        auto& list = clipList();
+                        int newId = 1;
+                        for (const auto& c : list) newId = juce::jmax(newId, c.id + 1);
+                        PlaylistClip nc  = clipboardClip;
+                        nc.id            = newId;
+                        nc.startBar      = pasteBar;
+                        nc.trackIndex    = pasteTrack;
+                        list.push_back(nc);
+                        repaint();
+                        if (onClipAdded) onClipAdded(nc);
+                    }
+                    else if (r == 10) addAutomationLane("masterVolume", 0.0f, 1.0f, "Master Volume");
+                    else if (r == 11) addAutomationLane("bpm",          60.0f, 200.0f, "BPM");
+                    else if (r == 12) addAutomationLane("ch0vol",       0.0f, 1.0f, "Ch 1 Volume");
+                    else if (r == 13) addAutomationLane("ch1vol",       0.0f, 1.0f, "Ch 2 Volume");
+                    else if (r == 14) addAutomationLane("ch2vol",       0.0f, 1.0f, "Ch 3 Volume");
                 });
         }
         return;
     }
+
+    // M9 — automation lane interaction (below the track rows)
+    if (project != nullptr && pos.y >= autoLanesY())
+    {
+        const int relY  = pos.y - autoLanesY();
+        const int li    = relY / autoLaneHeight;
+        if (li >= 0 && li < (int)project->automationLanes.size())
+        {
+            auto& lane = project->automationLanes[(size_t)li];
+
+            if (e.mods.isRightButtonDown())
+            {
+                // Right-click → remove lane
+                juce::PopupMenu m;
+                m.addItem(1, "Remove Lane: " + lane.paramId);
+                m.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
+                    [this, li](int r) { if (r == 1) removeAutomationLane(li); });
+                return;
+            }
+
+            const float beatPos  = (float)pos.x / barWidth * 4.0f;
+            const int   laneRelY = relY % autoLaneHeight;
+            const float value    = 1.0f - juce::jlimit(0.0f, 1.0f,
+                                       (float)(laneRelY - 4) / (float)(autoLaneHeight - 8));
+
+            // Check if clicking near an existing point
+            dragLaneIdx  = li;
+            dragPointIdx = -1;
+            for (int pi = 0; pi < (int)lane.points.size(); ++pi)
+            {
+                const int px = (int)(lane.points[(size_t)pi].beat * 0.25 * barWidth);
+                if (std::abs(pos.x - px) < 8)
+                {
+                    dragPointIdx = pi;
+                    break;
+                }
+            }
+
+            if (dragPointIdx < 0)
+            {
+                // Add new point
+                AutomationPoint pt;
+                pt.beat  = (double)beatPos;
+                pt.value = value;
+                auto it  = lane.points.begin();
+                while (it != lane.points.end() && it->beat < pt.beat) ++it;
+                const int insertIdx = (int)(it - lane.points.begin());
+                lane.points.insert(it, pt);
+                dragPointIdx = insertIdx;
+            }
+
+            repaint();
+            return;
+        }
+    }
+    dragLaneIdx = -1;
 
     if (clip != nullptr)
     {
@@ -454,6 +547,26 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
 
 inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
 {
+    // M9 — drag automation breakpoint
+    if (dragLaneIdx >= 0 && dragPointIdx >= 0 && project != nullptr)
+    {
+        if (dragLaneIdx < (int)project->automationLanes.size())
+        {
+            auto& lane = project->automationLanes[(size_t)dragLaneIdx];
+            if (dragPointIdx < (int)lane.points.size())
+            {
+                auto& pt       = lane.points[(size_t)dragPointIdx];
+                const int laneY = autoLanesY() + dragLaneIdx * autoLaneHeight;
+                const int relY  = e.getPosition().y - laneY;
+                pt.beat  = juce::jmax(0.0, (double)e.getPosition().x / barWidth * 4.0);
+                pt.value = 1.0f - juce::jlimit(0.0f, 1.0f,
+                               (float)(relY - 4) / (float)(autoLaneHeight - 8));
+                repaint();
+            }
+        }
+        return;
+    }
+
     if (draggingClipId < 0) return;
 
     const auto  pos    = e.getPosition();
@@ -492,6 +605,8 @@ inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
 
 inline void PlaylistComponent::mouseUp(const juce::MouseEvent&)
 {
+    dragLaneIdx = dragPointIdx = -1;
+
     if (draggingClipId >= 0)
     {
         if (auto* clip = findClipById(draggingClipId))
@@ -689,6 +804,23 @@ inline void PlaylistComponent::showTrackContextMenu(int trackIdx)
         });
 }
 
+inline void PlaylistComponent::mouseWheelMove(const juce::MouseEvent& e,
+                                               const juce::MouseWheelDetails& w)
+{
+    if (e.mods.isCommandDown())
+    {
+        // Ctrl/Cmd + scroll wheel → horizontal zoom
+        const int step = (w.deltaY > 0.0f) ? 16 : -16;
+        barWidth = juce::jlimit(20, 256, barWidth + step);
+        if (onZoomChanged) onZoomChanged();
+        repaint();
+    }
+    else
+    {
+        juce::Component::mouseWheelMove(e, w);
+    }
+}
+
 inline void PlaylistComponent::showTrackRenameDialog(int trackIdx)
 {
     if (project == nullptr || trackIdx >= (int)project->playlistTracks.size()) return;
@@ -717,4 +849,114 @@ inline void PlaylistComponent::showTrackRenameDialog(int trackIdx)
             delete dialog;
         }),
         false);
+}
+
+// ---------------------------------------------------------------------------
+// M9 — Automation lane helpers
+// ---------------------------------------------------------------------------
+
+inline int PlaylistComponent::autoLanesY() const
+{
+    return headerHeight + getTrackCount() * (trackHeight + trackGap);
+}
+
+inline void PlaylistComponent::addAutomationLane(const juce::String& paramId,
+                                                  float minVal, float maxVal,
+                                                  const juce::String& /*displayName*/)
+{
+    if (project == nullptr) return;
+    AutomationLane lane;
+    lane.paramId = paramId;
+    lane.minVal  = minVal;
+    lane.maxVal  = maxVal;
+    project->automationLanes.push_back(lane);
+    repaint();
+}
+
+inline void PlaylistComponent::removeAutomationLane(int laneIdx)
+{
+    if (project == nullptr) return;
+    if (laneIdx < 0 || laneIdx >= (int)project->automationLanes.size()) return;
+    project->automationLanes.erase(project->automationLanes.begin() + laneIdx);
+    repaint();
+}
+
+inline void PlaylistComponent::drawAutomationLanes(juce::Graphics& g)
+{
+    if (project == nullptr || project->automationLanes.empty()) return;
+
+    static const juce::Colour laneColours[] = {
+        juce::Colour(0xffe67e22), juce::Colour(0xff9b59b6),
+        juce::Colour(0xff1abc9c), juce::Colour(0xffe74c3c),
+    };
+    constexpr int numColours = (int)(sizeof(laneColours) / sizeof(laneColours[0]));
+    const int totalBars = juce::jmax(getWidth() / barWidth + 1, 32);
+
+    for (int li = 0; li < (int)project->automationLanes.size(); ++li)
+    {
+        const auto& lane = project->automationLanes[(size_t)li];
+        const int   laneY = autoLanesY() + li * autoLaneHeight;
+        const juce::Colour col = laneColours[li % numColours];
+
+        // Background
+        g.setColour(juce::Colour(0xff0d0d1a));
+        g.fillRect(0, laneY, getWidth(), autoLaneHeight);
+
+        // Top separator
+        g.setColour(juce::Colour(0xff1a1a2e));
+        g.drawLine(0, (float)laneY, (float)getWidth(), (float)laneY, 1.5f);
+
+        // Label
+        g.setColour(col);
+        g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
+        g.drawText(lane.paramId, 4, laneY + 2, 120, 14, juce::Justification::centredLeft);
+
+        // Remove hint
+        g.setColour(juce::Colours::white.withAlpha(0.18f));
+        g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+        g.drawText("[right-click to remove]", getWidth() - 150, laneY + 2,
+                   146, 14, juce::Justification::centredRight);
+
+        // Bar grid lines
+        g.setColour(juce::Colour(0xff1e1e32));
+        for (int bar = 0; bar <= totalBars; ++bar)
+            g.drawLine((float)(bar * barWidth), (float)(laneY + 16),
+                       (float)(bar * barWidth), (float)(laneY + autoLaneHeight), 0.5f);
+
+        // Mid-value guide line
+        g.setColour(col.withAlpha(0.12f));
+        g.drawLine(0, (float)(laneY + autoLaneHeight / 2),
+                   (float)getWidth(), (float)(laneY + autoLaneHeight / 2), 0.5f);
+
+        // Automation curve
+        if (lane.points.size() >= 2)
+        {
+            juce::Path curvePath;
+            bool started = false;
+            for (const auto& pt : lane.points)
+            {
+                const float px = (float)(pt.beat * 0.25 * barWidth);
+                const float py = (float)(laneY + autoLaneHeight - 4)
+                                 - pt.value * (float)(autoLaneHeight - 8);
+                if (!started) { curvePath.startNewSubPath(px, py); started = true; }
+                else          curvePath.lineTo(px, py);
+            }
+            g.setColour(col.withAlpha(0.7f));
+            g.strokePath(curvePath, juce::PathStrokeType(1.5f));
+        }
+
+        // Breakpoints (circles)
+        for (int pi = 0; pi < (int)lane.points.size(); ++pi)
+        {
+            const auto& pt = lane.points[(size_t)pi];
+            const float px = (float)(pt.beat * 0.25 * barWidth);
+            const float py = (float)(laneY + autoLaneHeight - 4)
+                             - pt.value * (float)(autoLaneHeight - 8);
+            const bool dragging = (dragLaneIdx == li && dragPointIdx == pi);
+            g.setColour(dragging ? juce::Colours::white : col.brighter(0.4f));
+            g.fillEllipse(px - 5.0f, py - 5.0f, 10.0f, 10.0f);
+            g.setColour(col.darker(0.3f));
+            g.drawEllipse(px - 5.0f, py - 5.0f, 10.0f, 10.0f, 1.0f);
+        }
+    }
 }

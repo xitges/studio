@@ -131,6 +131,11 @@ ToolbarComponent::ToolbarComponent()
     launchpadBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff1a5040));
     launchpadBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     launchpadBtn.onClick = [this] { if (onToggleLaunchpad) onToggleLaunchpad(); };
+
+    addAndMakeVisible(browserBtn);
+    browserBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a2c1a));
+    browserBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    browserBtn.onClick = [this] { if (onToggleBrowser) onToggleBrowser(); };
 }
 
 ToolbarComponent::~ToolbarComponent() {}
@@ -189,6 +194,8 @@ void ToolbarComponent::resized()
         midiBtn     .setBounds(row.removeFromLeft(48).reduced(2));
         row.removeFromLeft(4);
         launchpadBtn.setBounds(row.removeFromLeft(44).reduced(2));
+        row.removeFromLeft(4);
+        browserBtn  .setBounds(row.removeFromLeft(54).reduced(2));
 
         titleLabel.setBounds(row);
     }
