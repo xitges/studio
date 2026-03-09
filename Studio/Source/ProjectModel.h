@@ -48,6 +48,14 @@ struct LaunchpadPad
     float        pitch  = 0.0f;   // semitones offset
 };
 
+// M8 — VST/AU instrument plugin slot per channel
+struct PluginSlot
+{
+    juce::String pluginId;           // PluginDescription::createIdentifierString()
+    juce::String pluginStateBase64;  // getStateInformation() encoded as base64
+    bool         enabled = false;
+};
+
 // M14 — FX chain parameters per mixer track
 struct FXParams
 {
@@ -197,4 +205,7 @@ struct Project
 
     // M9 — automation lanes
     std::vector<AutomationLane> automationLanes;
+
+    // M8 — VST/AU instrument plugins (one slot per channel)
+    std::array<PluginSlot, 16> channelInstrumentPlugins = {};
 };

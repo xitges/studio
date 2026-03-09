@@ -124,10 +124,11 @@ public:
             }
 
             // Oscillator
-            phase_ += freq / sr;
+            const double dt = freq / sr;
+            phase_ += dt;
             if (phase_ >= 1.0) phase_ -= 1.0;
 
-            const float osc    = generateSample((float)phase_, p.waveform);
+            const float osc    = generateSample((float)phase_, dt, p.waveform);
             const float sample = osc * envLevel_ * velocity_ * 0.25f;  // 0.25 headroom for polyphony
 
             // Biquad LP filter (direct-form I)
@@ -162,14 +163,43 @@ private:
     float  z1L_ = 0.0f, z2L_ = 0.0f;
     float  z1R_ = 0.0f, z2R_ = 0.0f;
 
-    float generateSample(float p, int waveform) const
+    // Polynomial Band-Limited Step function — corrects the discontinuity
+    // at phase wrap-around (and at 0.5 for square). t = phase, dt = phase increment.
+    static float polyBLEP(double t, double dt)
+    {
+        if (dt <= 0.0) return 0.0f;
+        if (t < dt)           // just after the discontinuity
+        {
+            const double x = t / dt;
+            return (float)(2.0 * x - x * x - 1.0);
+        }
+        if (t > 1.0 - dt)    // just before the next discontinuity
+        {
+            const double x = (t - 1.0) / dt;
+            return (float)(x * x + 2.0 * x + 1.0);
+        }
+        return 0.0f;
+    }
+
+    float generateSample(float p, double dt, int waveform) const
     {
         switch (waveform)
         {
-            case 0: return std::sin(p * juce::MathConstants<float>::twoPi);          // sine
-            case 1: return 2.0f * p - 1.0f;                                          // sawtooth
-            case 2: return p < 0.5f ? 1.0f : -1.0f;                                 // square
-            case 3: return 1.0f - 4.0f * std::abs(p - 0.5f);                        // triangle
+            case 0: return std::sin(p * juce::MathConstants<float>::twoPi);          // sine — no aliasing
+            case 1:                                                                    // sawtooth + PolyBLEP
+            {
+                float saw = 2.0f * p - 1.0f;
+                saw -= polyBLEP((double)p, dt);
+                return saw;
+            }
+            case 2:                                                                    // square + PolyBLEP
+            {
+                float sq = (p < 0.5f) ? 1.0f : -1.0f;
+                sq += polyBLEP((double)p, dt);
+                sq -= polyBLEP(std::fmod((double)p + 0.5, 1.0), dt);
+                return sq;
+            }
+            case 3: return 1.0f - 4.0f * std::abs(p - 0.5f);                        // triangle — already band-limited
             default: return 0.0f;
         }
     }

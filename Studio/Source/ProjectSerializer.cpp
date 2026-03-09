@@ -171,6 +171,19 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         }
     }
 
+    // ---- M8: Instrument plugins
+    auto* instrPlugEl = root.createNewChildElement("InstrumentPlugins");
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        const auto& slot = project.channelInstrumentPlugins[(size_t)ch];
+        if (slot.pluginId.isEmpty()) continue;
+        auto* pEl = instrPlugEl->createNewChildElement("Ch");
+        pEl->setAttribute("i",       ch);
+        pEl->setAttribute("id",      slot.pluginId);
+        pEl->setAttribute("enabled", slot.enabled ? 1 : 0);
+        pEl->setAttribute("state",   slot.pluginStateBase64);
+    }
+
     // ---- M9: Automation lanes
     auto* autoEl = root.createNewChildElement("Automation");
     for (const auto& lane : project.automationLanes)
@@ -407,6 +420,22 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 (float)padEl->getDoubleAttribute("volume", 0.8);
             loaded.launchpadPads[(size_t)i].pitch =
                 (float)padEl->getDoubleAttribute("pitch",  0.0);
+        }
+    }
+
+    // ---- M8: Instrument plugins
+    if (auto* instrPlugEl = xml->getChildByName("InstrumentPlugins"))
+    {
+        for (auto* pEl : instrPlugEl->getChildIterator())
+        {
+            const int ch = pEl->getIntAttribute("i", -1);
+            if (ch < 0 || ch >= 16) continue;
+            loaded.channelInstrumentPlugins[(size_t)ch].pluginId          =
+                pEl->getStringAttribute("id");
+            loaded.channelInstrumentPlugins[(size_t)ch].enabled           =
+                (pEl->getIntAttribute("enabled", 0) != 0);
+            loaded.channelInstrumentPlugins[(size_t)ch].pluginStateBase64 =
+                pEl->getStringAttribute("state");
         }
     }
 

@@ -49,7 +49,7 @@ public:
     }
     int getNeededHeight() const
     {
-        return headerH + (maxPitch - minPitch + 1) * noteH;
+        return headerH + (maxPitch - minPitch + 1) * noteH + velLaneSep + velLaneH;
     }
 
     // -----------------------------------------------------------------------
@@ -61,12 +61,22 @@ public:
         drawRuler(g);
         drawNotes(g);
         drawPlayhead(g);
+        drawVelocityLane(g);
     }
 
     void mouseDown(const juce::MouseEvent& e) override
     {
         if (pattern == nullptr) return;
         const auto pos = e.getPosition();
+
+        // Velocity lane — click to start velocity edit
+        if (pos.x >= keyWidth && pos.y >= velLaneY())
+        {
+            draggingVelIdx = findNoteAtBeat(beatFromX(pos.x));
+            if (draggingVelIdx >= 0)
+                setVelocityFromY(draggingVelIdx, pos.y);
+            return;
+        }
 
         // Piano key area — preview note
         if (pos.x < keyWidth)
@@ -137,7 +147,16 @@ public:
 
     void mouseDrag(const juce::MouseEvent& e) override
     {
-        if (pattern == nullptr || draggingIdx < 0) return;
+        if (pattern == nullptr) return;
+
+        // Velocity lane drag
+        if (draggingVelIdx >= 0)
+        {
+            setVelocityFromY(draggingVelIdx, e.getPosition().y);
+            return;
+        }
+
+        if (draggingIdx < 0) return;
         auto& noteList = pattern->notes[channel];
         if (draggingIdx >= (int)noteList.size()) return;
 
@@ -159,7 +178,7 @@ public:
         repaint();
     }
 
-    void mouseUp(const juce::MouseEvent&) override { draggingIdx = -1; }
+    void mouseUp(const juce::MouseEvent&) override { draggingIdx = -1; draggingVelIdx = -1; }
 
     void mouseMove(const juce::MouseEvent& e) override
     {
@@ -241,13 +260,15 @@ private:
     double   playheadBeat = -1.0;
     float    snapBeats    = 0.25f;   // default: 1/16 note
 
-    static constexpr int keyWidth    = 60;
-    static constexpr int headerH     = 24;
-    static constexpr int noteH       = 12;
+    static constexpr int keyWidth      = 60;
+    static constexpr int headerH      = 24;
+    static constexpr int noteH        = 12;
     static constexpr int pixelsPerBeat = 80;
-    static constexpr int minPitch    = 21;    // A0
-    static constexpr int maxPitch    = 108;   // C8
-    static constexpr int resizeZone  = 8;     // px from right edge
+    static constexpr int minPitch     = 21;   // A0
+    static constexpr int maxPitch     = 108;  // C8
+    static constexpr int resizeZone   = 8;    // px from right edge
+    static constexpr int velLaneH     = 72;   // velocity lane height
+    static constexpr int velLaneSep   = 4;    // gap between note area and vel lane
 
     int   octaveOffset    = 0;
     bool  heldKeyState[256] = {};
@@ -255,6 +276,7 @@ private:
 
     int   hoverPitch      = -1;
     int   draggingIdx     = -1;
+    int   draggingVelIdx  = -1;   // index of note being velocity-edited
     bool  resizingNote    = false;
     float dragStartBeat   = 0.0f;
     int   dragStartPitch  = 0;
@@ -268,10 +290,38 @@ private:
     int   xFromBeat(float beat)  const { return keyWidth + (int)(beat * pixelsPerBeat); }
     float beatFromX(int x)       const { return (float)(x - keyWidth) / pixelsPerBeat; }
     float snapBeat(float b)      const { return std::round(b / snapBeats) * snapBeats; }
+    int   velLaneY()             const { return headerH + (maxPitch - minPitch + 1) * noteH + velLaneSep; }
     bool  isBlackKey(int pitch)  const
     {
         const int m = pitch % 12;
         return m == 1 || m == 3 || m == 6 || m == 8 || m == 10;
+    }
+
+    // Find the topmost note whose time range contains `beat` (for vel lane hit)
+    int findNoteAtBeat(float beat) const
+    {
+        if (pattern == nullptr) return -1;
+        const auto& nl = pattern->notes[channel];
+        for (int i = (int)nl.size() - 1; i >= 0; --i)
+        {
+            if (beat >= nl[(size_t)i].startBeat &&
+                beat <  nl[(size_t)i].startBeat + nl[(size_t)i].lengthBeats)
+                return i;
+        }
+        return -1;
+    }
+
+    // Set note velocity from a Y position in the velocity lane
+    void setVelocityFromY(int idx, int mouseY)
+    {
+        if (pattern == nullptr || idx < 0 ||
+            idx >= (int)pattern->notes[channel].size()) return;
+
+        const float vel = 1.0f - juce::jlimit(0.0f, 1.0f,
+                                   (float)(mouseY - velLaneY()) / (float)(velLaneH - 2));
+        pattern->notes[channel][(size_t)idx].velocity = vel;
+        if (onNotesChanged) onNotesChanged();
+        repaint();
     }
 
     juce::Rectangle<int> noteHitRect(const NoteEvent& n) const
@@ -370,19 +420,105 @@ private:
             const auto& n = noteList[(size_t)i];
             const auto  r = noteHitRect(n);
 
-            // Velocity-driven colour: low vel = teal, high vel = green
-            const float t   = n.velocity;
-            const juce::Colour fill = juce::Colour(0xff16a085).interpolatedWith(
-                                       juce::Colour(0xff2ecc71), t);
+            // Velocity-driven colour:
+            // low  (0.0) = dark cool blue   0xff2a3a6a
+            // mid  (0.5) = mid blue-violet  0xff5060c8
+            // high (1.0) = bright periwinkle 0xff9898f8
+            const float t    = n.velocity;
+            const juce::Colour baseLow  = juce::Colour(0xff2a3a6a);
+            const juce::Colour baseMid  = juce::Colour(0xff5060c8);
+            const juce::Colour baseHigh = juce::Colour(0xff9898f8);
+            const juce::Colour fill = (t < 0.5f)
+                ? baseLow.interpolatedWith(baseMid,  t * 2.0f)
+                : baseMid.interpolatedWith(baseHigh, (t - 0.5f) * 2.0f);
 
-            g.setColour(i == draggingIdx ? fill.brighter(0.4f) : fill);
+            const bool isVelDragging = (i == draggingVelIdx);
+            g.setColour((i == draggingIdx || isVelDragging) ? fill.brighter(0.35f) : fill);
             g.fillRoundedRectangle(r.toFloat(), 2.0f);
-            g.setColour(fill.darker(0.4f));
+            g.setColour(fill.darker(0.3f));
             g.drawRoundedRectangle(r.toFloat(), 2.0f, 1.0f);
 
             // Resize handle stripe
             g.setColour(fill.brighter(0.5f).withAlpha(0.6f));
             g.fillRect(r.getRight() - 3, r.getY() + 2, 2, r.getHeight() - 4);
+
+            // Velocity value hint when dragging this note's velocity
+            if (isVelDragging)
+            {
+                g.setColour(juce::Colours::white);
+                g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+                g.drawText(juce::String((int)std::round(n.velocity * 127)),
+                           r.getX(), r.getY() - 11, 30, 10,
+                           juce::Justification::centredLeft);
+            }
+        }
+    }
+
+    void drawVelocityLane(juce::Graphics& g)
+    {
+        if (pattern == nullptr) return;
+
+        const int laneY = velLaneY();
+
+        // Background + separator
+        g.setColour(juce::Colour(0xff0d0d1a));
+        g.fillRect(keyWidth, laneY, getWidth() - keyWidth, velLaneH);
+        g.setColour(juce::Colour(0xff3a3a5a));
+        g.drawLine((float)keyWidth, (float)laneY,
+                   (float)getWidth(), (float)laneY, 1.0f);
+
+        // "VELOCITY" label on the left key stub
+        g.setColour(juce::Colour(0xff888892));
+        g.fillRect(0, laneY, keyWidth, velLaneH);
+        g.setColour(juce::Colour(0xffb0b0b8));
+        g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+        g.drawText("VELOCITY", 2, laneY + 2, keyWidth - 4, 11,
+                   juce::Justification::centredLeft);
+
+        // 25 / 50 / 75 % guide lines
+        for (float pct : { 0.25f, 0.5f, 0.75f })
+        {
+            const int guideY = laneY + (int)((1.0f - pct) * velLaneH);
+            g.setColour(juce::Colour(0xff3a3a5a));
+            g.drawLine((float)keyWidth, (float)guideY,
+                       (float)getWidth(), (float)guideY, 0.5f);
+        }
+
+        // Velocity bars
+        const auto& noteList = pattern->notes[channel];
+        for (int i = 0; i < (int)noteList.size(); ++i)
+        {
+            const auto& n   = noteList[(size_t)i];
+            const int barX  = xFromBeat(n.startBeat);
+            const int barW  = juce::jmax(3, juce::jmin(
+                                  (int)(n.lengthBeats * pixelsPerBeat) - 2, 14));
+            const int barH  = juce::jmax(2, (int)(n.velocity * (velLaneH - 4)));
+            const int barY  = laneY + (velLaneH - 4) - barH + 2;
+
+            // Same velocity colour as the note
+            const float t       = n.velocity;
+            const juce::Colour baseLow  = juce::Colour(0xff2a3a6a);
+            const juce::Colour baseMid  = juce::Colour(0xff5060c8);
+            const juce::Colour baseHigh = juce::Colour(0xff9898f8);
+            const juce::Colour col = (t < 0.5f)
+                ? baseLow.interpolatedWith(baseMid,  t * 2.0f)
+                : baseMid.interpolatedWith(baseHigh, (t - 0.5f) * 2.0f);
+
+            const bool active = (i == draggingVelIdx);
+            g.setColour(active ? col.brighter(0.4f) : col.withAlpha(0.85f));
+            g.fillRect(barX, barY, barW, barH);
+            g.setColour(active ? col.brighter(0.8f) : col.brighter(0.2f));
+            g.drawRect(barX, barY, barW, barH, 1);
+
+            // Value label when actively dragging
+            if (active)
+            {
+                g.setColour(juce::Colours::white);
+                g.setFont(juce::Font(juce::FontOptions().withHeight(9.5f)));
+                g.drawText(juce::String((int)std::round(n.velocity * 127)),
+                           barX, barY - 12, 28, 11,
+                           juce::Justification::centredLeft);
+            }
         }
     }
 

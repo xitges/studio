@@ -13,6 +13,7 @@
 #include "FXEditorComponent.h"
 #include "LaunchpadComponent.h"
 #include "SampleBrowserComponent.h"
+#include "PluginBrowserComponent.h"
 
 class MainComponent : public juce::Component,
                       public juce::Timer,
@@ -60,6 +61,10 @@ private:
 
     // Launchpad — floating performance pad window
     std::unique_ptr<LaunchpadWindow> launchpadWindow;
+
+    // M8 — plugin browser + per-channel plugin editor windows
+    std::unique_ptr<PluginBrowserWindow>                    pluginBrowserWindow;
+    std::array<std::unique_ptr<PluginEditorWindow>, 16>     pluginEditorWindows;
 
     // M2 — pattern management state
     int activePatternId = 1;

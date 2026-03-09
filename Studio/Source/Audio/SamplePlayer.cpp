@@ -16,15 +16,26 @@ SamplePlayer::SamplePlayer()
 
 void SamplePlayer::loadFile(const juce::File& file)
 {
-    reader.reset(formatManager.createReaderFor(file));
+    // Decode into a temporary buffer on the calling thread (no lock held yet)
+    std::unique_ptr<juce::AudioFormatReader> newReader(
+        formatManager.createReaderFor(file));
 
-    if (reader != nullptr)
+    juce::AudioBuffer<float> tmp;
+    if (newReader != nullptr)
     {
-        fileBuffer.setSize((int)reader->numChannels,
-                           (int)reader->lengthInSamples);
-        reader->read(&fileBuffer, 0,
-                     (int)reader->lengthInSamples, 0, true, true);
+        tmp.setSize((int)newReader->numChannels,
+                    (int)newReader->lengthInSamples);
+        newReader->read(&tmp, 0, (int)newReader->lengthInSamples, 0, true, true);
         DBG("Loaded: " << file.getFileName());
+    }
+
+    // Swap the decoded buffer in under the lock so the audio thread never
+    // sees a partially-constructed fileBuffer.
+    {
+        juce::SpinLock::ScopedLockType lock(bufferLock);
+        fileBuffer  = std::move(tmp);
+        reader      = std::move(newReader);
+        playPosition = -1.0;
     }
 }
 
@@ -65,7 +76,15 @@ void SamplePlayer::setRelease(float ms)
 void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
                                    int numSamples)
 {
+    // Non-blocking try-lock: if the main thread is loading a new file, skip
+    // this block rather than blocking the real-time audio callback.
+    juce::SpinLock::ScopedTryLockType tryLock(bufferLock);
+    if (!tryLock.isLocked()) return;
+
     if (!isLoaded()) return;
+
+    // Clamp to actual output buffer size so we never write out of bounds
+    const int safeSamples = juce::jmin(numSamples, outputBuffer.getNumSamples());
 
     // Trigger detection
     if (triggered.exchange(false))
@@ -85,7 +104,7 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
     const float leftGain  = volume * std::cos(angle);
     const float rightGain = volume * std::sin(angle);
 
-    for (int i = 0; i < numSamples; ++i)
+    for (int i = 0; i < safeSamples; ++i)
     {
         const int pos0 = (int)playPosition;
         if (pos0 >= srcSamples)
@@ -94,9 +113,12 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
             break;
         }
 
-        // Linear interpolation between adjacent samples (enables pitch shift)
-        const int   pos1 = juce::jmin(pos0 + 1, srcSamples - 1);
+        // 4-point Hermite cubic interpolation (Catmull-Rom)
+        // Much lower aliasing than linear when pitchRatio != 1.0
         const float frac = (float)(playPosition - (double)pos0);
+        const int   pm1  = juce::jmax(pos0 - 1, 0);
+        const int   pp1  = juce::jmin(pos0 + 1, srcSamples - 1);
+        const int   pp2  = juce::jmin(pos0 + 2, srcSamples - 1);
 
         // Attack ramp
         if (attackSamples > 0.0f && envelopeGain < 1.0f)
@@ -115,10 +137,17 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
 
         for (int ch = 0; ch < outChannels; ++ch)
         {
-            const int   srcCh  = (srcChannels == 1) ? 0 : (ch % srcChannels);
-            const float s0     = fileBuffer.getSample(srcCh, pos0);
-            const float s1     = fileBuffer.getSample(srcCh, pos1);
-            const float sample = s0 + frac * (s1 - s0);
+            const int   srcCh = (srcChannels == 1) ? 0 : (ch % srcChannels);
+            const float y0    = fileBuffer.getSample(srcCh, pm1);
+            const float y1    = fileBuffer.getSample(srcCh, pos0);
+            const float y2    = fileBuffer.getSample(srcCh, pp1);
+            const float y3    = fileBuffer.getSample(srcCh, pp2);
+
+            // Catmull-Rom coefficients
+            const float c1     = 0.5f * (y2 - y0);
+            const float c2     = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+            const float c3     = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+            const float sample = ((c3 * frac + c2) * frac + c1) * frac + y1;
 
             const float chGain = (ch == 0) ? leftGain : rightGain;
             outputBuffer.addSample(ch, i, sample * chGain * env);

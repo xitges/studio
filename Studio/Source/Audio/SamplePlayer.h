@@ -26,7 +26,16 @@ public:
     void clear()          { fileBuffer.setSize(0, 0); playPosition = -1.0; }
 
     // Copy pre-decoded audio data in (used by song-mode sample cache — no disk I/O)
-    void loadBuffer(const juce::AudioBuffer<float>& src) { fileBuffer.makeCopyOf(src); playPosition = -1.0; }
+    void loadBuffer(const juce::AudioBuffer<float>& src)
+    {
+        // Called from the audio thread in song mode — bufferLock is already held
+        // by the audio thread itself (via renderNextBlock's try-lock), so we must
+        // NOT try to lock here. Song-mode cache swaps happen between render blocks
+        // (called from processSongMode before renderNextBlock), so no concurrent
+        // renderNextBlock is running at this point. Direct assignment is safe.
+        fileBuffer.makeCopyOf(src);
+        playPosition = -1.0;
+    }
     const juce::AudioBuffer<float>& getBuffer() const    { return fileBuffer; }
 
     // M1.1 — Volume & Pan
@@ -67,6 +76,11 @@ private:
     bool muted = false;
 
     std::atomic<bool> triggered { false };
+
+    // Thread safety: protects fileBuffer between main-thread loadFile
+    // and audio-thread renderNextBlock.  The audio thread uses a non-blocking
+    // try-lock so it never spins or blocks the real-time callback.
+    juce::SpinLock bufferLock;
 
     // M1.3 envelope state
     float attackSamples  = 441.0f;   // default ~10 ms anti-pop

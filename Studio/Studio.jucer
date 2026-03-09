@@ -41,6 +41,9 @@
       <FILE id="FXP001" name="FXProcessor.h" compile="0" resource="0" file="Source/FXProcessor.h"/>
       <FILE id="SynE01" name="SynthEditorComponent.h" compile="0" resource="0" file="Source/SynthEditorComponent.h"/>
       <FILE id="FXE001" name="FXEditorComponent.h" compile="0" resource="0" file="Source/FXEditorComponent.h"/>
+      <FILE id="PMgr01" name="PluginManager.h" compile="0" resource="0" file="Source/PluginManager.h"/>
+      <FILE id="PMgr02" name="PluginManager.cpp" compile="1" resource="0" file="Source/PluginManager.cpp"/>
+      <FILE id="PBrw01" name="PluginBrowserComponent.h" compile="0" resource="0" file="Source/PluginBrowserComponent.h"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>
@@ -58,7 +61,7 @@
     <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
     <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
   </MODULES>
-  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1"/>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_PLUGINHOST_AU="1" JUCE_PLUGINHOST_VST3="1"/>
   <EXPORTFORMATS>
     <XCODE_MAC targetFolder="Builds/MacOSX">
       <CONFIGURATIONS>

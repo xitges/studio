@@ -15,6 +15,7 @@
 #include "Sequencer.h"
 #include "../SynthEngine.h"
 #include "../FXProcessor.h"
+#include "../PluginManager.h"
 
 class AudioEngine : public juce::AudioIODeviceCallback,
                     public juce::MidiInputCallback
@@ -127,6 +128,17 @@ public:
     // Returns true on success.
     bool renderToFile(const juce::File& outputFile, PlayMode mode, int numBars);
 
+    // M8 — VST/AU instrument plugins
+    // loadPlugin: creates + prepares the plugin instance (call on message thread).
+    // getPlugin:  returns the raw pointer for editor creation (message thread only).
+    void loadPlugin  (int ch, const juce::PluginDescription& desc, juce::String& errorMsg);
+    void unloadPlugin(int ch);
+    bool hasPlugin   (int ch) const;
+    juce::AudioPluginInstance* getPlugin(int ch);   // message thread only — do not hold
+
+    // Save plugin state into a MemoryBlock (for project serialisation).
+    bool getPluginState(int ch, juce::MemoryBlock& stateOut) const;
+
 private:
     juce::AudioDeviceManager deviceManager;
     juce::MixerAudioSource   mixer;
@@ -177,6 +189,20 @@ private:
 
     double sampleRate = 44100.0;
     int    bufferSize = 512;
+
+    // M8 — VST/AU instrument plugin hosting
+    // Lock held by message thread (ScopedLock) on load/unload,
+    // and by audio thread (ScopedTryLock) in mixToOutput.
+    juce::CriticalSection pluginLock;
+    std::array<std::unique_ptr<juce::AudioPluginInstance>, 16> instrumentPlugins;
+
+    // Per-channel MIDI buffers — cleared at audio callback start,
+    // populated by NoteEvent / live-MIDI sections, consumed in mixToOutput.
+    juce::MidiBuffer instrumentMidiBuffers[16];
+
+    // Pending note-offs for instrument plugins (tracks active VST notes).
+    struct ActivePluginNote { double endBeat; int pitch; };
+    std::vector<ActivePluginNote> activePluginNotes[16];
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };

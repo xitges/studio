@@ -358,6 +358,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     juce::AudioBuffer<float> buffer(outputChannelData, numOutputChannels, numSamples);
     buffer.clear();
 
+    // M8 — clear per-channel plugin MIDI buffers at the start of each block
+    for (auto& mb : instrumentMidiBuffers)
+        mb.clear();
+
     // M12 — process incoming MIDI messages
     {
         juce::MidiBuffer midiBuf;
@@ -373,27 +377,50 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 const int   pitch = msg.getNoteNumber();
                 const float vel   = msg.getFloatVelocity();
 
-                const bool useSynth = (project != nullptr) &&
-                                       project->synthParams[(size_t)ch].enabled;
-                if (useSynth)
+                // M8 — route to VST/AU plugin if one is loaded
+                if (instrumentPlugins[(size_t)ch] != nullptr)
                 {
-                    // noteLenSamples=0 → sustain until noteOff
-                    polySynths[(size_t)ch].noteOn(pitch, vel, sampleRate,
-                                                   project->synthParams[(size_t)ch], 0);
+                    instrumentMidiBuffers[ch].addEvent(
+                        juce::MidiMessage::noteOn(1, pitch, vel),
+                        meta.samplePosition);
                 }
                 else
                 {
-                    players[ch].setPitch(channelBasePitch[ch] + (float)(pitch - 60));
-                    players[ch].trigger();
+                    const bool useSynth = (project != nullptr) &&
+                                           project->synthParams[(size_t)ch].enabled;
+                    if (useSynth)
+                    {
+                        polySynths[(size_t)ch].noteOn(pitch, vel, sampleRate,
+                                                       project->synthParams[(size_t)ch], 0);
+                    }
+                    else
+                    {
+                        players[ch].setPitch(channelBasePitch[ch] + (float)(pitch - 60));
+                        players[ch].trigger();
+                    }
                 }
             }
             else if (msg.isNoteOff())
             {
-                polySynths[(size_t)ch].noteOff(msg.getNoteNumber());
+                // M8 — route note-off to plugin if loaded
+                if (instrumentPlugins[(size_t)ch] != nullptr)
+                {
+                    instrumentMidiBuffers[ch].addEvent(
+                        juce::MidiMessage::noteOff(1, msg.getNoteNumber()),
+                        meta.samplePosition);
+                }
+                else
+                {
+                    polySynths[(size_t)ch].noteOff(msg.getNoteNumber());
+                }
             }
             else if (msg.isAllNotesOff() || msg.isAllSoundOff())
             {
-                polySynths[(size_t)ch].allNotesOff();
+                if (instrumentPlugins[(size_t)ch] != nullptr)
+                    instrumentMidiBuffers[ch].addEvent(
+                        juce::MidiMessage::allNotesOff(1), 0);
+                else
+                    polySynths[(size_t)ch].allNotesOff();
             }
         }
     }
@@ -403,14 +430,18 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     else
         processSongMode(buffer, numSamples, numOutputChannels);
 
+    // Safe sample count: guard against stagingBuf being smaller than numSamples
+    // (can happen if the driver delivers a different block size than configured).
+    const int stagingSafe = juce::jmin(numSamples, stagingBuf.getNumSamples());
+
     // Launchpad one-shot players — render directly into output (bypass mixer)
     const float mv = project ? project->masterVolume : 1.0f;
     for (auto& lp : launchpadPlayers)
     {
         if (!lp.isLoaded()) continue;
         stagingBuf.clear();
-        lp.renderNextBlock(stagingBuf, numSamples);
-        for (int s = 0; s < numSamples; ++s)
+        lp.renderNextBlock(stagingBuf, stagingSafe);
+        for (int s = 0; s < stagingSafe; ++s)
         {
             if (buffer.getNumChannels() > 0)
                 buffer.addSample(0, s, stagingBuf.getSample(0, s) * mv);
@@ -423,8 +454,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     if (browserPreviewPlayer.isLoaded())
     {
         stagingBuf.clear();
-        browserPreviewPlayer.renderNextBlock(stagingBuf, numSamples);
-        for (int s = 0; s < numSamples; ++s)
+        browserPreviewPlayer.renderNextBlock(stagingBuf, stagingSafe);
+        for (int s = 0; s < stagingSafe; ++s)
         {
             if (buffer.getNumChannels() > 0)
                 buffer.addSample(0, s, stagingBuf.getSample(0, s));
@@ -461,6 +492,19 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     stagingBuf.setSize(2, bufferSize);
     for (auto& tb : mixerTrackBufs)
         tb.setSize(2, bufferSize);
+
+    // M8 — re-prepare any already-loaded instrument plugins
+    {
+        juce::ScopedLock sl(pluginLock);
+        for (auto& plugin : instrumentPlugins)
+        {
+            if (plugin != nullptr)
+            {
+                plugin->setPlayConfigDetails(0, 2, sampleRate, bufferSize);
+                plugin->prepareToPlay(sampleRate, bufferSize);
+            }
+        }
+    }
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -469,6 +513,69 @@ void AudioEngine::audioDeviceStopped()
     for (auto& s : polySynths)         s.reset();
     for (auto& fx : fxChains)          fx.reset();
     for (auto& lp : launchpadPlayers)  lp.reset();
+
+    // M8 — release plugin resources (audio engine stopped, safe to lock normally)
+    juce::ScopedLock sl(pluginLock);
+    for (auto& plugin : instrumentPlugins)
+        if (plugin != nullptr)
+            plugin->releaseResources();
+}
+
+// ---- M8 — VST/AU Instrument Plugin management --------------------------
+
+void AudioEngine::loadPlugin(int ch, const juce::PluginDescription& desc,
+                              juce::String& errorMsg)
+{
+    if (ch < 0 || ch >= 16) return;
+
+    // Create the instance on the message thread (may take a moment — that's OK)
+    auto instance = PluginManager::getInstance().createPlugin(desc, sampleRate,
+                                                               bufferSize, errorMsg);
+    if (instance == nullptr) return;
+
+    // Configure I/O: 0 audio inputs, 2 audio outputs (stereo instrument)
+    instance->setPlayConfigDetails(0, 2, sampleRate, bufferSize);
+    instance->prepareToPlay(sampleRate, bufferSize);
+
+    {
+        juce::ScopedLock sl(pluginLock);
+        if (instrumentPlugins[(size_t)ch] != nullptr)
+            instrumentPlugins[(size_t)ch]->releaseResources();
+        instrumentPlugins[(size_t)ch] = std::move(instance);
+        activePluginNotes[ch].clear();
+    }
+}
+
+void AudioEngine::unloadPlugin(int ch)
+{
+    if (ch < 0 || ch >= 16) return;
+    juce::ScopedLock sl(pluginLock);
+    if (instrumentPlugins[(size_t)ch] != nullptr)
+    {
+        instrumentPlugins[(size_t)ch]->releaseResources();
+        instrumentPlugins[(size_t)ch].reset();
+        activePluginNotes[ch].clear();
+    }
+}
+
+bool AudioEngine::hasPlugin(int ch) const
+{
+    if (ch < 0 || ch >= 16) return false;
+    return instrumentPlugins[(size_t)ch] != nullptr;
+}
+
+juce::AudioPluginInstance* AudioEngine::getPlugin(int ch)
+{
+    if (ch < 0 || ch >= 16) return nullptr;
+    return instrumentPlugins[(size_t)ch].get();
+}
+
+bool AudioEngine::getPluginState(int ch, juce::MemoryBlock& stateOut) const
+{
+    if (ch < 0 || ch >= 16) return false;
+    if (instrumentPlugins[(size_t)ch] == nullptr) return false;
+    instrumentPlugins[(size_t)ch]->getStateInformation(stateOut);
+    return true;
 }
 
 // ---- Render helpers ----------------------------------------------------
@@ -499,6 +606,27 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
                 for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
                 {
                     if (project->channelTypes[ch] != ChannelType::Melodic) continue;
+
+                    // M8 — flush pending note-offs for plugin channels
+                    if (instrumentPlugins[(size_t)ch] != nullptr)
+                    {
+                        auto& notes = activePluginNotes[ch];
+                        for (auto it = notes.begin(); it != notes.end(); )
+                        {
+                            const double noteEndLoop = std::fmod(it->endBeat, patternBeats);
+                            const bool fires = (loopEnd < loopStart)
+                                               ? (noteEndLoop >= loopStart || noteEndLoop < loopEnd)
+                                               : (noteEndLoop >= loopStart && noteEndLoop < loopEnd);
+                            if (fires)
+                            {
+                                instrumentMidiBuffers[ch].addEvent(
+                                    juce::MidiMessage::noteOff(1, it->pitch), 0);
+                                it = notes.erase(it);
+                            }
+                            else { ++it; }
+                        }
+                    }
+
                     for (const auto& note : pat->notes[ch])
                     {
                         const double ns = std::fmod((double)note.startBeat, patternBeats);
@@ -507,19 +635,34 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
                                            : (ns >= loopStart && ns < loopEnd);
                         if (fires)
                         {
-                            const SynthParams& sp = project->synthParams[(size_t)ch];
-                            if (sp.enabled)
+                            // M8 — VST/AU plugin path
+                            if (instrumentPlugins[(size_t)ch] != nullptr)
                             {
-                                // Synth path — noteOn with auto-release length
-                                const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
-                                polySynths[(size_t)ch].noteOn(note.pitch, note.velocity,
-                                                               sampleRate, sp, noteLenSamples);
+                                instrumentMidiBuffers[ch].addEvent(
+                                    juce::MidiMessage::noteOn(1, note.pitch, note.velocity), 0);
+                                // Schedule note-off at endBeat
+                                const double absoluteEnd = startBeat +
+                                    (ns - loopStart + (loopEnd < loopStart ? patternBeats : 0.0))
+                                    + note.lengthBeats;
+                                activePluginNotes[ch].push_back({ absoluteEnd, note.pitch });
                             }
                             else
                             {
-                                // Sample player path (original behaviour)
-                                players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
-                                players[ch].trigger();
+                                const SynthParams& sp = project->synthParams[(size_t)ch];
+                                if (sp.enabled)
+                                {
+                                    const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
+                                    polySynths[(size_t)ch].noteOn(note.pitch, note.velocity,
+                                                                   sampleRate, sp, noteLenSamples);
+                                }
+                                else
+                                {
+                                    // Apply note velocity as volume scale for sample channels
+                                    players[ch].setVolume(
+                                        (pat->channelVolume[ch]) * note.velocity);
+                                    players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
+                                    players[ch].trigger();
+                                }
                             }
                         }
                     }
@@ -656,6 +799,9 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                         }
                         else
                         {
+                            // Apply note velocity as volume scale for sample channels
+                            const float baseVol = (pat != nullptr) ? pat->channelVolume[ch] : 0.8f;
+                            players[ch].setVolume(baseVol * note.velocity);
                             players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
                             players[ch].trigger();
                         }
@@ -699,6 +845,10 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
 // M5 — route channels through mixer tracks and sum to output
 void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
 {
+    // Guard: stagingBuf and mixerTrackBufs are allocated to bufferSize in
+    // audioDeviceAboutToStart. If the driver delivers a smaller block, clamp.
+    const int safe = juce::jmin(numSamples, stagingBuf.getNumSamples());
+
     // Clear mixer track buses
     for (auto& tb : mixerTrackBufs)
         tb.clear();
@@ -708,27 +858,47 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
     {
         stagingBuf.clear();
 
-        // M13 — route to PolySynth if synth is enabled for this channel
-        const bool useSynth = (project != nullptr) &&
-                               project->synthParams[(size_t)ch].enabled;
+        // M8 — VST/AU instrument plugin takes priority over synth / sample player
+        const bool usePlugin = (instrumentPlugins[(size_t)ch] != nullptr);
+        // M13 — PolySynth if synth enabled and no plugin
+        const bool useSynth  = !usePlugin && (project != nullptr) &&
+                                project->synthParams[(size_t)ch].enabled;
 
-        if (useSynth)
+        if (usePlugin)
+        {
+            // Try-lock: if the message thread is loading/unloading, skip this block
+            const juce::ScopedTryLock sl(pluginLock);
+            if (sl.isLocked() && instrumentPlugins[(size_t)ch] != nullptr)
+            {
+                // Build a sub-buffer view sized to `safe` samples (no allocation)
+                juce::AudioBuffer<float> plugBuf(stagingBuf.getArrayOfWritePointers(),
+                                                  2, safe);
+                instrumentPlugins[(size_t)ch]->processBlock(plugBuf,
+                                                             instrumentMidiBuffers[ch]);
+
+                // If the plugin is mono, duplicate L → R
+                const int plugOuts = instrumentPlugins[(size_t)ch]->getTotalNumOutputChannels();
+                if (plugOuts == 1 && stagingBuf.getNumChannels() > 1)
+                    stagingBuf.copyFrom(1, 0, stagingBuf, 0, 0, safe);
+            }
+        }
+        else if (useSynth)
         {
             float* L = stagingBuf.getWritePointer(0);
             float* R = stagingBuf.getWritePointer(1);
-            polySynths[(size_t)ch].renderNextBlock(L, R, numSamples, sampleRate,
+            polySynths[(size_t)ch].renderNextBlock(L, R, safe, sampleRate,
                                                     project->synthParams[(size_t)ch]);
         }
         else
         {
-            players[ch].renderNextBlock(stagingBuf, numSamples);
+            players[ch].renderNextBlock(stagingBuf, safe);
         }
 
         const int trackIdx = (project != nullptr)
                              ? juce::jlimit(0, 7, project->channelMixerRouting[ch])
                              : 0;
 
-        for (int s = 0; s < numSamples; ++s)
+        for (int s = 0; s < safe; ++s)
         {
             mixerTrackBufs[(size_t)trackIdx].addSample(0, s, stagingBuf.getSample(0, s));
             mixerTrackBufs[(size_t)trackIdx].addSample(1, s, stagingBuf.getSample(1, s));
@@ -741,7 +911,7 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
         const FXParams& fp = (project != nullptr)
                               ? project->fxParams[(size_t)t]
                               : FXParams{};
-        fxChains[(size_t)t].processBlock(mixerTrackBufs[(size_t)t], numSamples, fp, bpm);
+        fxChains[(size_t)t].processBlock(mixerTrackBufs[(size_t)t], safe, fp, bpm);
     }
 
     // Check if any track is soloed
@@ -768,7 +938,7 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
             const float L   = mt.volume * std::cos(ang);
             const float R   = mt.volume * std::sin(ang);
 
-            for (int s = 0; s < numSamples; ++s)
+            for (int s = 0; s < safe; ++s)
             {
                 if (output.getNumChannels() > 0)
                     output.addSample(0, s, mixerTrackBufs[(size_t)t].getSample(0, s) * L * mL);
@@ -779,7 +949,7 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
         else
         {
             // No mixer track data: pass through at unity
-            for (int s = 0; s < numSamples; ++s)
+            for (int s = 0; s < safe; ++s)
             {
                 if (output.getNumChannels() > 0)
                     output.addSample(0, s, mixerTrackBufs[(size_t)t].getSample(0, s) * mL);

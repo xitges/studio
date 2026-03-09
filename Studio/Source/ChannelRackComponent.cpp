@@ -294,9 +294,20 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
                    juce::Justification::centredLeft);
 
         // Sample name / type badge (bottom half, left area)
-        const bool isMelodic = (i < (int)channelTypes.size() &&
-                                 channelTypes[(size_t)i] == ChannelType::Melodic);
-        if (isMelodic)
+        const bool isMelodic  = (i < (int)channelTypes.size() &&
+                                  channelTypes[(size_t)i] == ChannelType::Melodic);
+        const bool hasPlugin  = channelHasPlugin[i];
+
+        if (hasPlugin)
+        {
+            // M8 — VST/AU plugin badge (replaces sample name)
+            g.setColour(juce::Colour(0xff6868c8).withAlpha(0.18f));
+            g.fillRoundedRectangle(6.0f, (float)(y + 23), 30.0f, 14.0f, 3.0f);
+            g.setColour(juce::Colour(0xff9898f8));
+            g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+            g.drawText("VST", 6, y + 23, 30, 14, juce::Justification::centred);
+        }
+        else if (isMelodic)
         {
             g.setColour(juce::Colour(0xffb0b0b8).withAlpha(0.12f));
             g.fillRoundedRectangle(6.0f, (float)(y + 23), 38.0f, 14.0f, 3.0f);
@@ -392,6 +403,8 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
         && ch >= 0 && ch < (int)channels.size())
     {
         const bool isMelodic = (channelTypes[(size_t)ch] == ChannelType::Melodic);
+        const bool hasPlug = channelHasPlugin[ch];
+
         juce::PopupMenu menu;
         menu.addItem(1, "Rename");
         menu.addSeparator();
@@ -400,6 +413,13 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
             menu.addItem(3, "Open Piano Roll");
         menu.addSeparator();
         menu.addItem(4, "Open Synth Editor");   // M13
+        menu.addSeparator();
+        menu.addItem(5, "Load VST/AU Plugin...");   // M8
+        if (hasPlug)
+        {
+            menu.addItem(6, "Open Plugin Editor");
+            menu.addItem(7, "Remove Plugin");
+        }
 
         menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
             [this, ch, isMelodic](int result)
@@ -431,7 +451,19 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
                 }
                 else if (result == 4)
                 {
-                    if (onOpenSynthEditor) onOpenSynthEditor(ch);   // M13
+                    if (onOpenSynthEditor) onOpenSynthEditor(ch);
+                }
+                else if (result == 5)
+                {
+                    if (onLoadPlugin) onLoadPlugin(ch);       // M8
+                }
+                else if (result == 6)
+                {
+                    if (onOpenPluginEditor) onOpenPluginEditor(ch);
+                }
+                else if (result == 7)
+                {
+                    if (onRemovePlugin) onRemovePlugin(ch);
                 }
             });
         return;

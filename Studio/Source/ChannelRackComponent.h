@@ -69,6 +69,21 @@ public:
     std::function<void(int ch)>               onOpenSynthEditor;    // M13
     std::function<int()>                      getCurrentStep;
 
+    // M8 — VST/AU plugin actions
+    std::function<void(int ch)> onLoadPlugin;
+    std::function<void(int ch)> onOpenPluginEditor;
+    std::function<void(int ch)> onRemovePlugin;
+
+    void setChannelHasPlugin(int ch, bool has)
+    {
+        if (ch >= 0 && ch < 16) { channelHasPlugin[(size_t)ch] = has; repaint(); }
+    }
+
+    bool getChannelHasPlugin(int ch) const
+    {
+        return (ch >= 0 && ch < 16) && channelHasPlugin[(size_t)ch];
+    }
+
     // M3 — reflect channel types from project
     void setChannelType(int ch, ChannelType t)
     {
@@ -132,7 +147,8 @@ public:
 
 private:
     std::vector<ChannelRow> channels;
-    std::array<ChannelType, 16> channelTypes = {};  // M3: mirrors project.channelTypes
+    std::array<ChannelType, 16> channelTypes    = {};   // M3: mirrors project.channelTypes
+    bool                        channelHasPlugin[16] = {}; // M8
     juce::TextButton addChannelBtn { "+ Add Channel" };
     juce::Slider     stepCountSlider;
 

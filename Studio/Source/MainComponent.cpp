@@ -562,6 +562,69 @@ MainComponent::MainComponent()
         synthEditorWindow->toFront(true);
     };
 
+    // ---- M8: VST/AU Plugin hosting
+
+    PluginManager::getInstance().initialise();
+
+    channelRack.onLoadPlugin = [this](int ch)
+    {
+        if (pluginBrowserWindow == nullptr)
+        {
+            pluginBrowserWindow = std::make_unique<PluginBrowserWindow>();
+
+            pluginBrowserWindow->onPluginSelected = [this](int targetCh,
+                                                             const juce::PluginDescription& desc)
+            {
+                juce::String errorMsg;
+                audioEngine.loadPlugin(targetCh, desc, errorMsg);
+
+                if (errorMsg.isNotEmpty())
+                {
+                    juce::AlertWindow::showMessageBoxAsync(
+                        juce::MessageBoxIconType::WarningIcon,
+                        "Plugin Load Error", errorMsg);
+                    return;
+                }
+
+                project.channelInstrumentPlugins[(size_t)targetCh].pluginId =
+                    desc.createIdentifierString();
+                project.channelInstrumentPlugins[(size_t)targetCh].enabled = true;
+                channelRack.setChannelHasPlugin(targetCh, true);
+                markDirty();
+            };
+        }
+
+        pluginBrowserWindow->showForChannel(ch);
+    };
+
+    channelRack.onOpenPluginEditor = [this](int ch)
+    {
+        auto* plugin = audioEngine.getPlugin(ch);
+        if (plugin == nullptr) return;
+
+        if (pluginEditorWindows[(size_t)ch] != nullptr
+            && pluginEditorWindows[(size_t)ch]->isVisible())
+        {
+            pluginEditorWindows[(size_t)ch]->toFront(true);
+            return;
+        }
+
+        pluginEditorWindows[(size_t)ch] =
+            std::make_unique<PluginEditorWindow>(*plugin, ch);
+        pluginEditorWindows[(size_t)ch]->setVisible(true);
+    };
+
+    channelRack.onRemovePlugin = [this](int ch)
+    {
+        if (pluginEditorWindows[(size_t)ch] != nullptr)
+            pluginEditorWindows[(size_t)ch].reset();
+
+        audioEngine.unloadPlugin(ch);
+        project.channelInstrumentPlugins[(size_t)ch] = {};
+        channelRack.setChannelHasPlugin(ch, false);
+        markDirty();
+    };
+
     // ---- M5: Mixer
     addAndMakeVisible(mixer);
     mixer.setVisible(false);   // hidden until toolbar toggle
@@ -918,6 +981,48 @@ void MainComponent::reloadProjectIntoUI()
     for (int ch = 0; ch < 16; ++ch)
         channelRack.setChannelType(ch, project.channelTypes[ch]);
 
+    // M8 — unload any previously active plugins, then reload from project
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        if (pluginEditorWindows[(size_t)ch] != nullptr)
+            pluginEditorWindows[(size_t)ch].reset();
+        audioEngine.unloadPlugin(ch);
+        channelRack.setChannelHasPlugin(ch, false);
+    }
+
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        const auto& slot = project.channelInstrumentPlugins[(size_t)ch];
+        if (slot.pluginId.isEmpty() || !slot.enabled) continue;
+
+        // Find the PluginDescription in the known list by identifier string
+        const auto types = PluginManager::getInstance().getKnownPlugins().getTypes();
+        for (const auto& desc : types)
+        {
+            if (desc.createIdentifierString() == slot.pluginId)
+            {
+                juce::String err;
+                audioEngine.loadPlugin(ch, desc, err);
+
+                if (err.isEmpty())
+                {
+                    channelRack.setChannelHasPlugin(ch, true);
+
+                    // Restore plugin state
+                    if (slot.pluginStateBase64.isNotEmpty())
+                    {
+                        juce::MemoryBlock stateData;
+                        stateData.fromBase64Encoding(slot.pluginStateBase64);
+                        if (auto* plugin = audioEngine.getPlugin(ch))
+                            plugin->setStateInformation(stateData.getData(),
+                                                        (int)stateData.getSize());
+                    }
+                }
+                break;
+            }
+        }
+    }
+
     projectDirty = false;
     toolbar.setProjectTitle(currentFile.getFileNameWithoutExtension(), false);
 }
@@ -1012,6 +1117,15 @@ void MainComponent::saveProject()
             channelRack.saveToPattern(*pat);
         syncChannelRackToProject();
 
+        // M8 — collect plugin state from audio engine before serialising
+        for (int ch = 0; ch < 16; ++ch)
+        {
+            juce::MemoryBlock state;
+            if (audioEngine.getPluginState(ch, state))
+                project.channelInstrumentPlugins[(size_t)ch].pluginStateBase64 =
+                    state.toBase64Encoding();
+        }
+
         if (ProjectSerializer::save(project, currentFile))
         {
             projectDirty = false;
@@ -1036,6 +1150,15 @@ void MainComponent::saveProjectAs()
     if (auto* pat = findPattern(activePatternId))
         channelRack.saveToPattern(*pat);
     syncChannelRackToProject();
+
+    // M8 — collect plugin state
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        juce::MemoryBlock state;
+        if (audioEngine.getPluginState(ch, state))
+            project.channelInstrumentPlugins[(size_t)ch].pluginStateBase64 =
+                state.toBase64Encoding();
+    }
 
     fileChooser = std::make_shared<juce::FileChooser>(
         "Save Project As",
