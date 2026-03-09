@@ -575,7 +575,7 @@ MainComponent::MainComponent()
         if (synthEditorWindow == nullptr)
         {
             synthEditorWindow = std::make_unique<SynthEditorWindow>();
-            synthEditorWindow->centreWithSize(430, 370);
+            synthEditorWindow->centreWithSize(430, 406);
         }
 
         synthEditorWindow->setChannelName(

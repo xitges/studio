@@ -40,6 +40,44 @@ struct SynthParams
     int   lfoTarget = 0;        // 0 = cutoff, 1 = pitch
 };
 
+// Instrument preset database — factory presets for SynthEditorPanel ComboBox
+namespace SynthPresets
+{
+    struct Preset { juce::String name; SynthParams params; };
+
+    // Helper: build a SynthParams inline
+    inline SynthParams make (bool en, int wv,
+                             float atk, float dec, float sus, float rel,
+                             float co,  float res,
+                             float lfoR, float lfoD, int lfoT = 0)
+    {
+        SynthParams p;
+        p.enabled   = en;   p.waveform  = wv;
+        p.attack    = atk;  p.decay     = dec;
+        p.sustain   = sus;  p.release   = rel;
+        p.cutoff    = co;   p.resonance = res;
+        p.lfoRate   = lfoR; p.lfoDepth  = lfoD;
+        p.lfoTarget = lfoT;
+        return p;
+    }
+
+    // Returns all factory presets.  Waveform codes: 0=Sine 1=Saw 2=Square 3=Triangle
+    inline std::vector<Preset> getAll()
+    {
+        return {
+            //  name              en    wv  atk    dec    sus    rel    cut    res   lfoR  lfoD  lfoT
+            { "Piano",          make(true, 3,   8, 350, 0.40f,  600, 3500, 0.10f, 0.50f, 0.00f) },
+            { "Electric Guitar",make(true, 1,   5, 160, 0.55f,  240, 5200, 0.18f, 3.00f, 0.04f) },
+            { "Cello / Pad",    make(true, 1, 420, 200, 0.75f, 1200, 1800, 0.28f, 0.80f, 0.08f) },
+            { "Fat Bass",       make(true, 2,   5, 180, 0.70f,  180,  800, 0.50f, 0.30f, 0.00f) },
+            { "Retro Game",     make(true, 2,   2,  70, 0.00f,   50, 8000, 0.08f, 8.00f, 0.00f) },
+            { "Lead Synth",     make(true, 1,   5,  90, 0.80f,  300, 6000, 0.45f, 5.00f, 0.15f) },
+            { "Warm Pad",       make(true, 0, 600, 300, 0.80f, 1500, 1200, 0.10f, 0.50f, 0.05f) },
+            { "Pluck",          make(true, 3,   2, 280, 0.00f,  380, 5000, 0.35f, 0.00f, 0.00f) },
+        };
+    }
+} // namespace SynthPresets
+
 // Launchpad — one pad cell in the 8×8 performance grid
 struct LaunchpadPad
 {

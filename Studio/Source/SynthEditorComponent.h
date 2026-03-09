@@ -44,7 +44,37 @@ public:
             addAndMakeVisible(s);
         };
 
-        // Enable toggle
+        // ---- Preset selector -----------------------------------------------
+        presetLbl.setText("Preset", juce::dontSendNotification);
+        presetLbl.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        presetLbl.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+        addAndMakeVisible(presetLbl);
+
+        // Populate from database
+        {
+            const auto presets = SynthPresets::getAll();
+            for (int i = 0; i < (int)presets.size(); ++i)
+                presetBox.addItem(presets[(size_t)i].name, i + 1);
+        }
+        presetBox.setTextWhenNothingSelected("-- Select Preset --");
+        presetBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff16213e));
+        presetBox.setColour(juce::ComboBox::textColourId,       juce::Colour(0xffb0b0d8));
+        presetBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xff3498db).withAlpha(0.6f));
+        presetBox.onChange = [this]
+        {
+            const int id = presetBox.getSelectedId();
+            if (id <= 0) return;
+            const auto presets = SynthPresets::getAll();
+            const int idx = id - 1;
+            if (idx < (int)presets.size())
+            {
+                loadParams(presets[(size_t)idx].params);
+                notify();   // propagates to AudioEngine + ProjectModel
+            }
+        };
+        addAndMakeVisible(presetBox);
+
+        // ---- Enable toggle -----------------------------------------------
         enableBtn.setButtonText("Enable Synth");
         enableBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2c2c54));
         enableBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff27ae60));
@@ -135,42 +165,51 @@ public:
             g.drawLine(10.0f, (float)(y + 14), 410.0f, (float)(y + 14), 1.0f);
         };
 
-        sectionHeader("ADSR ENVELOPE", 52);
-        sectionHeader("FILTER",        162);
-        sectionHeader("LFO",           222);
+        sectionHeader("ADSR ENVELOPE", 88);
+        sectionHeader("FILTER",        198);
+        sectionHeader("LFO",           258);
     }
 
     void resized() override
     {
-        // Row layout helper
-        int y = 10;
-        enableBtn.setBounds(10, y, 120, 26);
-        waveLbl.setBounds(150, y + 4, 70, 18);
-        waveBox.setBounds (220, y, 120, 26);
-        y += 40;
+        constexpr int lblW = 90, slW = 250, h = 22, pad = 6;
 
-        // ADSR (starts at y=50, section header at y=52)
-        y = 70;
-        const int lblW = 90, slW = 250, h = 22, pad = 6;
-        attackLbl .setBounds(10, y,      lblW, h); attackSl .setBounds(100, y,      slW, h); y += h + pad;
-        decayLbl  .setBounds(10, y,      lblW, h); decaySl  .setBounds(100, y,      slW, h); y += h + pad;
-        sustainLbl.setBounds(10, y,      lblW, h); sustainSl.setBounds(100, y,      slW, h); y += h + pad;
-        releaseLbl.setBounds(10, y,      lblW, h); releaseSl.setBounds(100, y,      slW, h);
+        // Row 0 — Preset selector
+        int y = 10;
+        presetLbl.setBounds(10,  y + 4, 46, 18);
+        presetBox.setBounds(60,  y,     300, 26);
+        y += 36;
+
+        // Row 1 — Enable + Waveform
+        enableBtn.setBounds(10,  y, 120, 26);
+        waveLbl.setBounds  (150, y + 4, 70, 18);
+        waveBox.setBounds  (220, y, 120, 26);
+
+        // ADSR section (section header at y+26+16 = y+42 → paint uses absolute 88)
+        y = 106;
+        attackLbl .setBounds(10, y, lblW, h); attackSl .setBounds(100, y, slW, h); y += h + pad;
+        decayLbl  .setBounds(10, y, lblW, h); decaySl  .setBounds(100, y, slW, h); y += h + pad;
+        sustainLbl.setBounds(10, y, lblW, h); sustainSl.setBounds(100, y, slW, h); y += h + pad;
+        releaseLbl.setBounds(10, y, lblW, h); releaseSl.setBounds(100, y, slW, h);
 
         // Filter
-        y = 180;
-        cutoffLbl   .setBounds(10, y,  lblW, h); cutoffSl   .setBounds(100, y,  slW, h); y += h + pad;
-        resonanceLbl.setBounds(10, y,  lblW, h); resonanceSl.setBounds(100, y,  slW, h);
+        y = 216;
+        cutoffLbl   .setBounds(10, y, lblW, h); cutoffSl   .setBounds(100, y, slW, h); y += h + pad;
+        resonanceLbl.setBounds(10, y, lblW, h); resonanceSl.setBounds(100, y, slW, h);
 
         // LFO
-        y = 240;
-        lfoRateLbl  .setBounds(10, y,  lblW, h); lfoRateSl  .setBounds(100, y,  slW, h); y += h + pad;
-        lfoDepthLbl .setBounds(10, y,  lblW, h); lfoDepthSl .setBounds(100, y,  slW, h); y += h + pad;
-        lfoTargetLbl.setBounds(10, y,  lblW, h); lfoTargetBox.setBounds(100, y, 100, h);
+        y = 276;
+        lfoRateLbl  .setBounds(10, y, lblW, h); lfoRateSl  .setBounds(100, y, slW, h); y += h + pad;
+        lfoDepthLbl .setBounds(10, y, lblW, h); lfoDepthSl .setBounds(100, y, slW, h); y += h + pad;
+        lfoTargetLbl.setBounds(10, y, lblW, h); lfoTargetBox.setBounds(100, y, 100, h);
     }
 
 private:
     void notify() { if (onParamsChanged) onParamsChanged(); }
+
+    // Preset selector
+    juce::ComboBox presetBox;
+    juce::Label    presetLbl;
 
     juce::TextButton enableBtn;
     juce::ComboBox   waveBox;
@@ -202,7 +241,7 @@ public:
     {
         setContentNonOwned(&panel, false);
         setResizable(false, false);
-        setSize(430, 370);
+        setSize(430, 406);
     }
 
     void setChannelName(const juce::String& name)

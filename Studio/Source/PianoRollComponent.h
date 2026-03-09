@@ -73,6 +73,7 @@ public:
         g.fillAll(juce::Colour(0xff1a1a2e));
         drawPianoKeys(g);
         drawGrid(g);
+        drawHoverStep(g);
         drawCursor(g);
         drawRuler(g);
         drawNotes(g);
@@ -210,13 +211,31 @@ public:
 
     void mouseMove(const juce::MouseEvent& e) override
     {
-        const int p = (e.getPosition().x < keyWidth) ? pitchFromY(e.getPosition().y) : -1;
-        if (p != hoverPitch) { hoverPitch = p; repaint(); }
+        const auto pos = e.getPosition();
+        bool changed = false;
+
+        const int p = (pos.x < keyWidth) ? pitchFromY(pos.y) : -1;
+        if (p != hoverPitch) { hoverPitch = p; changed = true; }
+
+        // Track which 1/16 step column the mouse is over (grid area only)
+        float newStep = -1.0f;
+        if (pos.x >= keyWidth && pos.y >= headerH && pos.y < velLaneY())
+        {
+            const float beat = beatFromX(pos.x);
+            if (beat >= 0.0f)
+                newStep = std::floor(beat / 0.25f) * 0.25f;
+        }
+        if (newStep != hoverStepBeat) { hoverStepBeat = newStep; changed = true; }
+
+        if (changed) repaint();
     }
 
     void mouseExit(const juce::MouseEvent&) override
     {
-        if (hoverPitch != -1) { hoverPitch = -1; repaint(); }
+        bool changed = false;
+        if (hoverPitch   != -1)    { hoverPitch   = -1;    changed = true; }
+        if (hoverStepBeat >= 0.0f) { hoverStepBeat = -1.0f; changed = true; }
+        if (changed) repaint();
     }
 
     void mouseEnter(const juce::MouseEvent&) override
@@ -441,6 +460,7 @@ private:
     std::array<PendingRecNote, 128> pendingRecNotes_ {};
 
     int   hoverPitch      = -1;
+    float hoverStepBeat   = -1.0f;   // beat position of hovered 1/16 column (-1 = none)
     int   draggingIdx     = -1;
     int   draggingVelIdx  = -1;   // index of note being velocity-edited
     bool  resizingNote    = false;
@@ -535,8 +555,9 @@ private:
     {
         if (pattern == nullptr) return;
         const double beats = pattern->stepCount * 0.25;
+        const int    gridBottom = velLaneY();   // vertical lines stop before vel lane
 
-        // Horizontal pitch lines
+        // Horizontal pitch rows — black keys slightly darker
         for (int pitch = minPitch; pitch <= maxPitch; ++pitch)
         {
             const int y = yFromPitch(pitch);
@@ -546,26 +567,66 @@ private:
             g.fillRect(keyWidth, y, getWidth() - keyWidth, noteH);
         }
 
-        // Vertical beat lines
+        // 3-level vertical grid hierarchy
         for (double b = 0.0; b <= beats + 0.001; b += 0.25)
         {
-            const int x = xFromBeat((float)b);
+            const int  x      = xFromBeat((float)b);
             const bool isBar  = std::fmod(b, 4.0) < 0.001;
             const bool isBeat = std::fmod(b, 1.0) < 0.001;
-            g.setColour(isBar  ? juce::Colour(0xff3498db).withAlpha(0.35f) :
-                        isBeat ? juce::Colour(0xffffffff).withAlpha(0.08f) :
-                                 juce::Colour(0xffffffff).withAlpha(0.03f));
-            g.drawLine((float)x, (float)headerH, (float)x, (float)getHeight(), isBar ? 1.0f : 0.5f);
+
+            if (isBar)
+            {
+                // Bar line: solid blue, 1px
+                g.setColour(juce::Colour(0xff3498db).withAlpha(0.55f));
+                g.drawLine((float)x, (float)headerH, (float)x, (float)gridBottom, 1.0f);
+            }
+            else if (isBeat)
+            {
+                // Beat line: white, moderate alpha, 0.7px
+                g.setColour(juce::Colour(0xffffffff).withAlpha(0.15f));
+                g.drawLine((float)x, (float)headerH, (float)x, (float)gridBottom, 0.7f);
+            }
+            else
+            {
+                // Sub-beat (1/16 step) line: white, very faint, 0.5px
+                g.setColour(juce::Colour(0xffffffff).withAlpha(0.05f));
+                g.drawLine((float)x, (float)headerH, (float)x, (float)gridBottom, 0.5f);
+            }
         }
+    }
+
+    // Hover step column highlight — drawn between grid and notes
+    void drawHoverStep(juce::Graphics& g)
+    {
+        if (hoverStepBeat < 0.0f || pattern == nullptr) return;
+
+        const float maxBeat = (float)(pattern->stepCount) * 0.25f;
+        if (hoverStepBeat > maxBeat) return;
+
+        const int x = xFromBeat(hoverStepBeat);
+        const int w = (int)(0.25f * pixelsPerBeat);   // one 1/16-step wide
+        const int gridBottom = velLaneY();
+
+        g.setColour(juce::Colour(0xffffffff).withAlpha(0.03f));
+        g.fillRect(x, headerH, w, gridBottom - headerH);
     }
 
     void drawRuler(juce::Graphics& g)
     {
-        // Tint ruler red when recording
+        // Background — red tint when recording, dark blue otherwise
         g.setColour(recording_ ? juce::Colour(0xff3a0a0a) : juce::Colour(0xff0f3460));
         g.fillRect(0, 0, getWidth(), headerH);
 
-        // Flashing "REC" dot
+        // Hover step tick mark in the ruler
+        if (hoverStepBeat >= 0.0f)
+        {
+            const int hx = xFromBeat(hoverStepBeat);
+            const int hw = (int)(0.25f * pixelsPerBeat);
+            g.setColour(juce::Colour(0xffffffff).withAlpha(0.08f));
+            g.fillRect(hx, 0, hw, headerH);
+        }
+
+        // REC indicator
         if (recording_ && playheadBeat >= 0.0)
         {
             g.setColour(juce::Colour(0xffff2222));
@@ -574,16 +635,35 @@ private:
             g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
             g.drawText("REC", 15, 0, 36, headerH, juce::Justification::centredLeft);
         }
-        g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
 
         if (pattern == nullptr) return;
         const double beats = pattern->stepCount * 0.25;
-        for (double b = 0.0; b <= beats + 0.001; b += 1.0)
+
+        // Draw bar numbers (large, bright) and beat numbers (small, dim)
+        for (double b = 0.0; b <= beats + 0.001; b += 1.0)   // every beat
         {
-            const int x = xFromBeat((float)b);
-            g.setColour(juce::Colours::white.withAlpha(0.8f));
-            g.drawText(juce::String((int)b + 1) + "." + juce::String(1),
-                       x + 2, 0, 40, headerH, juce::Justification::centredLeft);
+            const int  x       = xFromBeat((float)b);
+            const bool isBar   = std::fmod(b, 4.0) < 0.001;
+            const int  barNum  = (int)(b / 4.0) + 1;
+            const int  beatNum = (int)std::fmod(b, 4.0) + 1;
+
+            if (isBar)
+            {
+                // Bar number — large (12px), bright white
+                g.setFont(juce::Font(juce::FontOptions().withHeight(12.0f)
+                                     .withStyle("Bold")));
+                g.setColour(juce::Colours::white.withAlpha(0.90f));
+                g.drawText(juce::String(barNum), x + 3, 0, 32, headerH,
+                           juce::Justification::centredLeft);
+            }
+            else
+            {
+                // Beat number within bar — small (9px), dim
+                g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+                g.setColour(juce::Colours::white.withAlpha(0.38f));
+                g.drawText("." + juce::String(beatNum), x + 2, 0, 18, headerH,
+                           juce::Justification::centredLeft);
+            }
         }
     }
 
@@ -749,9 +829,27 @@ private:
     void drawPlayhead(juce::Graphics& g)
     {
         if (playheadBeat < 0.0) return;
+
+        // Active step background tint — highlight the 1/16-step column being played
+        const float stepBeat = std::floor(playheadBeat / 0.25) * 0.25f;
+        const int   sx = xFromBeat(stepBeat);
+        const int   sw = (int)(0.25f * pixelsPerBeat);
+        const int   gridBottom = velLaneY();
+        g.setColour(juce::Colour(0xffff3333).withAlpha(0.10f));
+        g.fillRect(sx, headerH, sw, gridBottom - headerH);
+
+        // Playhead line — drawn on top of notes and step tint
         const int x = xFromBeat((float)playheadBeat);
-        g.setColour(juce::Colour(0xffff3333));
+        g.setColour(juce::Colour(0xffff3333).withAlpha(0.92f));
         g.drawLine((float)x, 0.0f, (float)x, (float)getHeight(), 2.0f);
+
+        // Small triangle cap at the top of the playhead line
+        juce::Path cap;
+        cap.addTriangle((float)(x - 5), 0.0f,
+                        (float)(x + 5), 0.0f,
+                        (float)x,       6.0f);
+        g.setColour(juce::Colour(0xffff3333));
+        g.fillPath(cap);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PianoRollComponent)
