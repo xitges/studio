@@ -297,10 +297,25 @@ void AudioEngine::buildSongSampleCache()
 void AudioEngine::triggerChannel(int channelIndex)
 {
     if (channelIndex < 0 || channelIndex >= 16) return;
-    // Always restore the slider-based pitch before triggering.
-    // NoteEvent playback overwrites players[ch].pitchRatio with a note offset;
-    // without this reset, drum hits played after a Melodic→Drum switch would
-    // fire at the wrong pitch.
+
+    // If a synth is enabled on this channel, trigger a synth voice at the
+    // pitch-slider note (channelBasePitch semitone offset from C4=60).
+    // This lets Drum-mode channels use the synth engine with the step grid.
+    if (project != nullptr && project->synthParams[(size_t)channelIndex].enabled)
+    {
+        const int   midiPitch = juce::jlimit(0, 127,
+                                    60 + (int)std::round(channelBasePitch[channelIndex]));
+        const int   noteLen   = juce::jmax(1,
+                                    (int)(0.25 * sampleRate * 60.0 / bpm)); // 1/16 note
+        polySynths[(size_t)channelIndex].noteOn(
+            midiPitch, 0.8f, sampleRate,
+            project->synthParams[(size_t)channelIndex], noteLen);
+        return;
+    }
+
+    // Sample path — restore slider-based pitch before triggering so that
+    // residual NoteEvent pitch offsets from a previous Melodic→Drum switch
+    // do not bleed through.
     players[channelIndex].setPitch(channelBasePitch[channelIndex]);
     players[channelIndex].trigger();
 }

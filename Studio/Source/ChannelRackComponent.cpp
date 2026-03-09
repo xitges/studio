@@ -324,11 +324,12 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
         }
 
         // Small labels left of sliders
+        g.setFont(juce::Font(juce::FontOptions().withHeight(8.0f)));
         g.setColour(juce::Colour(0xff888892));
-        g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
-        g.drawText("V", 88, y + 4,  8, 10, juce::Justification::centred);
-        g.drawText("P", 88, y + 22, 8, 10, juce::Justification::centred);
-        g.drawText("T", 88, y + 40, 8, 10, juce::Justification::centred);
+        g.drawText("VOL", 76, y + 4,  20, 10, juce::Justification::centredRight);
+        g.drawText("PAN", 76, y + 22, 20, 10, juce::Justification::centredRight);
+        g.setColour(juce::Colour(0xffa0a0b0));
+        g.drawText("PCH", 76, y + 40, 20, 10, juce::Justification::centredRight);
 
         // Separator line
         g.setColour(juce::Colour(0xff282828));
