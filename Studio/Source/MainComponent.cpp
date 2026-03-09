@@ -30,9 +30,7 @@ MainComponent::MainComponent()
         mt.name = "Track " + juce::String(t + 1);
         project.mixerTracks.push_back(mt);
     }
-    // M5 — default routing: channel N → track N (mod 8)
-    for (int ch = 0; ch < 16; ++ch)
-        project.channelMixerRouting[ch] = ch % 8;
+    // M5 — default routing now lives in Pattern constructor (channelMixerRouting[i] = i % 8)
 
     // M11 — default 8 playlist tracks
     for (int t = 0; t < 8; ++t)
@@ -122,6 +120,7 @@ MainComponent::MainComponent()
     {
         // selectPattern will save the current rack before switching.
         // Capture id/name BEFORE push_back in case it reallocates.
+        audioEngine.ensureCacheLoaderStopped();
         const int newId   = nextPatternId();
         const int newNum  = (int)project.patterns.size() + 1;
 
@@ -137,6 +136,7 @@ MainComponent::MainComponent()
 
     toolbar.onDuplicatePattern = [this]
     {
+        audioEngine.ensureCacheLoaderStopped();
         // Save current rack into the active pattern first
         if (auto* src = findPattern(activePatternId))
             channelRack.saveToPattern(*src);
@@ -162,6 +162,7 @@ MainComponent::MainComponent()
     toolbar.onDeletePattern = [this, markDirtyFn]
     {
         if (project.patterns.size() <= 1) return; // always keep at least one
+        audioEngine.ensureCacheLoaderStopped();
 
         const int deletedId = activePatternId;
 
@@ -385,6 +386,7 @@ MainComponent::MainComponent()
                     if (patId == activePatternId) {
                         channelRack.setStep(ch, step, newState);
                         audioEngine.setStepPattern(ch, step, newState);  // live sync
+                        audioEngine.updatePatternSnapshot();
                     }
                 }
                 markDirty(); return true;
@@ -395,6 +397,7 @@ MainComponent::MainComponent()
                     if (patId == activePatternId) {
                         channelRack.setStep(ch, step, oldState);
                         audioEngine.setStepPattern(ch, step, oldState);  // live sync
+                        audioEngine.updatePatternSnapshot();
                     }
                 }
                 markDirty(); return true;
@@ -585,6 +588,7 @@ MainComponent::MainComponent()
         {
             if (auto* pat = findPattern(activePatternId))
                 synthEditorWindow->panel.applyToParams(pat->synthParams[(size_t)ch]);
+            audioEngine.updatePatternSnapshot();  // keep snapshot in sync for real-time modulation
             markDirty();
         };
 
@@ -659,7 +663,8 @@ MainComponent::MainComponent()
     addAndMakeVisible(mixer);
     mixer.setVisible(false);   // hidden until toolbar toggle
     mixer.loadFromProject(project);
-    mixer.updateRoutingLabels(project.channelMixerRouting);
+    if (!project.patterns.empty())
+        mixer.updateRoutingLabels(project.patterns.front().channelMixerRouting);
 
     mixer.onTrackVolumeChanged  = [this](int t, float v) { audioEngine.setMixerTrackVolume(t, v); markDirty(); };
     mixer.onTrackPanChanged     = [this](int t, float p) { audioEngine.setMixerTrackPan(t, p);    markDirty(); };
@@ -916,6 +921,7 @@ void MainComponent::selectPattern(int id)
 
     toolbar.updatePatternList(project.patterns, activePatternId);
     audioEngine.setActivePattern(activePatternId);
+    audioEngine.updatePatternSnapshot();
 
     // Update open piano roll to the newly selected pattern
     if (pianoRollWindow != nullptr && pianoRollWindow->isVisible() && pianoRollChannel >= 0)
@@ -940,6 +946,8 @@ void MainComponent::syncPatternToEngine()
             for (int s = 0; s < pat->stepCount; ++s)
                 audioEngine.setStepPattern(ch, s, pat->steps[ch][s]);
     }
+
+    audioEngine.updatePatternSnapshot();
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,6 +1008,10 @@ void MainComponent::reloadProjectIntoUI()
     // Refresh toolbar
     toolbar.updatePatternList(project.patterns, activePatternId);
 
+    // Rebuild snapshot from the newly loaded active pattern
+    audioEngine.setActivePattern(activePatternId);
+    audioEngine.updatePatternSnapshot();
+
     // Sync BPM slider (don't fire callback — just visual update)
     // BPM is read from toolbar on Play, so we update the slider directly:
     // (Toolbar doesn't expose a setBPM setter — add a small approach via the slider)
@@ -1018,11 +1030,11 @@ void MainComponent::reloadProjectIntoUI()
             mt.name = "Track " + juce::String(t + 1);
             project.mixerTracks.push_back(mt);
         }
-        for (int ch = 0; ch < 16; ++ch)
-            project.channelMixerRouting[ch] = ch % 8;
+        // Routing now lives in Pattern constructor (channelMixerRouting[i] = i % 8)
     }
     mixer.loadFromProject(project);
-    mixer.updateRoutingLabels(project.channelMixerRouting);
+    if (!project.patterns.empty())
+        mixer.updateRoutingLabels(project.patterns.front().channelMixerRouting);
 
     // M11 — ensure playlist tracks exist
     if (project.playlistTracks.empty())

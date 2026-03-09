@@ -39,8 +39,8 @@ public:
     const juce::AudioBuffer<float>& getBuffer() const    { return fileBuffer; }
 
     // M1.1 — Volume & Pan
-    void  setVolume(float v)  { volume = juce::jlimit(0.0f, 1.0f, v); }
-    void  setPan(float p)     { pan    = juce::jlimit(-1.0f, 1.0f, p); }
+    void  setVolume(float v)  { volume = juce::jlimit(0.0f, 1.0f, v); smoothVolume_.setTargetValue(volume); }
+    void  setPan(float p)     { pan    = juce::jlimit(-1.0f, 1.0f, p); smoothPan_.setTargetValue(pan); }
     float getVolume() const   { return volume; }
     float getPan()    const   { return pan; }
 
@@ -68,6 +68,10 @@ private:
     // M1.1
     float volume = 0.8f;
     float pan    = 0.0f;    // -1=L, 0=C, +1=R
+
+    // Smoothed volume/pan to avoid zipper noise on parameter changes
+    juce::LinearSmoothedValue<float> smoothVolume_;
+    juce::LinearSmoothedValue<float> smoothPan_;
 
     // M1.2
     float pitchRatio = 1.0f;  // 2^(semitones/12)

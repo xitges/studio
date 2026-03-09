@@ -59,6 +59,7 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             chEl->setAttribute("spLfoRate",   (double)sp.lfoRate);
             chEl->setAttribute("spLfoDepth",  (double)sp.lfoDepth);
             chEl->setAttribute("spLfoTarget", sp.lfoTarget);
+            chEl->setAttribute("mixRoute",    pat.channelMixerRouting[ch]);
         }
 
         // NoteEvents (M3)
@@ -108,14 +109,8 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         mEl->setAttribute("soloed", mt.soloed ? 1 : 0);
     }
 
-    // ---- Channel routing only (types/names/synth moved to per-Pattern/Ch)
-    auto* chCfgEl = root.createNewChildElement("ChannelConfig");
-    for (int ch = 0; ch < 16; ++ch)
-    {
-        auto* ctEl = chCfgEl->createNewChildElement("Ch");
-        ctEl->setAttribute("i",        ch);
-        ctEl->setAttribute("mixTrack", project.channelMixerRouting[ch]);
-    }
+    // ---- Channel config placeholder (routing now stored per-Pattern/Ch)
+    root.createNewChildElement("ChannelConfig");
 
     // ---- Playlist tracks (M11)
     auto* plTracksEl = root.createNewChildElement("PlaylistTracks");
@@ -239,6 +234,8 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 pat.channelNames[ch]  = chEl->getStringAttribute(
                     "name", "Channel " + juce::String(ch + 1));
 
+                pat.channelMixerRouting[ch] = chEl->getIntAttribute("mixRoute", ch % 8);
+
                 // SynthParams per channel (new format; fall back to defaults if absent)
                 auto& sp       = pat.synthParams[ch];
                 sp.enabled     = chEl->getIntAttribute("spEnabled",   0) != 0;
@@ -353,14 +350,20 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
         }
     }
 
-    // ---- Channel routing (M5); types now per-pattern
+    // ---- Channel config (legacy migration; routing now stored per-Pattern/Ch)
     if (auto* chCfgEl = xml->getChildByName("ChannelConfig"))
     {
         for (auto* ctEl : chCfgEl->getChildIterator())
         {
             const int ch = ctEl->getIntAttribute("i", -1);
             if (ch < 0 || ch >= 16) continue;
-            loaded.channelMixerRouting[ch] = ctEl->getIntAttribute("mixTrack", ch % 8);
+
+            // Legacy: old files stored mixTrack here; migrate to all patterns
+            if (ctEl->hasAttribute("mixTrack"))
+            {
+                const int route = ctEl->getIntAttribute("mixTrack", ch % 8);
+                for (auto& p : loaded.patterns) p.channelMixerRouting[ch] = route;
+            }
 
             // Legacy: old files stored type here; migrate to all patterns
             if (ctEl->hasAttribute("type"))

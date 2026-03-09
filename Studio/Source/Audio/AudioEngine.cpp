@@ -156,6 +156,40 @@ void AudioEngine::setActivePattern(int patternId)
     patternBeatPos  = 0.0;
 }
 
+void AudioEngine::updatePatternSnapshot()
+{
+    const int nextIdx = 1 - activeSnapshotIdx_.load(std::memory_order_relaxed);
+    PlaybackSnapshot& snap = snapshots_[nextIdx];
+
+    const Pattern* pat = (project != nullptr)
+                         ? findPatternById(activePatternId) : nullptr;
+    if (pat == nullptr) return;
+
+    snap.patternId = pat->id;
+    snap.stepCount = pat->stepCount;
+
+    for (int ch = 0; ch < PlaybackSnapshot::kCh; ++ch)
+    {
+        for (int s = 0; s < PlaybackSnapshot::kSteps; ++s)
+            snap.steps[ch][s] = pat->steps[ch][s];
+
+        snap.channelTypes[ch]        = pat->channelTypes[ch];
+        snap.synthParams[ch]         = pat->synthParams[ch];
+        snap.channelVolume[ch]       = pat->channelVolume[ch];
+        snap.channelPan[ch]          = pat->channelPan[ch];
+        snap.channelPitch[ch]        = pat->channelPitch[ch];
+        snap.channelMixerRouting[ch] = pat->channelMixerRouting[ch];
+
+        auto& slot = snap.noteSlots[ch];
+        const auto& src = pat->notes[ch];
+        slot.count = (int)juce::jmin((int)src.size(), PlaybackSnapshot::kNotes);
+        for (int n = 0; n < slot.count; ++n)
+            slot.notes[n] = src[(size_t)n];
+    }
+
+    activeSnapshotIdx_.store(nextIdx, std::memory_order_release);
+}
+
 void AudioEngine::triggerLaunchpadPad(int padIdx)
 {
     if (padIdx < 0 || padIdx >= 64) return;
@@ -184,14 +218,14 @@ void AudioEngine::allSynthNotesOff()
 void AudioEngine::previewNote(int ch, int midiPitch)
 {
     if (ch < 0 || ch >= 16) return;
-    // If channel has synth enabled, use PolySynth; otherwise use sample player
-    const Pattern* activePat = findPatternById(activePatternId);
-    if (activePat && activePat->synthParams[(size_t)ch].enabled)
+    // Use snapshot for lock-free access on audio/message thread
+    const PlaybackSnapshot& prevSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
+    if (prevSnap.patternId >= 0 && prevSnap.synthParams[(size_t)ch].enabled)
     {
         const double samplesPerBeat = sampleRate * 60.0 / bpm;
         const int noteLenSamples = (int)(0.25 * samplesPerBeat);  // 16th note preview
         polySynths[(size_t)ch].noteOn(midiPitch, 0.8f, sampleRate,
-                                       activePat->synthParams[(size_t)ch], noteLenSamples);
+                                       prevSnap.synthParams[(size_t)ch], noteLenSamples);
     }
     else
     {
@@ -319,11 +353,13 @@ void AudioEngine::triggerChannel(int channelIndex)
 {
     if (channelIndex < 0 || channelIndex >= 16) return;
 
+    // Use snapshot for lock-free access to synth params on audio thread
+    const PlaybackSnapshot& trigSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
+
     // If a synth is enabled on this channel, trigger a synth voice at the
     // pitch-slider note (channelBasePitch semitone offset from C4=60).
     // This lets Drum-mode channels use the synth engine with the step grid.
-    const Pattern* activePat2 = findPatternById(activePatternId);
-    if (activePat2 != nullptr && activePat2->synthParams[(size_t)channelIndex].enabled)
+    if (trigSnap.patternId >= 0 && trigSnap.synthParams[(size_t)channelIndex].enabled)
     {
         const int   midiPitch = juce::jlimit(0, 127,
                                     60 + (int)std::round(channelBasePitch[channelIndex]));
@@ -331,7 +367,7 @@ void AudioEngine::triggerChannel(int channelIndex)
                                     (int)(0.25 * sampleRate * 60.0 / bpm)); // 1/16 note
         polySynths[(size_t)channelIndex].noteOn(
             midiPitch, 0.8f, sampleRate,
-            activePat2->synthParams[(size_t)channelIndex], noteLen);
+            trigSnap.synthParams[(size_t)channelIndex], noteLen);
         return;
     }
 
@@ -428,13 +464,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 }
                 else
                 {
-                    const Pattern* midiPat = findPatternById(activePatternId);
-                    const bool useSynth = (midiPat != nullptr) &&
-                                           midiPat->synthParams[(size_t)ch].enabled;
+                    const PlaybackSnapshot& midiSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
+                    const bool useSynth = (midiSnap.patternId >= 0) &&
+                                           midiSnap.synthParams[(size_t)ch].enabled;
                     if (useSynth)
                     {
                         polySynths[(size_t)ch].noteOn(pitch, vel, sampleRate,
-                                                       midiPat->synthParams[(size_t)ch], 0);
+                                                       midiSnap.synthParams[(size_t)ch], 0);
                     }
                     else
                     {
@@ -634,91 +670,92 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
     sequencer.processBlock(numSamples);
 
     // M3 — trigger NoteEvents for Melodic channels (only while sequencer is playing)
-    if (sequencer.isPlaying() && project != nullptr)
+    // Use double-buffered snapshot for lock-free pattern data access on audio thread.
+    const PlaybackSnapshot& snap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
+
+    if (sequencer.isPlaying() && snap.patternId >= 0 && sampleRate > 0.0)
     {
-        const Pattern* pat = findPatternById(activePatternId);
-        if (pat != nullptr && sampleRate > 0.0)
+        const double samplesPerBeat = sampleRate * 60.0 / bpm;
+        const double patternBeats   = snap.stepCount * 0.25;  // 1 step = 1/16 note
+
+        if (patternBeats > 0.0)
         {
-            const double samplesPerBeat = sampleRate * 60.0 / bpm;
-            const double patternBeats   = pat->stepCount * 0.25;  // 1 step = 1/16 note
+            const double startBeat = patternBeatPos;
+            const double endBeat   = startBeat + numSamples / samplesPerBeat;
 
-            if (patternBeats > 0.0)
+            const double loopStart = std::fmod(startBeat, patternBeats);
+            const double loopEnd   = std::fmod(endBeat,   patternBeats);
+
+            for (int ch = 0; ch < PlaybackSnapshot::kCh; ++ch)
             {
-                const double startBeat = patternBeatPos;
-                const double endBeat   = startBeat + numSamples / samplesPerBeat;
+                if (snap.channelTypes[ch] != ChannelType::Melodic) continue;
 
-                const double loopStart = std::fmod(startBeat, patternBeats);
-                const double loopEnd   = std::fmod(endBeat,   patternBeats);
-
-                for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+                // M8 — flush pending note-offs for plugin channels
+                if (instrumentPlugins[(size_t)ch] != nullptr)
                 {
-                    if (pat->channelTypes[ch] != ChannelType::Melodic) continue;
-
-                    // M8 — flush pending note-offs for plugin channels
-                    if (instrumentPlugins[(size_t)ch] != nullptr)
+                    auto& notes = activePluginNotes[ch];
+                    for (auto it = notes.begin(); it != notes.end(); )
                     {
-                        auto& notes = activePluginNotes[ch];
-                        for (auto it = notes.begin(); it != notes.end(); )
-                        {
-                            const double noteEndLoop = std::fmod(it->endBeat, patternBeats);
-                            const bool fires = (loopEnd < loopStart)
-                                               ? (noteEndLoop >= loopStart || noteEndLoop < loopEnd)
-                                               : (noteEndLoop >= loopStart && noteEndLoop < loopEnd);
-                            if (fires)
-                            {
-                                instrumentMidiBuffers[ch].addEvent(
-                                    juce::MidiMessage::noteOff(1, it->pitch), 0);
-                                it = notes.erase(it);
-                            }
-                            else { ++it; }
-                        }
-                    }
-
-                    for (const auto& note : pat->notes[ch])
-                    {
-                        const double ns = std::fmod((double)note.startBeat, patternBeats);
+                        const double noteEndLoop = std::fmod(it->endBeat, patternBeats);
                         const bool fires = (loopEnd < loopStart)
-                                           ? (ns >= loopStart || ns < loopEnd)
-                                           : (ns >= loopStart && ns < loopEnd);
+                                           ? (noteEndLoop >= loopStart || noteEndLoop < loopEnd)
+                                           : (noteEndLoop >= loopStart && noteEndLoop < loopEnd);
                         if (fires)
                         {
-                            // M8 — VST/AU plugin path
-                            const int tp = juce::jlimit(0, 127,
-                                note.pitch + (int)std::round(channelBasePitch[ch]));
-                            if (instrumentPlugins[(size_t)ch] != nullptr)
+                            instrumentMidiBuffers[ch].addEvent(
+                                juce::MidiMessage::noteOff(1, it->pitch), 0);
+                            it = notes.erase(it);
+                        }
+                        else { ++it; }
+                    }
+                }
+
+                const auto& slot = snap.noteSlots[ch];
+                for (int n = 0; n < slot.count; ++n)
+                {
+                    const auto& note = slot.notes[n];
+                    const double ns = std::fmod((double)note.startBeat, patternBeats);
+                    const bool fires = (loopEnd < loopStart)
+                                       ? (ns >= loopStart || ns < loopEnd)
+                                       : (ns >= loopStart && ns < loopEnd);
+                    if (fires)
+                    {
+                        // M8 — VST/AU plugin path
+                        const int tp = juce::jlimit(0, 127,
+                            note.pitch + (int)std::round(channelBasePitch[ch]));
+                        if (instrumentPlugins[(size_t)ch] != nullptr)
+                        {
+                            instrumentMidiBuffers[ch].addEvent(
+                                juce::MidiMessage::noteOn(1, tp, note.velocity), 0);
+                            // Schedule note-off at endBeat
+                            const double absoluteEnd = startBeat +
+                                (ns - loopStart + (loopEnd < loopStart ? patternBeats : 0.0))
+                                + note.lengthBeats;
+                            activePluginNotes[ch].push_back({ absoluteEnd, tp });
+                        }
+                        else
+                        {
+                            const SynthParams& sp = snap.synthParams[(size_t)ch];
+                            if (sp.enabled)
                             {
-                                instrumentMidiBuffers[ch].addEvent(
-                                    juce::MidiMessage::noteOn(1, tp, note.velocity), 0);
-                                // Schedule note-off at endBeat
-                                const double absoluteEnd = startBeat +
-                                    (ns - loopStart + (loopEnd < loopStart ? patternBeats : 0.0))
-                                    + note.lengthBeats;
-                                activePluginNotes[ch].push_back({ absoluteEnd, tp });
+                                const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
+                                polySynths[(size_t)ch].noteOn(tp, note.velocity,
+                                                               sampleRate, sp, noteLenSamples);
                             }
                             else
                             {
-                                const SynthParams& sp = pat->synthParams[(size_t)ch];
-                                if (sp.enabled)
-                                {
-                                    const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
-                                    polySynths[(size_t)ch].noteOn(tp, note.velocity,
-                                                                   sampleRate, sp, noteLenSamples);
-                                }
-                                else
-                                {
-                                    // Apply note velocity as volume scale for sample channels
-                                    players[ch].setVolume(
-                                        (pat->channelVolume[ch]) * note.velocity);
-                                    players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
-                                    players[ch].trigger();
-                                }
+                                // Apply note velocity as volume scale for sample channels
+                                players[ch].setVolume(
+                                    snap.channelVolume[ch] * note.velocity);
+                                players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
+                                players[ch].trigger();
                             }
                         }
                     }
                 }
-
-                patternBeatPos += numSamples / samplesPerBeat;
             }
+
+            patternBeatPos += numSamples / samplesPerBeat;
         }
     }
 
@@ -904,6 +941,9 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
     for (auto& tb : mixerTrackBufs)
         tb.clear();
 
+    // Use snapshot for routing and synth params — lock-free audio thread access
+    const PlaybackSnapshot& mixSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
+
     // Render each channel into staging, accumulate into its assigned mixer track
     for (int ch = 0; ch < 16; ++ch)
     {
@@ -911,10 +951,9 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
 
         // M8 — VST/AU instrument plugin takes priority over synth / sample player
         const bool usePlugin = (instrumentPlugins[(size_t)ch] != nullptr);
-        // M13 — PolySynth if synth enabled and no plugin
-        const Pattern* mixPat = findPatternById(activePatternId);
-        const bool useSynth  = !usePlugin && (mixPat != nullptr) &&
-                                mixPat->synthParams[(size_t)ch].enabled;
+        // M13 — PolySynth if synth enabled and no plugin (use snapshot for synth params)
+        const bool useSynth  = !usePlugin && (mixSnap.patternId >= 0) &&
+                                mixSnap.synthParams[(size_t)ch].enabled;
 
         if (usePlugin)
         {
@@ -939,15 +978,16 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
             float* L = stagingBuf.getWritePointer(0);
             float* R = stagingBuf.getWritePointer(1);
             polySynths[(size_t)ch].renderNextBlock(L, R, safe, sampleRate,
-                                                    mixPat->synthParams[(size_t)ch]);
+                                                    mixSnap.synthParams[(size_t)ch]);
         }
         else
         {
             players[ch].renderNextBlock(stagingBuf, safe);
         }
 
-        const int trackIdx = (project != nullptr)
-                             ? juce::jlimit(0, 7, project->channelMixerRouting[ch])
+        // Use snapshot routing for lock-free per-pattern mixer assignment
+        const int trackIdx = (mixSnap.patternId >= 0)
+                             ? juce::jlimit(0, 7, mixSnap.channelMixerRouting[(size_t)ch])
                              : 0;
 
         for (int s = 0; s < safe; ++s)

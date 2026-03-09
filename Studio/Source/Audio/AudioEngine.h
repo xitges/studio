@@ -18,6 +18,29 @@
 #include "../PluginManager.h"
 #include "../DynamicEQProcessor.h"
 
+// Snapshot of active-pattern data for lock-free audio thread access.
+// Built on the message thread; read-only on the audio thread.
+struct PlaybackSnapshot
+{
+    static constexpr int kCh    = 16;
+    static constexpr int kSteps = 64;
+    static constexpr int kNotes = 256;  // max notes per channel
+
+    int  patternId = -1;
+    int  stepCount = 16;
+    bool steps[kCh][kSteps] = {};
+
+    struct NoteSlot { NoteEvent notes[kNotes]; int count = 0; };
+    NoteSlot noteSlots[kCh];
+
+    ChannelType channelTypes[kCh]        = {};
+    SynthParams synthParams[kCh]         = {};
+    float       channelVolume[kCh]       = {};
+    float       channelPan[kCh]          = {};
+    float       channelPitch[kCh]        = {};
+    int         channelMixerRouting[kCh] = {};
+};
+
 class AudioEngine : public juce::AudioIODeviceCallback,
                     public juce::MidiInputCallback
 {
@@ -110,6 +133,20 @@ public:
 
     // M13 — trigger a synth note directly (used by piano key preview for melodic synth channels)
     void previewSynthNote(int ch, int midiPitch, const SynthParams& p);
+
+    // Snapshot — rebuild the PlaybackSnapshot from the active pattern.
+    // Call on the message thread whenever pattern data changes.
+    void updatePatternSnapshot();
+
+    // Stop the cache loader thread before any structural pattern modification.
+    void ensureCacheLoaderStopped()
+    {
+        if (cacheLoader_ != nullptr && cacheLoader_->isThreadRunning())
+        {
+            cacheLoader_->signalThreadShouldExit();
+            cacheLoader_->waitForThreadToExit(1000);
+        }
+    }
 
     // M5 — mixer track controls
     void setMixerTrackVolume(int track, float vol);
@@ -205,6 +242,14 @@ private:
     std::map<int, std::array<juce::AudioBuffer<float>, 16>> songSampleCache;
     int songPlayerPatternId[16] = {};
 
+    // Double-buffer snapshot: message thread writes to inactive slot,
+    // audio thread reads from active slot via atomic index.
+    PlaybackSnapshot snapshots_[2];
+    std::atomic<int> activeSnapshotIdx_{0};
+
+    // Lock protecting buildSongSampleCache from concurrent pattern modification
+    juce::CriticalSection cacheLoaderLock_;
+
     // Background cache loader — avoids UI freeze on Play in Song mode
     struct CacheLoader : public juce::Thread
     {
@@ -213,6 +258,7 @@ private:
         CacheLoader(AudioEngine& e) : juce::Thread("SampleCacheLoader"), engine(e) {}
         void run() override
         {
+            const juce::ScopedLock lock(engine.cacheLoaderLock_);
             engine.buildSongSampleCache();
             if (!threadShouldExit())
                 juce::MessageManager::callAsync([this] { if (onDone) onDone(); });

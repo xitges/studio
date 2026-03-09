@@ -234,9 +234,11 @@ private:
     }
 
 public:
-    // Update channel routing labels (called from MainComponent after routing changes)
-    void updateRoutingLabels(const std::array<int, 16>& routing)
+    // Update channel routing labels (called from MainComponent after routing changes).
+    // Accepts a plain C array of 16 ints (Pattern::channelMixerRouting).
+    void updateRoutingLabels(const int* routing)
     {
+        if (routing == nullptr) return;
         for (int t = 0; t < numTracks; ++t)
         {
             if (!routeLabel[t]) continue;

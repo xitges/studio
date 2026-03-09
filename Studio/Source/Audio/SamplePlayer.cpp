@@ -48,6 +48,13 @@ void SamplePlayer::prepare(double sr, int)
 {
     playerSampleRate = sr;
     playPosition     = -1.0;
+
+    // Initialise smoothed values with 15ms ramp
+    smoothVolume_.reset(sr, 0.015);
+    smoothVolume_.setCurrentAndTargetValue(volume);
+    smoothPan_.reset(sr, 0.015);
+    smoothPan_.setCurrentAndTargetValue(pan);
+
     // Recalculate ms-based params against new sample rate
     // (caller should re-set attack/release after prepare if needed)
 }
@@ -99,19 +106,24 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
     const int outChannels = outputBuffer.getNumChannels();
     const int srcChannels = fileBuffer.getNumChannels();
 
-    // Constant-power pan law
-    const float angle     = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-    const float leftGain  = volume * std::cos(angle);
-    const float rightGain = volume * std::sin(angle);
-
     for (int i = 0; i < safeSamples; ++i)
     {
         const int pos0 = (int)playPosition;
         if (pos0 >= srcSamples)
         {
+            // Drain smoothed values to avoid stale state on next trigger
+            smoothVolume_.skip(safeSamples - i);
+            smoothPan_.skip(safeSamples - i);
             playPosition = -1.0;
             break;
         }
+
+        // Per-sample smoothed volume and pan (constant-power law)
+        const float vol    = smoothVolume_.getNextValue();
+        const float panVal = smoothPan_.getNextValue();
+        const float angle  = (panVal + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+        const float gainL  = vol * std::cos(angle);
+        const float gainR  = vol * std::sin(angle);
 
         // 4-point Hermite cubic interpolation (Catmull-Rom)
         // Much lower aliasing than linear when pitchRatio != 1.0
@@ -149,7 +161,7 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
             const float c3     = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
             const float sample = ((c3 * frac + c2) * frac + c1) * frac + y1;
 
-            const float chGain = (ch == 0) ? leftGain : rightGain;
+            const float chGain = (ch == 0) ? gainL : gainR;
             outputBuffer.addSample(ch, i, sample * chGain * env);
         }
 

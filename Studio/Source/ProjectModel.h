@@ -122,13 +122,19 @@ struct Pattern
     juce::String channelNames  [kMaxChannels];
     SynthParams  synthParams   [kMaxChannels] = {};
 
+    // per-pattern mixer routing: channel → mixer track (0-7)
+    int channelMixerRouting[kMaxChannels] = {};
+
     Pattern()
     {
         std::fill_n(channelVolume, kMaxChannels, 0.8f);
         std::fill_n(channelPan,    kMaxChannels, 0.0f);
         std::fill_n(channelPitch,  kMaxChannels, 0.0f);
         for (int i = 0; i < kMaxChannels; ++i)
-            channelNames[i] = "Channel " + juce::String(i + 1);
+        {
+            channelNames[i]        = "Channel " + juce::String(i + 1);
+            channelMixerRouting[i] = i % 8;
+        }
     }
 };
 
@@ -192,7 +198,6 @@ struct Project
     std::vector<PlaylistTrack> playlistTracks;   // M11 — dynamic track rows
 
     // M5 — mixer
-    std::array<int, 16>       channelMixerRouting  = {};   // channel → mixer track (0-7)
     std::vector<MixerTrack>   mixerTracks;                  // 8 tracks initialised in MainComponent
     float                     masterVolume         = 1.0f;
     float                     masterPan            = 0.0f;
