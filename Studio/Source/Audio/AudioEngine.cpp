@@ -493,6 +493,10 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     for (auto& tb : mixerTrackBufs)
         tb.setSize(2, bufferSize);
 
+    // Dynamic EQ — prepare all processors
+    for (auto& deq : trackDynEQs_) deq.prepare(sampleRate, bufferSize);
+    masterDynEQ_.prepare(sampleRate, bufferSize);
+
     // M8 — re-prepare any already-loaded instrument plugins
     {
         juce::ScopedLock sl(pluginLock);
@@ -912,6 +916,14 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
                               ? project->fxParams[(size_t)t]
                               : FXParams{};
         fxChains[(size_t)t].processBlock(mixerTrackBufs[(size_t)t], safe, fp, bpm);
+
+        // Dynamic EQ insert on each track bus (post-FX)
+        if (trackDynEQs_[(size_t)t].isEnabled())
+        {
+            float* L = mixerTrackBufs[(size_t)t].getWritePointer(0);
+            float* R = mixerTrackBufs[(size_t)t].getWritePointer(1);
+            trackDynEQs_[(size_t)t].processBlock(L, R, safe);
+        }
     }
 
     // Check if any track is soloed
@@ -957,6 +969,14 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples)
                     output.addSample(1, s, mixerTrackBufs[(size_t)t].getSample(1, s) * mR);
             }
         }
+    }
+
+    // Master bus Dynamic EQ (post-sum, pre-output)
+    if (masterDynEQ_.isEnabled() && output.getNumChannels() >= 2)
+    {
+        float* L = output.getWritePointer(0);
+        float* R = output.getWritePointer(1);
+        masterDynEQ_.processBlock(L, R, safe);
     }
 }
 

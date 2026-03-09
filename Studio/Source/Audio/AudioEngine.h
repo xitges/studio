@@ -16,6 +16,7 @@
 #include "../SynthEngine.h"
 #include "../FXProcessor.h"
 #include "../PluginManager.h"
+#include "../DynamicEQProcessor.h"
 
 class AudioEngine : public juce::AudioIODeviceCallback,
                     public juce::MidiInputCallback
@@ -128,6 +129,10 @@ public:
     // Returns true on success.
     bool renderToFile(const juce::File& outputFile, PlayMode mode, int numBars);
 
+    // Dynamic EQ accessors (call on message thread; processBlock runs on audio thread)
+    DynamicEQProcessor& getTrackDynEQ (int t)  { return trackDynEQs_[(size_t)juce::jlimit(0,7,t)]; }
+    DynamicEQProcessor& getMasterDynEQ()        { return masterDynEQ_; }
+
     // M8 — VST/AU instrument plugins
     // loadPlugin: creates + prepares the plugin instance (call on message thread).
     // getPlugin:  returns the raw pointer for editor creation (message thread only).
@@ -189,6 +194,10 @@ private:
 
     double sampleRate = 44100.0;
     int    bufferSize = 512;
+
+    // Dynamic EQ — one per mixer track bus + one for master
+    std::array<DynamicEQProcessor, 8> trackDynEQs_;
+    DynamicEQProcessor                masterDynEQ_;
 
     // M8 — VST/AU instrument plugin hosting
     // Lock held by message thread (ScopedLock) on load/unload,
