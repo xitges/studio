@@ -47,7 +47,8 @@ private:
     // M15 — sample browser panel
     SampleBrowserComponent sampleBrowser;
     juce::Viewport         browserViewport;
-    bool showBrowser = false;
+    juce::TextButton       browserCollapseBtn;   // always-visible collapse/expand tab
+    bool isBrowserOpen = true;                   // default: open on launch
 
     // M3 — floating piano roll window
     std::unique_ptr<PianoRollWindow> pianoRollWindow;

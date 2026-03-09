@@ -14,17 +14,25 @@ public:
     // Fired when the user clicks a file — wire to audioEngine.previewBrowserFile()
     std::function<void(juce::File)> onPreviewFile;
 
+    // Fired when the in-header collapse button is clicked
+    std::function<void()> onCollapseClicked;
+
     SampleBrowserComponent()
     {
         addFolderBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff0f3460));
         addFolderBtn.onClick = [this] { chooseAndAddBookmark(); };
         addAndMakeVisible(addFolderBtn);
 
-        searchField.setTextToShowWhenEmpty("Search files...", juce::Colours::grey);
+        searchField.setTextToShowWhenEmpty("Search...", juce::Colours::grey);
         searchField.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff11111f));
         searchField.setColour(juce::TextEditor::outlineColourId,    juce::Colour(0xff2c2c54));
         searchField.onTextChange = [this] { rebuildList(); };
         addAndMakeVisible(searchField);
+
+        collapseBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff1a1a2e));
+        collapseBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff8888aa));
+        collapseBtn.onClick = [this] { if (onCollapseClicked) onCollapseClicked(); };
+        addAndMakeVisible(collapseBtn);
 
         listViewport.setViewedComponent(&listContent, false);
         listViewport.setScrollBarsShown(true, false);
@@ -39,8 +47,9 @@ public:
     {
         auto area = getLocalBounds();
         auto hdr  = area.removeFromTop(28).reduced(2, 2);
-        addFolderBtn.setBounds(hdr.removeFromLeft(72).reduced(1));
-        searchField .setBounds(hdr.reduced(2, 0));
+        addFolderBtn.setBounds(hdr.removeFromLeft(64).reduced(1));   // slightly narrower
+        collapseBtn .setBounds(hdr.removeFromRight(24).reduced(1));  // collapse tab on right
+        searchField .setBounds(hdr.reduced(2, 0));                   // search fills middle
         listViewport.setBounds(area);
         updateListSize();
     }
@@ -62,6 +71,7 @@ private:
 
     // ---- widgets ----------------------------------------------------------
     juce::TextButton addFolderBtn { "+ Folder" };
+    juce::TextButton collapseBtn  { "<" };
     juce::TextEditor searchField;
     juce::Viewport   listViewport;
 

@@ -295,6 +295,24 @@ MainComponent::MainComponent()
     browserViewport.setScrollBarsShown(true, false);
     browserViewport.setScrollBarThickness(6);
     addAndMakeVisible(browserViewport);
+
+    // In-browser collapse handled by SampleBrowserComponent's own button
+    sampleBrowser.onCollapseClicked = [this]
+    {
+        isBrowserOpen = false;
+        resized();
+    };
+
+    // Reopen tab — shown only when browser is closed, at the left edge
+    browserCollapseBtn.setButtonText(">");
+    browserCollapseBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff2a2a3a));
+    browserCollapseBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffb0b0c8));
+    browserCollapseBtn.onClick = [this]
+    {
+        isBrowserOpen = true;
+        resized();
+    };
+    addAndMakeVisible(browserCollapseBtn);
     playlistViewport.setScrollBarsShown(true, true);
     playlistViewport.setScrollBarThickness(8);
     addAndMakeVisible(playlistViewport);
@@ -715,8 +733,7 @@ MainComponent::MainComponent()
         dynEQWindows[(size_t)idx]->toFront(true);
     };
 
-    toolbar.onToggleMixer   = [this] { showMixer   = !showMixer;   resized(); };
-    toolbar.onToggleBrowser = [this] { showBrowser = !showBrowser; resized(); };
+    toolbar.onToggleMixer = [this] { showMixer = !showMixer; resized(); };
 
     // Launchpad toggle
     toolbar.onToggleLaunchpad = [this]
@@ -1351,13 +1368,27 @@ void MainComponent::resized()
     if (showMixer)
         mixer.setBounds(area.removeFromBottom(160));
 
-    // M15 — sample browser: left panel (220px wide, full remaining height)
-    browserViewport.setVisible(showBrowser);
-    if (showBrowser)
+    // M15 — sample browser: left panel, collapsible
+    constexpr int kBrowserW  = 220;
+    constexpr int kReopenW   = 22;
+    constexpr int kReopenH   = 32;
+
+    browserViewport.setVisible(isBrowserOpen);
+    if (isBrowserOpen)
     {
-        auto browserArea = area.removeFromLeft(220);
+        // Collapse button is INSIDE the browser header — hide the external tab
+        browserCollapseBtn.setVisible(false);
+
+        auto browserArea = area.removeFromLeft(kBrowserW);
         browserViewport.setBounds(browserArea);
-        sampleBrowser.setSize(220, juce::jmax(browserArea.getHeight(), 800));
+        sampleBrowser.setSize(kBrowserW, juce::jmax(browserArea.getHeight(), 800));
+    }
+    else
+    {
+        // Show the reopen ">" tab at the top-left, flush with toolbar bottom
+        browserCollapseBtn.setVisible(true);
+        browserCollapseBtn.setBounds(0, area.getY(), kReopenW, kReopenH);
+        browserCollapseBtn.toFront(false);
     }
 
     const int playlistHeight = (int)(area.getHeight() * 0.38f);
