@@ -93,6 +93,18 @@ public:
     // Silence all synth voices immediately (called on Stop)
     void allSynthNotesOff();
 
+    // Silence a specific pitch on a specific channel (called when piano roll note is deleted)
+    void noteOffChannel(int ch, int midiPitch)
+    {
+        if (ch >= 0 && ch < 16)
+            polySynths[(size_t)ch].noteOff(midiPitch);
+    }
+
+    float getChannelBasePitch(int ch) const
+    {
+        return (ch >= 0 && ch < 16) ? channelBasePitch[ch] : 0.0f;
+    }
+
     // M13 — trigger a synth note directly (used by piano key preview for melodic synth channels)
     void previewSynthNote(int ch, int midiPitch, const SynthParams& p);
 

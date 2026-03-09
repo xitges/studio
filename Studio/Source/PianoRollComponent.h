@@ -38,11 +38,23 @@ public:
     // Fired after any note edit so MainComponent can mark dirty
     std::function<void()> onNotesChanged;
 
+    // Fired when a note is deleted — wire to AudioEngine::noteOffChannel
+    std::function<void(int midiPitch)> onNoteDeleted;
+
     // Fired when the user clicks a piano key — wire to AudioEngine::previewNote
     std::function<void(int midiPitch)> onKeyPreview;
 
     // Fired when Space is pressed — wire to MainComponent play/stop toggle
     std::function<void()> onPlayStopToggle;
+
+    // ---- Recording --------------------------------------------------------
+    void setRecording(bool r)
+    {
+        recording_ = r;
+        if (!r) pendingRecNotes_.fill({});  // discard any held notes
+        repaint();
+    }
+    bool isRecording() const { return recording_; }
 
     // -----------------------------------------------------------------------
     int getNeededWidth() const
@@ -100,7 +112,9 @@ public:
             {
                 if (noteHitRect(noteList[(size_t)i]).contains(pos))
                 {
+                    const int deletedPitch = noteList[(size_t)i].pitch;
                     noteList.erase(noteList.begin() + i);
+                    if (onNoteDeleted)   onNoteDeleted(deletedPitch);
                     if (onNotesChanged) onNotesChanged();
                     repaint();
                     return;
@@ -174,7 +188,13 @@ public:
 
         if (resizingNote)
         {
-            note.lengthBeats = juce::jmax(snapBeats, snapBeat(dragStartLen + dx));
+            // Alt = free resize (no snap); otherwise snap to grid
+            // Minimum is always 1/64 note regardless of snap setting
+            const float raw = dragStartLen + dx;
+            const float snapped = e.mods.isAltDown()
+                                  ? raw
+                                  : snapBeat(raw);
+            note.lengthBeats = juce::jmax(kMinNoteLen, snapped);
         }
         else
         {
@@ -304,7 +324,9 @@ public:
                     cursorBeat >= n.startBeat &&
                     cursorBeat <  n.startBeat + n.lengthBeats)
                 {
+                    const int deletedPitch = n.pitch;
                     noteList.erase(noteList.begin() + i);
+                    if (onNoteDeleted)   onNoteDeleted(deletedPitch);
                     if (onNotesChanged) onNotesChanged();
                     repaint();
                     break;
@@ -337,17 +359,49 @@ public:
 
             if (down && !heldKeyState[idx])
             {
-                heldKeyState[idx]      = true;
+                heldKeyState[idx]       = true;
                 keyboardHeldPitch[pidx] = true;
                 needRepaint = true;
                 if (pitch >= minPitch && pitch <= maxPitch && onKeyPreview)
                     onKeyPreview(pitch);
+
+                // Recording: note-on
+                if (recording_ && playheadBeat >= 0.0 && pattern != nullptr)
+                {
+                    auto& prn     = pendingRecNotes_[(size_t)pidx];
+                    prn.active    = true;
+                    prn.startBeat = snapBeat((float)playheadBeat);
+                }
             }
             else if (!down && heldKeyState[idx])
             {
-                heldKeyState[idx]      = false;
+                heldKeyState[idx]       = false;
                 keyboardHeldPitch[pidx] = false;
                 needRepaint = true;
+
+                // Recording: note-off → commit NoteEvent
+                if (recording_ && pattern != nullptr)
+                {
+                    auto& prn = pendingRecNotes_[(size_t)pidx];
+                    if (prn.active)
+                    {
+                        prn.active = false;
+                        float len  = (float)playheadBeat - prn.startBeat;
+                        // Handle pattern loop wraparound
+                        if (len <= 0.0f)
+                            len += (float)(pattern->stepCount) * 0.25f;
+                        len = juce::jmax(kMinNoteLen, len);
+
+                        NoteEvent n;
+                        n.pitch       = pidx;
+                        n.startBeat   = prn.startBeat;
+                        n.lengthBeats = len;
+                        n.velocity    = 0.8f;
+                        pattern->notes[channel].push_back(n);
+                        if (onNotesChanged) onNotesChanged();
+                        needRepaint = true;
+                    }
+                }
             }
         }
         if (needRepaint) repaint();
@@ -362,15 +416,16 @@ private:
     double   playheadBeat = -1.0;
     float    snapBeats    = 0.25f;   // default: 1/16 note
 
-    static constexpr int keyWidth      = 60;
-    static constexpr int headerH      = 24;
-    static constexpr int noteH        = 12;
-    static constexpr int pixelsPerBeat = 80;
-    static constexpr int minPitch     = 21;   // A0
-    static constexpr int maxPitch     = 108;  // C8
-    static constexpr int resizeZone   = 8;    // px from right edge
-    static constexpr int velLaneH     = 72;   // velocity lane height
-    static constexpr int velLaneSep   = 4;    // gap between note area and vel lane
+    static constexpr int   keyWidth      = 60;
+    static constexpr int   headerH      = 24;
+    static constexpr int   noteH        = 12;
+    static constexpr int   pixelsPerBeat = 80;
+    static constexpr int   minPitch     = 21;   // A0
+    static constexpr int   maxPitch     = 108;  // C8
+    static constexpr int   resizeZone   = 8;    // px from right edge
+    static constexpr int   velLaneH     = 72;   // velocity lane height
+    static constexpr int   velLaneSep   = 4;    // gap between note area and vel lane
+    static constexpr float kMinNoteLen  = 0.0625f; // 1/64 note minimum length
 
     int   octaveOffset    = 0;
     bool  heldKeyState[256] = {};
@@ -379,6 +434,11 @@ private:
     // Keyboard cursor for note entry (arrow key navigation)
     float cursorBeat  = 0.0f;
     int   cursorPitch = 60;
+
+    // ---- Recording state --------------------------------------------------
+    bool recording_ = false;
+    struct PendingRecNote { bool active = false; float startBeat = 0.0f; };
+    std::array<PendingRecNote, 128> pendingRecNotes_ {};
 
     int   hoverPitch      = -1;
     int   draggingIdx     = -1;
@@ -501,8 +561,19 @@ private:
 
     void drawRuler(juce::Graphics& g)
     {
-        g.setColour(juce::Colour(0xff0f3460));
+        // Tint ruler red when recording
+        g.setColour(recording_ ? juce::Colour(0xff3a0a0a) : juce::Colour(0xff0f3460));
         g.fillRect(0, 0, getWidth(), headerH);
+
+        // Flashing "REC" dot
+        if (recording_ && playheadBeat >= 0.0)
+        {
+            g.setColour(juce::Colour(0xffff2222));
+            g.fillEllipse(4.0f, 5.0f, 8.0f, 8.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.9f));
+            g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
+            g.drawText("REC", 15, 0, 36, headerH, juce::Justification::centredLeft);
+        }
         g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
 
         if (pattern == nullptr) return;
@@ -699,6 +770,7 @@ class PianoRollWindow : public juce::DocumentWindow
         PianoRollComponent pianoRoll;
         juce::Viewport     viewport;
         juce::ComboBox     snapBox;
+        juce::TextButton   recBtn { "REC" };
 
         ContentPane()
         {
@@ -724,12 +796,26 @@ class PianoRollWindow : public juce::DocumentWindow
                     pianoRoll.setSnapBeats(beats[idx]);
             };
             addAndMakeVisible(snapBox);
+
+            // REC button — toggle recording mode
+            recBtn.setClickingTogglesState(true);
+            recBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2a1010));
+            recBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffcc1111));
+            recBtn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xffcc6666));
+            recBtn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+            recBtn.onClick = [this]
+            {
+                pianoRoll.setRecording(recBtn.getToggleState());
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(recBtn);
         }
 
         void resized() override
         {
             const int snapH = 26;
-            snapBox.setBounds(getWidth() - 96, 0, 90, snapH);
+            recBtn .setBounds(getWidth() - 96 - 52, 0, 48, snapH);
+            snapBox.setBounds(getWidth() - 96,       0, 90, snapH);
             viewport.setBounds(0, snapH, getWidth(), getHeight() - snapH);
 
             const int cw = juce::jmax(viewport.getWidth(),  pianoRoll.getNeededWidth());

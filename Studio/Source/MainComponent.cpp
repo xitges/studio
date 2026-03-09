@@ -519,6 +519,13 @@ MainComponent::MainComponent()
         {
             pianoRollWindow->content.pianoRoll.setPattern(pat, ch, project.bpm);
             pianoRollWindow->content.pianoRoll.onNotesChanged = [this] { markDirty(); };
+            pianoRollWindow->content.pianoRoll.onNoteDeleted  = [this, ch](int pitch)
+            {
+                // Apply channelBasePitch transposition to match what was actually triggered
+                const int tp = juce::jlimit(0, 127,
+                    pitch + (int)std::round(audioEngine.getChannelBasePitch(ch)));
+                audioEngine.noteOffChannel(ch, tp);
+            };
             pianoRollWindow->content.pianoRoll.onKeyPreview   = [this, ch](int pitch)
             {
                 audioEngine.previewNote(ch, pitch);
