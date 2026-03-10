@@ -571,6 +571,13 @@ MainComponent::MainComponent()
                     audioEngine.play();
                 }
             };
+
+            // Smart Record: armed trigger fires transport from beat 0
+            pianoRollWindow->content.pianoRoll.onStartTransport = [this]
+            {
+                syncPatternToEngine();
+                audioEngine.play();
+            };
         }
 
         pianoRollWindow->setVisible(true);

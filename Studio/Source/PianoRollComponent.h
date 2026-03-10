@@ -35,6 +35,20 @@ public:
 
     void setSnapBeats(float s) { snapBeats = s; repaint(); }
 
+    // Clear all notes for the current channel
+    void clearNotes()
+    {
+        if (pattern == nullptr) return;
+        pattern->notes[channel].clear();
+        if (onNotesChanged) onNotesChanged();
+        repaint();
+    }
+
+    // ---- Quantize (real-time recording correction) -------------------------
+    void setQuantize(bool enabled)    { quantizeEnabled = enabled; }
+    void setQuantizeGrid(float grid)  { quantizeGrid    = grid;    }
+    bool isQuantizeEnabled() const    { return quantizeEnabled;    }
+
     // Horizontal zoom: pixelsPerBeat in [40, 400]
     void setZoom(int newPixelsPerBeat)
     {
@@ -58,14 +72,74 @@ public:
     // Fired when Space is pressed — wire to MainComponent play/stop toggle
     std::function<void()> onPlayStopToggle;
 
-    // ---- Recording --------------------------------------------------------
+    // ---- Smart Record System -----------------------------------------------
+    enum class RecState { Idle, Armed, Recording };
+
+    // Fired when the Armed→Recording trigger fires (wire to transport start)
+    std::function<void()> onStartTransport;
+
+    // Fired whenever RecState changes (wire to ContentPane UI update)
+    std::function<void()> onRecordingStateChanged;
+
     void setRecording(bool r)
     {
-        recording_ = r;
-        if (!r) pendingRecNotes_.fill({});  // discard any held notes
+        if (r)
+        {
+            if (triggerEnabled) enterArmed();
+            else                startRecording();
+        }
+        else
+        {
+            stopRecording();
+        }
+    }
+    bool     isRecording()  const { return recording_; }
+    RecState getRecState()  const { return currentRecState; }
+
+    void setTriggerEnabled(bool t) { triggerEnabled = t; }
+    bool isTriggerEnabled()  const { return triggerEnabled; }
+
+    // Blink state driven by ContentPane timer during Armed state
+    void setArmedBlink(bool b) { armedBlink = b; repaint(); }
+
+    // ---- Session nudge / align (operates on last recorded block) -----------
+    void nudgeSession(float deltaBeats)
+    {
+        if (pattern == nullptr) return;
+        auto& nl = pattern->notes[channel];
+        const int endIdx = juce::jmin(sessionEndIdx, (int)nl.size() - 1);
+        if (sessionStartIdx > endIdx) return;
+
+        const float patLen = pattern->stepCount * 0.25f;
+        for (int i = sessionStartIdx; i <= endIdx; ++i)
+        {
+            nl[(size_t)i].startBeat += deltaBeats;
+            // Wrap within pattern range [0, patLen)
+            while (nl[(size_t)i].startBeat < 0.0f)  nl[(size_t)i].startBeat += patLen;
+            while (nl[(size_t)i].startBeat >= patLen) nl[(size_t)i].startBeat -= patLen;
+        }
+        if (onNotesChanged) onNotesChanged();
         repaint();
     }
-    bool isRecording() const { return recording_; }
+
+    void alignSession(float gridBeats)
+    {
+        if (pattern == nullptr) return;
+        auto& nl = pattern->notes[channel];
+        const int endIdx = juce::jmin(sessionEndIdx, (int)nl.size() - 1);
+        if (sessionStartIdx > endIdx) return;
+
+        const float firstBeat = nl[(size_t)sessionStartIdx].startBeat;
+        const float aligned   = std::round(firstBeat / gridBeats) * gridBeats;
+        nudgeSession(aligned - firstBeat);
+    }
+
+    bool hasSession() const
+    {
+        if (pattern == nullptr) return false;
+        const int endIdx = juce::jmin(sessionEndIdx, (int)pattern->notes[channel].size() - 1);
+        return sessionStartIdx <= endIdx;
+    }
 
     // -----------------------------------------------------------------------
     int getNeededWidth() const
@@ -90,6 +164,7 @@ public:
         drawNotes(g);
         drawPlayhead(g);
         drawVelocityLane(g);
+        drawArmedOverlay(g);
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -430,12 +505,24 @@ public:
                 if (pitch >= minPitch && pitch <= maxPitch && onKeyPreview)
                     onKeyPreview(pitch);
 
-                // Recording: note-on
+                // Armed → Recording trigger: first keypress fires transport
+                if (currentRecState == RecState::Armed)
+                {
+                    startRecording();
+                    if (onStartTransport) onStartTransport();
+                }
+
+                // Recording: note-on — capture quantize policy at this instant
                 if (recording_ && playheadBeat >= 0.0 && pattern != nullptr)
                 {
-                    auto& prn     = pendingRecNotes_[(size_t)pidx];
-                    prn.active    = true;
-                    prn.startBeat = snapBeat((float)playheadBeat);
+                    auto& prn         = pendingRecNotes_[(size_t)pidx];
+                    prn.active        = true;
+                    prn.wasQuantized  = quantizeEnabled;   // snapshot
+                    prn.capturedGrid  = quantizeGrid;      // snapshot
+                    const float rawBeat = (float)playheadBeat;
+                    prn.startBeat = prn.wasQuantized
+                        ? std::round(rawBeat / prn.capturedGrid) * prn.capturedGrid
+                        : rawBeat;
                 }
             }
             else if (!down && heldKeyState[idx])
@@ -451,11 +538,23 @@ public:
                     if (prn.active)
                     {
                         prn.active = false;
-                        float len  = (float)playheadBeat - prn.startBeat;
+                        float len = (float)playheadBeat - prn.startBeat;
                         // Handle pattern loop wraparound
                         if (len <= 0.0f)
                             len += (float)(pattern->stepCount) * 0.25f;
-                        len = juce::jmax(kMinNoteLen, len);
+
+                        // Use the policy captured at note-on — not current state
+                        if (prn.wasQuantized)
+                        {
+                            // Round length to nearest quantize unit; minimum 1 unit
+                            // capturedGrid is also used here, so start+length stay consistent
+                            len = juce::jmax(prn.capturedGrid,
+                                             std::round(len / prn.capturedGrid) * prn.capturedGrid);
+                        }
+                        else
+                        {
+                            len = juce::jmax(kMinNoteLen, len);
+                        }
 
                         NoteEvent n;
                         n.pitch       = pidx;
@@ -463,6 +562,7 @@ public:
                         n.lengthBeats = len;
                         n.velocity    = 0.8f;
                         pattern->notes[channel].push_back(n);
+                        sessionEndIdx = (int)pattern->notes[channel].size() - 1;
                         if (onNotesChanged) onNotesChanged();
                         needRepaint = true;
                     }
@@ -501,8 +601,25 @@ private:
     int   cursorPitch = 60;
 
     // ---- Recording state --------------------------------------------------
-    bool recording_ = false;
-    struct PendingRecNote { bool active = false; float startBeat = 0.0f; };
+    bool     recording_        = false;
+    RecState currentRecState   = RecState::Idle;
+    bool     triggerEnabled    = false;
+    bool     armedBlink        = false;
+    int      sessionStartIdx   = 0;   // notes[channel] index at record start
+    int      sessionEndIdx     = -1;  // index of last committed note in session
+    bool  quantizeEnabled  = true;    // real-time quantize ON by default
+    float quantizeGrid     = 0.25f;   // quantize resolution (beats); default 1/16
+
+    // Quantize settings are captured at note-on time so that a single NoteEvent
+    // is always processed with a consistent policy, even if the user toggles the
+    // button between note-on and note-off.
+    struct PendingRecNote
+    {
+        bool  active        = false;
+        float startBeat     = 0.0f;
+        bool  wasQuantized  = false;  // snapshot of quantizeEnabled at note-on
+        float capturedGrid  = 0.25f;  // snapshot of quantizeGrid   at note-on
+    };
     std::array<PendingRecNote, 128> pendingRecNotes_ {};
 
     int   hoverPitch      = -1;
@@ -924,6 +1041,58 @@ private:
         g.fillPath(cap);
     }
 
+    // ---- Armed overlay (blink) --------------------------------------------
+    void drawArmedOverlay(juce::Graphics& g)
+    {
+        if (currentRecState != RecState::Armed) return;
+
+        // Pulsing tint over the note area
+        g.setColour(juce::Colour(0xffcc1111).withAlpha(armedBlink ? 0.07f : 0.02f));
+        g.fillRect(keyWidth, headerH, getWidth() - keyWidth, velLaneY() - headerH);
+
+        // Text centred in the visible note grid
+        g.setColour(juce::Colour(0xffff5555).withAlpha(armedBlink ? 0.92f : 0.35f));
+        g.setFont(juce::Font(juce::FontOptions().withHeight(14.0f).withStyle("Bold")));
+        g.drawText("Waiting for key input...",
+                   keyWidth, headerH,
+                   getWidth() - keyWidth, velLaneY() - headerH,
+                   juce::Justification::centred);
+    }
+
+    // ---- State machine transitions ----------------------------------------
+    void enterArmed()
+    {
+        currentRecState = RecState::Armed;
+        recording_      = false;
+        pendingRecNotes_.fill({});
+        if (pattern != nullptr)
+            sessionStartIdx = (int)pattern->notes[channel].size();
+        sessionEndIdx = sessionStartIdx - 1;
+        if (onRecordingStateChanged) onRecordingStateChanged();
+        repaint();
+    }
+
+    void startRecording()
+    {
+        currentRecState = RecState::Recording;
+        recording_      = true;
+        if (pattern != nullptr)
+            sessionStartIdx = (int)pattern->notes[channel].size();
+        sessionEndIdx = sessionStartIdx - 1;
+        if (onRecordingStateChanged) onRecordingStateChanged();
+        repaint();
+    }
+
+    void stopRecording()
+    {
+        currentRecState = RecState::Idle;
+        recording_      = false;
+        armedBlink      = false;
+        pendingRecNotes_.fill({});
+        if (onRecordingStateChanged) onRecordingStateChanged();
+        repaint();
+    }
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PianoRollComponent)
 };
 
@@ -935,12 +1104,22 @@ class PianoRollWindow : public juce::DocumentWindow
 {
     // DocumentWindow only accepts a single content component, so we wrap
     // the viewport + snap selector together in a plain Component.
-    struct ContentPane : public juce::Component
+    struct ContentPane : public juce::Component,
+                         private juce::Timer
     {
         PianoRollComponent pianoRoll;
         juce::Viewport     viewport;
         juce::ComboBox     snapBox;
-        juce::TextButton   recBtn { "REC" };
+        juce::TextButton   recBtn        { "REC" };
+        juce::TextButton   quantizeBtn   { "Q" };
+        juce::ComboBox     quantizeBox;
+        juce::TextButton   clearBtn      { "Clear" };
+        juce::TextButton   triggerBtn    { "Trigger" };
+        juce::TextButton   nudgeLeftBtn  { "<" };
+        juce::TextButton   nudgeRightBtn { ">" };
+        juce::TextButton   alignBtn      { "Align" };
+
+        bool blinkState = false;
 
         ContentPane()
         {
@@ -949,13 +1128,14 @@ class PianoRollWindow : public juce::DocumentWindow
             viewport.setScrollBarThickness(8);
             addAndMakeVisible(viewport);
 
-            snapBox.addItem("0.05",  1);   // finest: 0.05 beats
+            // ---- Edit snap box (left of REC) --------------------------------
+            snapBox.addItem("0.05",  1);
             snapBox.addItem("1/16",  2);
             snapBox.addItem("1/8",   3);
             snapBox.addItem("1/4",   4);
             snapBox.addItem("1/2",   5);
             snapBox.addItem("1 Bar", 6);
-            snapBox.setSelectedId(2, juce::dontSendNotification);   // default: 1/16
+            snapBox.setSelectedId(2, juce::dontSendNotification);
             snapBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
             snapBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
             snapBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
@@ -968,7 +1148,7 @@ class PianoRollWindow : public juce::DocumentWindow
             };
             addAndMakeVisible(snapBox);
 
-            // REC button — toggle recording mode
+            // ---- REC button -------------------------------------------------
             recBtn.setClickingTogglesState(true);
             recBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2a1010));
             recBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffcc1111));
@@ -980,18 +1160,173 @@ class PianoRollWindow : public juce::DocumentWindow
                 pianoRoll.grabKeyboardFocus();
             };
             addAndMakeVisible(recBtn);
+
+            // ---- Trigger toggle (arm-and-wait mode) -------------------------
+            triggerBtn.setClickingTogglesState(true);
+            triggerBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff1a1a2a));
+            triggerBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2255aa));
+            triggerBtn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xff7788aa));
+            triggerBtn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+            triggerBtn.onClick = [this]
+            {
+                pianoRoll.setTriggerEnabled(triggerBtn.getToggleState());
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(triggerBtn);
+
+            // ---- Nudge left / right -----------------------------------------
+            nudgeLeftBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff1c2030));
+            nudgeLeftBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffaabbdd));
+            nudgeLeftBtn.onClick = [this]
+            {
+                // Nudge by current snap grid
+                static const float beats[] = { 0.05f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+                const int idx = snapBox.getSelectedId() - 1;
+                const float step = (idx >= 0 && idx < 6) ? beats[idx] : 0.25f;
+                pianoRoll.nudgeSession(-step);
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(nudgeLeftBtn);
+
+            nudgeRightBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff1c2030));
+            nudgeRightBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffaabbdd));
+            nudgeRightBtn.onClick = [this]
+            {
+                static const float beats[] = { 0.05f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+                const int idx = snapBox.getSelectedId() - 1;
+                const float step = (idx >= 0 && idx < 6) ? beats[idx] : 0.25f;
+                pianoRoll.nudgeSession(step);
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(nudgeRightBtn);
+
+            // ---- Align (snap session start to nearest grid unit) ------------
+            alignBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff1c2030));
+            alignBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffaabbdd));
+            alignBtn.onClick = [this]
+            {
+                static const float beats[] = { 0.05f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
+                const int idx = snapBox.getSelectedId() - 1;
+                const float grid = (idx >= 0 && idx < 6) ? beats[idx] : 0.25f;
+                pianoRoll.alignSession(grid);
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(alignBtn);
+
+            // ---- Wire PianoRoll state changes → ContentPane UI -------------
+            pianoRoll.onRecordingStateChanged = [this]
+            {
+                const auto state = pianoRoll.getRecState();
+                const bool active = (state != PianoRollComponent::RecState::Idle);
+                recBtn.setToggleState(active, juce::dontSendNotification);
+
+                if (state == PianoRollComponent::RecState::Armed)
+                {
+                    startTimer(500);   // blink at 2 Hz
+                }
+                else
+                {
+                    stopTimer();
+                    blinkState = false;
+                    pianoRoll.setArmedBlink(false);
+                }
+
+                updateSessionButtons();
+            };
+
+            updateSessionButtons();  // initial state
+
+            // ---- Quantize toggle (Q) ----------------------------------------
+            quantizeBtn.setClickingTogglesState(true);
+            quantizeBtn.setToggleState(true, juce::dontSendNotification);  // ON by default
+            quantizeBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff1a2a1a));
+            quantizeBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff27ae60));
+            quantizeBtn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xff668866));
+            quantizeBtn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+            quantizeBtn.onClick = [this]
+            {
+                pianoRoll.setQuantize(quantizeBtn.getToggleState());
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(quantizeBtn);
+
+            // ---- Clear all notes button -------------------------------------
+            clearBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff2a1818));
+            clearBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffcc8888));
+            clearBtn.onClick = [this]
+            {
+                pianoRoll.clearNotes();
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(clearBtn);
+
+            // ---- Quantize grid (1/4 / 1/8 / 1/16 / 1/32) -------------------
+            quantizeBox.addItem("1/4",  1);
+            quantizeBox.addItem("1/8",  2);
+            quantizeBox.addItem("1/16", 3);   // default
+            quantizeBox.addItem("1/32", 4);
+            quantizeBox.setSelectedId(3, juce::dontSendNotification);
+            quantizeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff162016));
+            quantizeBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
+            quantizeBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
+            quantizeBox.onChange = [this]
+            {
+                static const float grids[] = { 1.0f, 0.5f, 0.25f, 0.125f };
+                const int idx = quantizeBox.getSelectedId() - 1;
+                if (idx >= 0 && idx < 4)
+                    pianoRoll.setQuantizeGrid(grids[idx]);
+            };
+            addAndMakeVisible(quantizeBox);
         }
 
         void resized() override
         {
             const int snapH = 26;
-            recBtn .setBounds(getWidth() - 96 - 52, 0, 48, snapH);
-            snapBox.setBounds(getWidth() - 96,       0, 90, snapH);
+
+            // Left side: [Q toggle | quantize grid]
+            quantizeBtn.setBounds(4,   1, 28, snapH - 2);
+            quantizeBox.setBounds(34,  0, 68, snapH);
+
+            // Right side: [Clear | REC | edit snap]
+            clearBtn.setBounds(getWidth() - 96 - 52 - 50, 0, 46, snapH);
+            recBtn  .setBounds(getWidth() - 96 - 52,      0, 48, snapH);
+            snapBox .setBounds(getWidth() - 96,           0, 90, snapH);
+
+            // Centre: [Trigger | < | > | Align]  — session controls
+            {
+                const int totalW  = 56 + 28 + 28 + 44;   // 156 px
+                int mx = (getWidth() - totalW) / 2;
+                triggerBtn   .setBounds(mx, 0, 54, snapH);  mx += 58;
+                nudgeLeftBtn .setBounds(mx, 0, 26, snapH);  mx += 30;
+                nudgeRightBtn.setBounds(mx, 0, 26, snapH);  mx += 30;
+                alignBtn     .setBounds(mx, 0, 42, snapH);
+            }
+
             viewport.setBounds(0, snapH, getWidth(), getHeight() - snapH);
 
             const int cw = juce::jmax(viewport.getWidth(),  pianoRoll.getNeededWidth());
             const int ch = juce::jmax(viewport.getHeight(), pianoRoll.getNeededHeight());
             pianoRoll.setSize(cw, ch);
+        }
+
+        // --- Timer: drives armed blink ---
+        void timerCallback() override
+        {
+            blinkState = !blinkState;
+            pianoRoll.setArmedBlink(blinkState);
+            updateSessionButtons();
+        }
+
+        // Enable/disable nudge+align based on whether a session exists
+        void updateSessionButtons()
+        {
+            const bool hasSession = pianoRoll.hasSession();
+            nudgeLeftBtn .setEnabled(hasSession);
+            nudgeRightBtn.setEnabled(hasSession);
+            alignBtn     .setEnabled(hasSession);
+            nudgeLeftBtn .setAlpha(hasSession ? 1.0f : 0.4f);
+            nudgeRightBtn.setAlpha(hasSession ? 1.0f : 0.4f);
+            alignBtn     .setAlpha(hasSession ? 1.0f : 0.4f);
         }
     };
 

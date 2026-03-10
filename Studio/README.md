@@ -319,6 +319,45 @@ Projects are saved as `.studioproj` files (XML format). Saved data includes: pat
 | M16 | Auto-save, Recent Files, Project Templates | Planned |
 | — | Launchpad (8×8 sample pads + sequence recording) | **Done** |
 | — | Per-pattern sample isolation | **Done** |
+| M17 | Piano Roll Recording — MIDI Audio-Thread Timestamps | Planned |
+| M18 | MVC Architecture — Quantize / Grid settings in ProjectModel | Planned |
+
+---
+
+## Planned Milestones — Detail
+
+### M17 · Piano Roll Recording: MIDI Audio-Thread Timestamps
+
+**문제:** `keyStateChanged`는 UI(메시지) 스레드에서 호출되어 OS 메시지 큐 지연이
+발생할 수 있다. CPU 부하가 높을 때 실제 연주 시점보다 늦게 `playheadBeat`가
+캡처되어 타이밍이 어긋난다.
+
+**목표:** `AudioEngine::handleIncomingMidiMessage`(오디오 스레드)에서
+note-on/off 타임스탬프를 고정밀로 기록하고, lock-free 큐(예: `juce::AbstractFifo`)
+를 통해 메시지 스레드의 `PianoRollComponent`에 전달한다.
+
+**주요 작업:**
+- AudioEngine에 lock-free MIDI event FIFO 추가
+- 오디오 콜백에서 sample-accurate beat position 계산
+- PianoRollComponent의 timerCallback(30 Hz)에서 FIFO를 drain하여 NoteEvent 커밋
+- 기존 `keyStateChanged` 경로는 fallback으로 유지(MIDI 장치 없는 환경)
+
+---
+
+### M18 · MVC Architecture: Quantize / Grid를 ProjectModel로 이동
+
+**문제:** `quantizeEnabled`, `quantizeGrid` 등 녹음 설정이 `PianoRollComponent`
+내부에 저장되어 있어, 다른 컴포넌트(Step Sequencer, Launchpad 녹음 등)와
+공유하거나 프로젝트 파일에 저장하려면 중복 코드가 생긴다.
+
+**목표:** 녹음·퀀타이즈 관련 설정을 `ProjectModel`(또는 별도 `RecordingSettings`
+구조체)로 이동시키고, UI는 해당 모델을 참조만 하는 단방향 흐름을 강화한다.
+
+**주요 작업:**
+- `ProjectModel.h`에 `RecordingSettings { bool quantizeEnabled; float quantizeGrid; }` 추가
+- `ProjectSerializer`에 저장/불러오기 연동
+- `PianoRollComponent`, `LaunchpadComponent` 등이 모델을 포인터로 참조
+- `onSettingsChanged` 콜백으로 UI 동기화
 
 ---
 
