@@ -527,10 +527,14 @@ public:
                     prn.active        = true;
                     prn.wasQuantized  = quantizeEnabled;   // snapshot
                     prn.capturedGrid  = quantizeGrid;      // snapshot
-                    const float rawBeat = (float)playheadBeat;
+                    const float rawBeat    = (float)playheadBeat;
+                    const float totalBeats = (float)pattern->stepCount * 0.25f;
                     prn.startBeat = prn.wasQuantized
                         ? std::round(rawBeat / prn.capturedGrid) * prn.capturedGrid
                         : rawBeat;
+                    // Quantize rounding can push startBeat to exactly totalBeats — wrap to 0
+                    if (prn.startBeat >= totalBeats)
+                        prn.startBeat = 0.0f;
                 }
             }
             else if (!down && heldKeyState[idx])
@@ -546,23 +550,18 @@ public:
                     if (prn.active)
                     {
                         prn.active = false;
+                        const float totalBeats = (float)pattern->stepCount * 0.25f;
                         float len = (float)playheadBeat - prn.startBeat;
-                        // Handle pattern loop wraparound
-                        if (len <= 0.0f)
-                            len += (float)(pattern->stepCount) * 0.25f;
+                        // Loop wraparound — only apply if len is genuinely negative
+                        // (beyond quantize rounding error), not just a floating-point artifact
+                        if (len < -(prn.capturedGrid * 0.5f))
+                            len += totalBeats;
 
                         // Use the policy captured at note-on — not current state
+                        const float minLen = prn.wasQuantized ? prn.capturedGrid : kMinNoteLen;
                         if (prn.wasQuantized)
-                        {
-                            // Round length to nearest quantize unit; minimum 1 unit
-                            // capturedGrid is also used here, so start+length stay consistent
-                            len = juce::jmax(prn.capturedGrid,
-                                             std::round(len / prn.capturedGrid) * prn.capturedGrid);
-                        }
-                        else
-                        {
-                            len = juce::jmax(kMinNoteLen, len);
-                        }
+                            len = std::round(len / prn.capturedGrid) * prn.capturedGrid;
+                        len = juce::jmax(minLen, len);
 
                         NoteEvent n;
                         n.pitch       = pidx;
