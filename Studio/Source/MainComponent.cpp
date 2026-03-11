@@ -908,6 +908,11 @@ MainComponent::MainComponent()
     };
 
     setWantsKeyboardFocus(true);
+
+    // Sync engine with the initial pattern so previewNote / synth works before first Play
+    audioEngine.setActivePattern(activePatternId);
+    audioEngine.updatePatternSnapshot();
+
     startTimerHz(30);
     setSize(1600, 900);
 }

@@ -18,6 +18,7 @@ public:
 
     void loadFile(const juce::File& file);
     void trigger();
+    void triggerAt(int offsetInBuffer);   // sample-accurate trigger (audio thread only)
     void prepare(double sampleRate, int bufferSize);
     void reset();
     void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int numSamples);
@@ -80,6 +81,8 @@ private:
     bool muted = false;
 
     std::atomic<bool> triggered { false };
+    int triggerOffset_ = 0;   // set by triggerAt(), consumed in renderNextBlock (audio thread only)
+    int startOffset_   = 0;   // active start-offset for the current render block
 
     // Thread safety: protects fileBuffer between main-thread loadFile
     // and audio-thread renderNextBlock.  The audio thread uses a non-blocking

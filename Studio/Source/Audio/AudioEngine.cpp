@@ -11,7 +11,7 @@
 #include "AudioEngine.h"
 
 AudioEngine::AudioEngine()
-    : sequencer([this](int ch) { triggerChannel(ch); })
+    : sequencer([this](int ch, int offset) { triggerChannel(ch, offset); })
 {
 }
 
@@ -218,7 +218,15 @@ void AudioEngine::allSynthNotesOff()
 void AudioEngine::previewNote(int ch, int midiPitch)
 {
     if (ch < 0 || ch >= 16) return;
-    // Use snapshot for lock-free access on audio/message thread
+
+    // If snapshot is stale (patternId == -1), refresh it now.
+    // This happens when previewNote is called before the first Play (e.g. synth just enabled).
+    {
+        const int idx = activeSnapshotIdx_.load(std::memory_order_acquire);
+        if (snapshots_[idx].patternId < 0)
+            updatePatternSnapshot();
+    }
+
     const PlaybackSnapshot& prevSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
     if (prevSnap.patternId >= 0 && prevSnap.synthParams[(size_t)ch].enabled)
     {
@@ -349,7 +357,7 @@ void AudioEngine::buildSongSampleCache()
     }
 }
 
-void AudioEngine::triggerChannel(int channelIndex)
+void AudioEngine::triggerChannel(int channelIndex, int offsetInBuffer)
 {
     if (channelIndex < 0 || channelIndex >= 16) return;
 
@@ -375,7 +383,7 @@ void AudioEngine::triggerChannel(int channelIndex)
     // residual NoteEvent pitch offsets from a previous Melodic→Drum switch
     // do not bleed through.
     players[channelIndex].setPitch(channelBasePitch[channelIndex]);
-    players[channelIndex].trigger();
+    players[channelIndex].triggerAt(offsetInBuffer);
 }
 
 void AudioEngine::setStepPattern(int channelIndex, int stepIndex, bool active)

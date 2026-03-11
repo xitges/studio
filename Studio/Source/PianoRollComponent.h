@@ -18,7 +18,6 @@ public:
         setWantsKeyboardFocus(true);
     }
 
-    // Call whenever the active pattern / channel changes
     void setPattern(Pattern* p, int ch, double bpmValue)
     {
         pattern = p;
@@ -35,7 +34,6 @@ public:
 
     void setSnapBeats(float s) { snapBeats = s; repaint(); }
 
-    // Clear all notes for the current channel
     void clearNotes()
     {
         if (pattern == nullptr) return;
@@ -44,12 +42,11 @@ public:
         repaint();
     }
 
-    // ---- Quantize (real-time recording correction) -------------------------
+    //Quantize
     void setQuantize(bool enabled)    { quantizeEnabled = enabled; }
     void setQuantizeGrid(float grid)  { quantizeGrid    = grid;    }
     bool isQuantizeEnabled() const    { return quantizeEnabled;    }
 
-    // Horizontal zoom: pixelsPerBeat in [40, 400]
     void setZoom(int newPixelsPerBeat)
     {
         const int clamped = juce::jlimit(40, 400, newPixelsPerBeat);
@@ -928,7 +925,6 @@ private:
 
         const int laneY = velLaneY();
 
-        // Background + separator
         g.setColour(juce::Colour(0xff0d0d1a));
         g.fillRect(keyWidth, laneY, getWidth() - keyWidth, velLaneH);
         g.setColour(juce::Colour(0xff3a3a5a));
@@ -943,7 +939,6 @@ private:
         g.drawText("VELOCITY", 2, laneY + 2, keyWidth - 4, 11,
                    juce::Justification::centredLeft);
 
-        // 25 / 50 / 75 % guide lines
         for (float pct : { 0.25f, 0.5f, 0.75f })
         {
             const int guideY = laneY + (int)((1.0f - pct) * velLaneH);

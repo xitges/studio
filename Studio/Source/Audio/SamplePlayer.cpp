@@ -41,6 +41,13 @@ void SamplePlayer::loadFile(const juce::File& file)
 
 void SamplePlayer::trigger()
 {
+    triggerOffset_ = 0;
+    triggered = true;
+}
+
+void SamplePlayer::triggerAt(int offsetInBuffer)
+{
+    triggerOffset_ = offsetInBuffer;
     triggered = true;
 }
 
@@ -96,8 +103,10 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
     // Trigger detection
     if (triggered.exchange(false))
     {
-        playPosition  = 0.0;
-        envelopeGain  = (attackSamples > 0.0f) ? 0.0f : 1.0f;
+        playPosition = 0.0;
+        startOffset_ = triggerOffset_;
+        triggerOffset_ = 0;
+        envelopeGain = (attackSamples > 0.0f) ? 0.0f : 1.0f;
     }
 
     if (playPosition < 0.0 || muted) return;
@@ -106,7 +115,16 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
     const int outChannels = outputBuffer.getNumChannels();
     const int srcChannels = fileBuffer.getNumChannels();
 
-    for (int i = 0; i < safeSamples; ++i)
+    // Advance smoothers over the silent pre-trigger region so they stay in sync
+    const int loopStart = juce::jlimit(0, safeSamples, startOffset_);
+    if (loopStart > 0)
+    {
+        smoothVolume_.skip(loopStart);
+        smoothPan_.skip(loopStart);
+        startOffset_ = 0;
+    }
+
+    for (int i = loopStart; i < safeSamples; ++i)
     {
         const int pos0 = (int)playPosition;
         if (pos0 >= srcSamples)

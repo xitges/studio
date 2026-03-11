@@ -15,7 +15,7 @@
 class Sequencer
 {
 public:
-    using TriggerCallback = std::function<void(int channelIndex)>;
+    using TriggerCallback = std::function<void(int channelIndex, int offsetInBuffer)>;
 
     explicit Sequencer(TriggerCallback cb);
 
@@ -49,7 +49,7 @@ private:
     double sampleCounter    = 0.0;
     bool   playing          = false;
 
-    void advanceStep();
+    void advanceStep(int offsetInBuffer);
     void recalcSamplesPerStep();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sequencer)

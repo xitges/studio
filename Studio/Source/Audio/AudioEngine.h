@@ -64,7 +64,7 @@ public:
     // Sample management
     void loadSample   (int channelIndex, const juce::File& file);
     void unloadSample (int channelIndex);   // clear player so channel plays nothing
-    void triggerChannel(int channelIndex);
+    void triggerChannel(int channelIndex, int offsetInBuffer = 0);
 
     // Step pattern
     void setStepPattern(int channelIndex, int stepIndex, bool active);

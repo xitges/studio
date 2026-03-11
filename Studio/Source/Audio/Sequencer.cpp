@@ -65,24 +65,30 @@ void Sequencer::processBlock(int numSamples)
 {
     if (!playing) return;
 
+    const double prevCounter = sampleCounter;
     sampleCounter += numSamples;
+
+    // timeToFire: samples from the start of this buffer until the next step fires
+    double timeToFire = samplesPerStep - prevCounter;
 
     while (sampleCounter >= samplesPerStep)
     {
         sampleCounter -= samplesPerStep;
-        advanceStep();
+        const int offsetInBuffer = juce::jlimit(0, numSamples - 1, (int)timeToFire);
+        advanceStep(offsetInBuffer);
+        timeToFire += samplesPerStep;
     }
 }
 
-void Sequencer::advanceStep()
+void Sequencer::advanceStep(int offsetInBuffer)
 {
     if (stepCount <= 0)
         return;
 
     currentStep = (currentStep + 1) % stepCount;
-    
+
     for (int ch = 0; ch < CHANNEL_COUNT; ++ch)
         if (pattern[ch][currentStep])
-            onTrigger(ch);
+            onTrigger(ch, offsetInBuffer);
 }
 
