@@ -65,6 +65,7 @@ public:
     std::function<void(int ch, juce::File)>   onSampleDropped;
     std::function<void(int ch, int step, bool newState, bool oldState)> onStepToggled; // M6
     std::function<void(int ch)>               onOpenPianoRoll;      // M3
+    std::function<void(int newStepCount)>     onStepCountChanged;   // M3
     std::function<void(int ch, ChannelType)>  onChannelTypeChanged; // M3
     std::function<void(int ch)>               onOpenSynthEditor;    // M13
     std::function<int()>                      getCurrentStep;

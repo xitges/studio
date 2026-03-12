@@ -23,7 +23,13 @@ public:
         pattern = p;
         channel = ch;
         bpm     = bpmValue;
-        setSize(getNeededWidth(), getNeededHeight());
+        updateSizeForZoom();
+        repaint();
+    }
+
+    void updateStepCount()
+    {
+        updateSizeForZoom();
         repaint();
     }
 

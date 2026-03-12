@@ -129,7 +129,8 @@ public:
             if (phase_ >= 1.0) phase_ -= 1.0;
 
             const float osc    = generateSample((float)phase_, dt, p.waveform);
-            const float sample = osc * envLevel_ * velocity_ * 0.25f;  // 0.25 headroom for polyphony
+            const float osc1   = generateSample((float)phase_, dt, p.waveform) * 1.05;
+            const float sample = ((osc + osc1) * 0.5) * envLevel_ * velocity_ * 0.25f;  // 0.25 headroom for polyphony
 
             // Biquad LP filter (direct-form I)
             const float outL = b0 * sample + z1L_;

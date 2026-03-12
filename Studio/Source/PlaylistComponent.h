@@ -39,7 +39,7 @@ public:
 
     void setSnapDivisor(int d) { snapDivisor = d; repaint(); }
 
-    int getNeededWidth()  const { return (int)(juce::jmax(200.0, getTotalBars() + 8.0)) * barWidth; }
+    int getNeededWidth()  const { return trackHeaderWidth + (int)(juce::jmax(200.0, getTotalBars() + 8.0)) * barWidth; }
     int getNeededHeight() const
     {
         const int autoH = project ? (int)project->automationLanes.size() * autoLaneHeight : 0;
@@ -111,6 +111,7 @@ private:
     static constexpr int headerHeight  = 24;
     static constexpr int trackHeight   = 40;
     static constexpr int trackGap      = 4;
+    static constexpr int trackHeaderWidth = 80;
     static constexpr int resizeHotspot = 10; // px from right edge = resize handle
     static constexpr int autoLaneHeight = 60; // M9 — height of each automation lane
 
@@ -236,14 +237,14 @@ inline void PlaylistComponent::drawTimeRuler(juce::Graphics& g)
         for (int bar = 0; bar < totalBars; ++bar)
             for (int sub = 1; sub < snapDivisor; ++sub)
             {
-                const float x = (bar + (float)sub / snapDivisor) * barWidth;
+                const float x = trackHeaderWidth + (bar + (float)sub / snapDivisor) * barWidth;
                 g.drawLine(x, (float)headerHeight, x, (float)getHeight(), 0.5f);
             }
     }
 
     for (int bar = 0; bar < totalBars; ++bar)
     {
-        const int x = bar * barWidth;
+        const int x = trackHeaderWidth + bar * barWidth;
         g.setColour(bar % 4 == 0 ? juce::Colour(0xffb0b0b8).withAlpha(0.2f)
                                   : juce::Colour(0xff383838).withAlpha(0.8f));
         g.drawLine((float)x, 0.0f, (float)x, (float)getHeight(), 1.0f);
@@ -266,7 +267,7 @@ inline void PlaylistComponent::drawTracks(juce::Graphics& g)
 
         // Track header label area — slightly elevated
         g.setColour(juce::Colour(0xff2c2c2e));
-        g.fillRect(0, trackY, 80, trackHeight);
+        g.fillRect(0, trackY, trackHeaderWidth, trackHeight);
         // Right separator line
         g.setColour(juce::Colours::white.withAlpha(0.06f));
         g.drawLine(79.5f, (float)trackY, 79.5f, (float)(trackY + trackHeight), 1.0f);
@@ -301,7 +302,7 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
     {
         if (clip.trackIndex < 0 || clip.trackIndex >= tc) continue;
 
-        const int x  = (int)(clip.startBar  * barWidth);
+        const int x  = trackHeaderWidth + (int)(clip.startBar  * barWidth);
         const int w  = (int)(clip.lengthBars * barWidth) - 2;
         const int ty = headerHeight + clip.trackIndex * (trackHeight + trackGap) + 3;
         const int h  = trackHeight - 6;
@@ -358,7 +359,7 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
 inline void PlaylistComponent::drawPlayhead(juce::Graphics& g)
 {
     if (playheadBar < 0.0) return;
-    const int x = (int)(playheadBar * barWidth);
+    const int x = trackHeaderWidth + (int)(playheadBar * barWidth);
     g.setColour(juce::Colour(0xffff3333));
     g.drawLine((float)x, 0.0f, (float)x, (float)getHeight(), 2.0f);
     juce::Path tri;
@@ -376,7 +377,7 @@ inline PlaylistClip* PlaylistComponent::findClipAt(int x, int y)
     for (auto& clip : clipList())
     {
         if (clip.trackIndex < 0 || clip.trackIndex >= tc) continue;
-        const int cx = (int)(clip.startBar   * barWidth);
+        const int cx = trackHeaderWidth + (int)(clip.startBar   * barWidth);
         const int cw = (int)(clip.lengthBars * barWidth) - 2;
         const int cy = headerHeight + clip.trackIndex * (trackHeight + trackGap) + 3;
         const int ch = trackHeight - 6;
@@ -388,7 +389,7 @@ inline PlaylistClip* PlaylistComponent::findClipAt(int x, int y)
 
 inline bool PlaylistComponent::isOnRightEdge(const PlaylistClip& clip, int mouseX) const
 {
-    const int rightEdge = (int)((clip.startBar + clip.lengthBars) * barWidth);
+    const int rightEdge = trackHeaderWidth + (int)((clip.startBar + clip.lengthBars) * barWidth);
     return mouseX >= (rightEdge - resizeHotspot) && mouseX <= (rightEdge + 2);
 }
 
@@ -413,7 +414,7 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
     {
         if (!e.mods.isRightButtonDown())
         {
-            const double bar = (double)pos.x / barWidth;
+            const double bar = (double)(pos.x - trackHeaderWidth) / barWidth;
             if (onSeekToBar) onSeekToBar(bar);
             setPlayheadBar(bar);
         }
@@ -425,7 +426,7 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
     // Right-click → context or track menu
     if (e.mods.isRightButtonDown())
     {
-        if (pos.x < 80)
+        if (pos.x < trackHeaderWidth)
         {
             const int t = (pos.y - headerHeight) / (trackHeight + trackGap);
             if (t >= 0 && t < getTrackCount())
@@ -439,7 +440,7 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
         else if (pos.y < autoLanesY())
         {
             // Right-click on empty track area → paste clip or add automation lane
-            const float pasteBar   = (float)pos.x / barWidth;
+            const float pasteBar   = (float)(pos.x - trackHeaderWidth) / barWidth;
             const int   pasteTrack = trackIndexAt(pos.y);
             juce::PopupMenu m;
             if (hasClipboard) m.addItem(1, "Paste Clip");
@@ -498,7 +499,7 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
                 return;
             }
 
-            const float beatPos  = (float)pos.x / barWidth * 4.0f;
+            const float beatPos  = (float)(pos.x - trackHeaderWidth) / barWidth * 4.0f;
             const int   laneRelY = relY % autoLaneHeight;
             const float value    = 1.0f - juce::jlimit(0.0f, 1.0f,
                                        (float)(laneRelY - 4) / (float)(autoLaneHeight - 8));
@@ -508,7 +509,7 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
             dragPointIdx = -1;
             for (int pi = 0; pi < (int)lane.points.size(); ++pi)
             {
-                const int px = (int)(lane.points[(size_t)pi].beat * 0.25 * barWidth);
+                const int px = trackHeaderWidth + (int)(lane.points[(size_t)pi].beat * 0.25 * barWidth);
                 if (std::abs(pos.x - px) < 8)
                 {
                     dragPointIdx = pi;
@@ -565,7 +566,7 @@ inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
                 auto& pt       = lane.points[(size_t)dragPointIdx];
                 const int laneY = autoLanesY() + dragLaneIdx * autoLaneHeight;
                 const int relY  = e.getPosition().y - laneY;
-                pt.beat  = juce::jmax(0.0, (double)e.getPosition().x / barWidth * 4.0);
+                pt.beat  = juce::jmax(0.0, (double)(e.getPosition().x - trackHeaderWidth) / barWidth * 4.0);
                 pt.value = 1.0f - juce::jlimit(0.0f, 1.0f,
                                (float)(relY - 4) / (float)(autoLaneHeight - 8));
                 repaint();
@@ -650,7 +651,7 @@ inline void PlaylistComponent::mouseDoubleClick(const juce::MouseEvent& e)
     const int track = trackIndexAt(pos.y);
     if (track < 0 || track >= getTrackCount()) return;
 
-    const float rawBar  = (float)pos.x / barWidth;
+    const float rawBar  = (float)(pos.x - trackHeaderWidth) / barWidth;
     const float snapUnit = (snapDivisor == 0) ? 0.0f : 1.0f / (float)snapDivisor;
     const float bar = (snapDivisor == 0)
                         ? juce::jmax(0.0f, rawBar)
@@ -933,8 +934,8 @@ inline void PlaylistComponent::drawAutomationLanes(juce::Graphics& g)
         // Bar grid lines
         g.setColour(juce::Colour(0xff1e1e32));
         for (int bar = 0; bar <= totalBars; ++bar)
-            g.drawLine((float)(bar * barWidth), (float)(laneY + 16),
-                       (float)(bar * barWidth), (float)(laneY + autoLaneHeight), 0.5f);
+            g.drawLine((float)(trackHeaderWidth + bar * barWidth), (float)(laneY + 16),
+                       (float)(trackHeaderWidth + bar * barWidth), (float)(laneY + autoLaneHeight), 0.5f);
 
         // Mid-value guide line
         g.setColour(col.withAlpha(0.12f));
@@ -948,7 +949,7 @@ inline void PlaylistComponent::drawAutomationLanes(juce::Graphics& g)
             bool started = false;
             for (const auto& pt : lane.points)
             {
-                const float px = (float)(pt.beat * 0.25 * barWidth);
+                const float px = trackHeaderWidth + (float)(pt.beat * 0.25 * barWidth);
                 const float py = (float)(laneY + autoLaneHeight - 4)
                                  - pt.value * (float)(autoLaneHeight - 8);
                 if (!started) { curvePath.startNewSubPath(px, py); started = true; }
@@ -962,7 +963,7 @@ inline void PlaylistComponent::drawAutomationLanes(juce::Graphics& g)
         for (int pi = 0; pi < (int)lane.points.size(); ++pi)
         {
             const auto& pt = lane.points[(size_t)pi];
-            const float px = (float)(pt.beat * 0.25 * barWidth);
+            const float px = trackHeaderWidth + (float)(pt.beat * 0.25 * barWidth);
             const float py = (float)(laneY + autoLaneHeight - 4)
                              - pt.value * (float)(autoLaneHeight - 8);
             const bool dragging = (dragLaneIdx == li && dragPointIdx == pi);

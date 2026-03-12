@@ -118,8 +118,6 @@ MainComponent::MainComponent()
 
     toolbar.onNewPattern = [this]
     {
-        // selectPattern will save the current rack before switching.
-        // Capture id/name BEFORE push_back in case it reallocates.
         audioEngine.ensureCacheLoaderStopped();
         const int newId   = nextPatternId();
         const int newNum  = (int)project.patterns.size() + 1;
@@ -127,41 +125,59 @@ MainComponent::MainComponent()
         Pattern np;
         np.id        = newId;
         np.name      = "Pattern " + juce::String(newNum);
-        np.stepCount = 16;
-        project.patterns.push_back(np);  // may reallocate — no live pointers at this point
+        
+        if (auto* cur = findPattern(activePatternId))
+        {
+            np.stepCount = cur->stepCount;
+            for (int i = 0; i < Pattern::kMaxChannels; ++i)
+            {
+                np.samplePaths[i]         = cur->samplePaths[i];
+                np.channelTypes[i]        = cur->channelTypes[i];
+                np.channelNames[i]        = cur->channelNames[i];
+                np.synthParams[i]         = cur->synthParams[i];
+                np.channelVolume[i]       = cur->channelVolume[i];
+                np.channelPan[i]          = cur->channelPan[i];
+                np.channelPitch[i]        = cur->channelPitch[i];
+                np.channelMixerRouting[i] = cur->channelMixerRouting[i];
+            }
+        }
+        else
+        {
+            np.stepCount = 16;
+        }
+        
+        project.patterns.push_back(np);
 
         selectPattern(newId);
         markDirty();
+        audioEngine.refreshSongCacheAsync();
     };
 
     toolbar.onDuplicatePattern = [this]
     {
         audioEngine.ensureCacheLoaderStopped();
-        // Save current rack into the active pattern first
         if (auto* src = findPattern(activePatternId))
             channelRack.saveToPattern(*src);
 
-        // Re-find after save (safe — no reallocation yet)
         if (auto* src = findPattern(activePatternId))
         {
-            // Copy by value and capture name BEFORE push_back may reallocate
             Pattern dup  = *src;
             const int newId = nextPatternId();
             dup.id   = newId;
             dup.name = src->name + " (copy)";
-            project.patterns.push_back(dup);   // src may dangle after this — not used again
+            project.patterns.push_back(dup);
 
             selectPattern(newId);
             markDirty();
+            audioEngine.refreshSongCacheAsync();
         }
     };
 
-    // M4 — mark dirty on any pattern management operation
     auto markDirtyFn = [this] { markDirty(); };
 
     toolbar.onDeletePattern = [this, markDirtyFn]
     {
-        if (project.patterns.size() <= 1) return; // always keep at least one
+        if (project.patterns.size() <= 1) return;
         audioEngine.ensureCacheLoaderStopped();
 
         const int deletedId = activePatternId;
@@ -170,8 +186,6 @@ MainComponent::MainComponent()
         pats.erase(std::remove_if(pats.begin(), pats.end(),
             [deletedId](const Pattern& p){ return p.id == deletedId; }), pats.end());
 
-        // Reassign any playlist clips that referenced the deleted pattern
-        // to the first remaining pattern so they don't become orphans.
         const int fallbackId = pats.front().id;
         for (auto& clip : project.playlistClips)
             if (clip.patternId == deletedId)
@@ -179,6 +193,7 @@ MainComponent::MainComponent()
 
         selectPattern(fallbackId);
         markDirty();
+        audioEngine.refreshSongCacheAsync();
     };
 
     toolbar.onRenamePattern = [this]
@@ -365,6 +380,7 @@ MainComponent::MainComponent()
         if (auto* pat = findPattern(activePatternId))
             pat->samplePaths[ch] = file.getFullPathName();
         markDirty();
+        audioEngine.refreshSongCacheAsync();
     };
 
     channelRack.onMuteChanged = [this](int ch, bool muted)
@@ -390,6 +406,18 @@ MainComponent::MainComponent()
     channelRack.onPitchChanged = [this](int ch, float s)
     {
         audioEngine.setChannelPitch(ch, s);
+    };
+
+    channelRack.onStepCountChanged = [this](int newCount)
+    {
+        if (auto* pat = findPattern(activePatternId))
+        {
+            pat->stepCount = newCount;
+            audioEngine.setPatternStepCount(newCount);
+            if (pianoRollWindow != nullptr && pianoRollWindow->isVisible())
+                pianoRollWindow->content.pianoRoll.updateStepCount();
+        }
+        markDirty();
     };
 
     // ---- M6: Step toggle undo
@@ -476,7 +504,9 @@ MainComponent::MainComponent()
                 list.erase(std::remove_if(list.begin(), list.end(),
                     [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
                 playlist.repaint(); markDirty(); return true;
-            }));
+            }
+        ));
+        audioEngine.refreshSongCacheAsync();
     };
 
     playlist.onClipDeleted = [this](PlaylistClip clip)
@@ -1008,7 +1038,12 @@ void MainComponent::syncPatternToEngine()
 void MainComponent::markDirty()
 {
     projectDirty = true;
-    toolbar.setProjectTitle(currentFile.getFileNameWithoutExtension(), true);
+    
+    juce::String title = "Untitled";
+    if (currentFile != juce::File())
+        title = currentFile.getFileNameWithoutExtension();
+        
+    toolbar.setProjectTitle(title, true);
 }
 
 void MainComponent::reloadProjectIntoUI()

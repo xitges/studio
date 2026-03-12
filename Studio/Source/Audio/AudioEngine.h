@@ -148,6 +148,19 @@ public:
         }
     }
 
+    // Triggers background rebuilding of the song sample cache.
+    // Safe to call while playing; audio will briefly drop out while rebuilding.
+    void refreshSongCacheAsync()
+    {
+        if (cacheLoader_ != nullptr && cacheLoader_->isThreadRunning())
+        {
+            cacheLoader_->signalThreadShouldExit();
+            cacheLoader_->waitForThreadToExit(1000);
+        }
+        cacheLoader_ = std::make_unique<CacheLoader>(*this);
+        cacheLoader_->startThread();
+    }
+
     // M5 — mixer track controls
     void setMixerTrackVolume(int track, float vol);
     void setMixerTrackPan   (int track, float pan);
@@ -240,7 +253,7 @@ private:
 
     // Song mode: pre-decoded audio cache built in background before playback
     std::map<int, std::array<juce::AudioBuffer<float>, 16>> songSampleCache;
-    int songPlayerPatternId[16] = {};
+    int songPlayerClipId[16] = {};
 
     // Double-buffer snapshot: message thread writes to inactive slot,
     // audio thread reads from active slot via atomic index.
@@ -267,7 +280,7 @@ private:
     std::unique_ptr<CacheLoader> cacheLoader_;
 
     void buildSongSampleCache();   // may run on background thread
-
+    
     double sampleRate = 44100.0;
     int    bufferSize = 512;
 

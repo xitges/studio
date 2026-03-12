@@ -54,7 +54,7 @@ void AudioEngine::play()
 
         songSamplePosition = 0;
         songSampleCache.clear();
-        std::fill_n(songPlayerPatternId, 16, -1);
+        std::fill_n(songPlayerClipId, 16, -1);
 
         cacheLoader_ = std::make_unique<CacheLoader>(*this);
         cacheLoader_->onDone = [this]
@@ -163,7 +163,13 @@ void AudioEngine::updatePatternSnapshot()
 
     const Pattern* pat = (project != nullptr)
                          ? findPatternById(activePatternId) : nullptr;
-    if (pat == nullptr) return;
+                         
+    if (pat == nullptr) 
+    {
+        snap.patternId = -1;
+        activeSnapshotIdx_.store(nextIdx, std::memory_order_release);
+        return;
+    }
 
     snap.patternId = pat->id;
     snap.stepCount = pat->stepCount;
@@ -334,7 +340,7 @@ void AudioEngine::unloadSample(int channelIndex)
 void AudioEngine::buildSongSampleCache()
 {
     songSampleCache.clear();
-    std::fill_n(songPlayerPatternId, 16, -1);
+    std::fill_n(songPlayerClipId, 16, -1);
 
     if (project == nullptr) return;
 
@@ -780,6 +786,10 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     if (project->playlistClips.empty() || project->patterns.empty())
         return;
 
+    juce::ScopedTryLock tryLock(cacheLoaderLock_);
+    if (!tryLock.isLocked())
+        return; // wait for cache build to finish
+
     const double samplesPerBeat = sampleRate * 60.0 / bpm;
     const double samplesPerBar  = samplesPerBeat * 4.0;
 
@@ -828,8 +838,8 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
             {
                 if (!pattern->steps[ch][localStep]) continue;
 
-                // Swap to this pattern's sample + settings if not already loaded
-                if (songPlayerPatternId[ch] != clip.patternId)
+                // Swap to this clip's pattern sample + settings if not already loaded
+                if (songPlayerClipId[ch] != clip.id)
                 {
                     auto cit = songSampleCache.find(clip.patternId);
                     if (cit != songSampleCache.end()
@@ -843,10 +853,10 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                     players[ch].setPan   (pattern->channelPan   [ch]);
                     players[ch].setPitch (channelBasePitch[ch] + pattern->channelPitch[ch]);
 
-                    songPlayerPatternId[ch] = clip.patternId;
+                    songPlayerClipId[ch] = clip.id;
                 }
 
-                players[ch].trigger();
+                players[ch].triggerAt(offsetInBuf);
             }
         }
     }
@@ -897,9 +907,10 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                         {
                             // Apply note velocity as volume scale for sample channels
                             const float baseVol = (pat != nullptr) ? pat->channelVolume[ch] : 0.8f;
+                            const int offset = juce::jlimit(0, numSamples - 1, (int)((fireBeat - startBeatSong) * samplesPerBeat));
                             players[ch].setVolume(baseVol * note.velocity);
                             players[ch].setPitch(channelBasePitch[ch] + (float)(note.pitch - 60));
-                            players[ch].trigger();
+                            players[ch].triggerAt(offset);
                         }
                     }
                 }
@@ -924,11 +935,15 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
             {
                 bpm = (double)v;
             }
-            else if (lane.paramId.startsWith("ch") && lane.paramId.endsWith("vol"))
+            else if (lane.paramId.startsWith ("ch") && lane.paramId.endsWith ("vol"))
             {
-                const int ch = lane.paramId.substring(2, lane.paramId.length() - 3).getIntValue();
-                if (ch >= 0 && ch < 16)
-                    players[ch].setVolume(v);
+                // Safer parsing of "ch[N]vol" without using dropFirst/dropLast
+                if (lane.paramId.length() > 5) // "ch" (2) + "[N]" (at least 1) + "vol" (3) = min 6 chars
+                {
+                    const int ch = lane.paramId.substring(2, lane.paramId.length() - 3).getIntValue();
+                    if (ch >= 0 && ch < 16)
+                        players[ch].setVolume (v);
+                }
             }
         }
     }

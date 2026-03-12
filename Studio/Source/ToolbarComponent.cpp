@@ -142,8 +142,11 @@ ToolbarComponent::~ToolbarComponent() {}
 
 void ToolbarComponent::setProjectTitle(const juce::String& filename, bool dirty)
 {
-    const juce::String name = filename.isEmpty() ? "Untitled" : filename;
-    const juce::String title = juce::String("Studio  -  ") + name + (dirty ? "  *" : "");
+    juce::String name = filename.isEmpty() ? "Untitled" : filename;
+    juce::String title = "Studio  -  ";
+    title += name;
+    if (dirty) title += "  *";
+    
     titleLabel.setText(title, juce::dontSendNotification);
 }
 

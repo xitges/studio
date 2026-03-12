@@ -41,6 +41,7 @@ ChannelRackComponent::ChannelRackComponent()
     stepCountSlider.onValueChange = [this]
     {
         stepCount = (int)stepCountSlider.getValue();
+        if (onStepCountChanged) onStepCountChanged(stepCount);
         repaint();
     };
     stepCount = 16;
