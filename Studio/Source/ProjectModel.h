@@ -13,7 +13,8 @@
 #include <JuceHeader.h>
 
 enum class PlayMode    { Pattern, Song };
-enum class ChannelType { Drum, Melodic };   // M3
+enum class ChannelType { Drum, Melodic };
+inline constexpr int kMaxPatternSteps = 128;
 
 // M3 — one note in a melodic channel's piano roll
 struct NoteEvent
@@ -61,7 +62,7 @@ namespace SynthPresets
         return p;
     }
 
-    // Returns all factory presets.  Waveform codes: 0=Sine 1=Saw 2=Square 3=Triangle
+    // Waveform codes: 0=Sine 1=Saw 2=Square 3=Triangle
     inline std::vector<Preset> getAll()
     {
         return {
@@ -141,7 +142,7 @@ struct Pattern
     int          stepCount  = 16;
 
     static constexpr int kMaxChannels = 16;
-    static constexpr int kMaxSteps    = 64;
+    static constexpr int kMaxSteps    = kMaxPatternSteps;
 
     bool steps[kMaxChannels][kMaxSteps] {};
 

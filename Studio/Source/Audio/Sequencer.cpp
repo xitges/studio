@@ -26,6 +26,10 @@ void Sequencer::start()
     currentStep   = 0;
     sampleCounter = 0.0;
     playing       = true;
+
+    for (int ch = 0; ch < CHANNEL_COUNT; ++ch)
+        if (pattern[ch][currentStep])
+            onTrigger(ch, 0);
 }
 
 void Sequencer::stop()

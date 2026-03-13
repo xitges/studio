@@ -23,7 +23,7 @@
 struct PlaybackSnapshot
 {
     static constexpr int kCh    = 16;
-    static constexpr int kSteps = 64;
+    static constexpr int kSteps = kMaxPatternSteps;
     static constexpr int kNotes = 256;  // max notes per channel
 
     int  patternId = -1;
@@ -72,7 +72,7 @@ public:
     double getSampleRate()         const { return sampleRate; }
     long   getSongSamplePosition() const { return songSamplePosition; }
     double getPatternBeatPos()     const { return patternBeatPos; }   // M3
-
+    double getBPM() const { return bpm; }
     // Fired on the message thread when the Song-mode sample cache is ready
     std::function<void()> onSongCacheReady;
 
@@ -152,6 +152,7 @@ public:
     // Safe to call while playing; audio will briefly drop out while rebuilding.
     void refreshSongCacheAsync()
     {
+        rebuildRuntimeStateFromProject();
         if (cacheLoader_ != nullptr && cacheLoader_->isThreadRunning())
         {
             cacheLoader_->signalThreadShouldExit();
@@ -210,10 +211,139 @@ public:
     bool getPluginState(int ch, juce::MemoryBlock& stateOut) const;
 
 private:
+    struct RuntimePlaybackState
+    {
+        double projectBpm   = 140.0;
+        float  masterVolume = 1.0f;
+        float  masterPan    = 0.0f;
+        std::array<FXParams, 8> fxParams = {};
+        std::array<MixerTrack, 8> mixerTracks = {};
+        std::vector<Pattern> patterns;
+        std::vector<PlaylistClip> playlistClips;
+        std::vector<AutomationLane> automationLanes;
+
+        const Pattern* findPatternById(int patternId) const
+        {
+            for (const auto& pattern : patterns)
+                if (pattern.id == patternId)
+                    return &pattern;
+            return nullptr;
+        }
+
+        bool anyMixerTrackSoloed() const
+        {
+            for (const auto& track : mixerTracks)
+                if (track.soloed)
+                    return true;
+            return false;
+        }
+    };
+
+    struct MixRuntimeOverrides
+    {
+        bool  hasMasterOverride = false;
+        float masterVolume = 1.0f;
+        float masterPan    = 0.0f;
+    };
+
+    struct ScheduledSampleTrigger
+    {
+        int channel = -1;
+        int offsetInBuffer = 0;
+        const juce::AudioBuffer<float>* sourceBuffer = nullptr;
+        std::shared_ptr<const juce::AudioBuffer<float>> ownedSourceBuffer;
+        float volume = 0.8f;
+        float pan = 0.0f;
+        float pitchSemitones = 0.0f;
+        float attackMs = 10.0f;
+        float releaseMs = 0.0f;
+        float bpmRatio = 1.0f;
+        bool muted = false;
+    };
+
+    struct ScheduledSampleTriggerQueue
+    {
+        static constexpr int kMaxTriggers = 2048;
+        std::array<ScheduledSampleTrigger, kMaxTriggers> triggers {};
+        int count = 0;
+
+        void clear() { count = 0; }
+
+        void push(const ScheduledSampleTrigger& trigger)
+        {
+            if (count >= kMaxTriggers)
+                return;
+            triggers[(size_t)count++] = trigger;
+        }
+    };
+
+    struct SampleVoicePool
+    {
+        static constexpr int kVoicesPerChannel = 8;
+        std::array<SamplePlayer, kVoicesPerChannel> voices;
+        int nextVoice = 0;
+
+        void prepare(double sampleRate, int bufferSize)
+        {
+            for (auto& voice : voices)
+                voice.prepare(sampleRate, bufferSize);
+        }
+
+        void reset()
+        {
+            for (auto& voice : voices)
+                voice.reset();
+        }
+
+        void setMuted(bool muted)
+        {
+            for (auto& voice : voices)
+                voice.setMuted(muted);
+        }
+
+        void setVolume(float volume)
+        {
+            for (auto& voice : voices)
+                voice.setVolume(volume);
+        }
+
+        void setPan(float pan)
+        {
+            for (auto& voice : voices)
+                voice.setPan(pan);
+        }
+
+        void setAttack(float attackMs)
+        {
+            for (auto& voice : voices)
+                voice.setAttack(attackMs);
+        }
+
+        void setRelease(float releaseMs)
+        {
+            for (auto& voice : voices)
+                voice.setRelease(releaseMs);
+        }
+
+        SamplePlayer& allocateVoice()
+        {
+            auto& voice = voices[(size_t)nextVoice];
+            nextVoice = (nextVoice + 1) % kVoicesPerChannel;
+            return voice;
+        }
+
+        void renderNextBlock(juce::AudioBuffer<float>& buffer, int numSamples)
+        {
+            for (auto& voice : voices)
+                voice.renderNextBlock(buffer, numSamples);
+        }
+    };
+
     juce::AudioDeviceManager deviceManager;
     juce::MixerAudioSource   mixer;
 
-    std::array<SamplePlayer, 16> players;
+    std::array<std::shared_ptr<juce::AudioBuffer<float>>, 16> channelSourceBuffers_;
+    std::array<SampleVoicePool, 16> sampleVoicePools;
     std::array<PolySynth, 16>   polySynths;       // M13
     std::array<FXChain, 8>      fxChains;         // M14
     std::array<SamplePlayer, 64> launchpadPlayers; // Launchpad one-shot players
@@ -235,11 +365,18 @@ private:
     // M3 — beat tracking for NoteEvent playback
     double patternBeatPos  = 0.0;
     int    activePatternId = 0;
+    std::array<float, 16> sampleChannelVolume_;
+    std::array<float, 16> sampleChannelPan_;
+    std::array<float, 16> sampleChannelAttackMs_;
+    std::array<float, 16> sampleChannelReleaseMs_;
     float  channelBasePitch[16] = {};   // stores user pitch-slider values per channel
     bool   channelMuted [16]   = {};   // user mute state (independent of solo)
     bool   channelSoloed[16]   = {};   // user solo state
 
     void applyChannelMuteLogic();      // recompute SamplePlayer mute from muted[]+soloed[]
+    void rebuildRuntimeStateFromProject();
+    std::shared_ptr<RuntimePlaybackState> getRuntimeState() const;
+    void publishRuntimeState(std::shared_ptr<RuntimePlaybackState> state);
 
     // M5 — mixer intermediate buffers
     juce::AudioBuffer<float> stagingBuf;                         // temp per-channel render
@@ -247,7 +384,26 @@ private:
 
     void processPatternMode(juce::AudioBuffer<float>& buffer, int numSamples, int numOutputChannels);
     void processSongMode   (juce::AudioBuffer<float>& buffer, int numSamples, int numOutputChannels);
-    void mixToOutput       (juce::AudioBuffer<float>& buffer, int numSamples);  // M5
+    void mixToOutput       (juce::AudioBuffer<float>& buffer, int numSamples,
+                            const MixRuntimeOverrides* overrides = nullptr);  // M5
+    void scheduleSampleTrigger(int channelIndex,
+                               int offsetInBuffer,
+                               const juce::AudioBuffer<float>* sourceBuffer,
+                               std::shared_ptr<const juce::AudioBuffer<float>> ownedSourceBuffer,
+                               float volume,
+                               float pan,
+                               float pitchSemitones,
+                               float bpmRatio);
+    void triggerSampleVoiceNow(int channelIndex,
+                               int offsetInBuffer,
+                               const juce::AudioBuffer<float>* sourceBuffer,
+                               std::shared_ptr<const juce::AudioBuffer<float>> ownedSourceBuffer,
+                               float volume,
+                               float pan,
+                               float pitchSemitones,
+                               float bpmRatio);
+    void dispatchScheduledSampleTriggers();
+    std::shared_ptr<const juce::AudioBuffer<float>> getChannelSourceBuffer(int channelIndex) const;
 
     const Pattern* findPatternById(int patternId) const;
 
@@ -262,6 +418,8 @@ private:
 
     // Lock protecting buildSongSampleCache from concurrent pattern modification
     juce::CriticalSection cacheLoaderLock_;
+    std::shared_ptr<RuntimePlaybackState> runtimeState_;
+    ScheduledSampleTriggerQueue scheduledSampleTriggers_;
 
     // Background cache loader — avoids UI freeze on Play in Song mode
     struct CacheLoader : public juce::Thread
@@ -297,10 +455,36 @@ private:
     // Per-channel MIDI buffers — cleared at audio callback start,
     // populated by NoteEvent / live-MIDI sections, consumed in mixToOutput.
     juce::MidiBuffer instrumentMidiBuffers[16];
+    juce::MidiBuffer incomingMidiBuffer_;
 
     // Pending note-offs for instrument plugins (tracks active VST notes).
     struct ActivePluginNote { double endBeat; int pitch; };
-    std::vector<ActivePluginNote> activePluginNotes[16];
+    struct ActivePluginNoteQueue
+    {
+        static constexpr int kMaxNotes = 512;
+        std::array<ActivePluginNote, kMaxNotes> notes {};
+        int count = 0;
+
+        void clear() { count = 0; }
+
+        void push(const ActivePluginNote& note)
+        {
+            if (count >= kMaxNotes)
+            {
+                notes[kMaxNotes - 1] = note;
+                return;
+            }
+            notes[(size_t)count++] = note;
+        }
+
+        void removeAt(int index)
+        {
+            if (index < 0 || index >= count) return;
+            notes[(size_t)index] = notes[(size_t)(count - 1)];
+            --count;
+        }
+    };
+    std::array<ActivePluginNoteQueue, 16> activePluginNotes;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };

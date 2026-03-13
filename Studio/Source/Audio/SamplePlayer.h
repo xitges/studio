@@ -23,18 +23,29 @@ public:
     void reset();
     void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int numSamples);
 
-    bool isLoaded() const { return fileBuffer.getNumSamples() > 0; }
-    void clear()          { fileBuffer.setSize(0, 0); playPosition = -1.0; }
-
-    // Copy pre-decoded audio data in (used by song-mode sample cache — no disk I/O)
-    void loadBuffer(const juce::AudioBuffer<float>& src)
+    bool isLoaded() const
     {
-        // Called from the audio thread in song mode — bufferLock is already held
-        // by the audio thread itself (via renderNextBlock's try-lock), so we must
-        // NOT try to lock here. Song-mode cache swaps happen between render blocks
-        // (called from processSongMode before renderNextBlock), so no concurrent
-        // renderNextBlock is running at this point. Direct assignment is safe.
-        fileBuffer.makeCopyOf(src);
+        const auto* src = externalBuffer != nullptr ? externalBuffer : &fileBuffer;
+        return src->getNumSamples() > 0;
+    }
+    void clear()
+    {
+        externalSharedBuffer.reset();
+        externalBuffer = nullptr;
+        fileBuffer.setSize(0, 0);
+        playPosition = -1.0;
+    }
+
+    // Reuse an already-decoded buffer without copying. Audio thread only.
+    void setExternalBuffer(const juce::AudioBuffer<float>* src)
+    {
+        externalBuffer = src;
+        playPosition = -1.0;
+    }
+    void setSharedExternalBuffer(const std::shared_ptr<const juce::AudioBuffer<float>>& src)
+    {
+        externalSharedBuffer = src;
+        externalBuffer = externalSharedBuffer.get();
         playPosition = -1.0;
     }
     const juce::AudioBuffer<float>& getBuffer() const    { return fileBuffer; }
@@ -51,13 +62,24 @@ public:
     // M1.3 — Envelope (Attack / Release in milliseconds)
     void setAttack (float ms);
     void setRelease(float ms);
+    
+    void setBpmRatio(double ratio){
+        bpmRatio = (float) ratio;
+        updateFinalRatio();
+    }
 
     // Mute
     void setMuted(bool m) { muted = m; }
     bool isMuted()  const { return muted; }
 
 private:
+    void updateFinalRatio(){
+        finalPitchRatio = basePitchRatio * bpmRatio;
+    }
+    
     juce::AudioBuffer<float>                 fileBuffer;
+    std::shared_ptr<const juce::AudioBuffer<float>> externalSharedBuffer;
+    const juce::AudioBuffer<float>*          externalBuffer = nullptr;
     juce::AudioFormatManager                 formatManager;
     std::unique_ptr<juce::AudioFormatReader> reader;
 
@@ -66,6 +88,10 @@ private:
     // M1.2: fractional position enables pitch-shifted playback
     double playPosition = -1.0;
 
+    float basePitchRatio = 1.0f;
+    float bpmRatio = 1.0f;
+    float finalPitchRatio = 1.0f;
+    
     // M1.1
     float volume = 0.8f;
     float pan    = 0.0f;    // -1=L, 0=C, +1=R
@@ -73,9 +99,6 @@ private:
     // Smoothed volume/pan to avoid zipper noise on parameter changes
     juce::LinearSmoothedValue<float> smoothVolume_;
     juce::LinearSmoothedValue<float> smoothPan_;
-
-    // M1.2
-    float pitchRatio = 1.0f;  // 2^(semitones/12)
 
     // Mute
     bool muted = false;

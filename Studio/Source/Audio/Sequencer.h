@@ -11,6 +11,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <functional>
+#include "../ProjectModel.h"
 
 class Sequencer
 {
@@ -37,7 +38,7 @@ private:
     TriggerCallback onTrigger;
 
     static constexpr int CHANNEL_COUNT = 16;
-    static constexpr int MAX_STEPS     = 64;
+    static constexpr int MAX_STEPS     = kMaxPatternSteps;
 
     std::array<std::array<bool, MAX_STEPS>, CHANNEL_COUNT> pattern {};
 

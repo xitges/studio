@@ -214,7 +214,8 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
             Pattern pat;
             pat.id        = patEl->getIntAttribute("id",        0);
             pat.name      = patEl->getStringAttribute("name",   "Pattern");
-            pat.stepCount = patEl->getIntAttribute("stepCount", 16);
+            pat.stepCount = juce::jlimit(1, Pattern::kMaxSteps,
+                                         patEl->getIntAttribute("stepCount", 16));
             pat.lengthBars= patEl->getIntAttribute("lengthBars",1);
 
             for (auto* chEl : patEl->getChildIterator())

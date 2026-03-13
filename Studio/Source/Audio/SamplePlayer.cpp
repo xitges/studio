@@ -34,6 +34,8 @@ void SamplePlayer::loadFile(const juce::File& file)
     {
         juce::SpinLock::ScopedLockType lock(bufferLock);
         fileBuffer  = std::move(tmp);
+        externalSharedBuffer.reset();
+        externalBuffer = nullptr;
         reader      = std::move(newReader);
         playPosition = -1.0;
     }
@@ -74,7 +76,8 @@ void SamplePlayer::reset()
 void SamplePlayer::setPitch(float semitones)
 {
     // Frequency ratio: one octave up = 2x speed, one semitone = 2^(1/12)
-    pitchRatio = std::pow(2.0f, semitones / 12.0f);
+    basePitchRatio = std::pow(2.0f, semitones / 12.0f);
+    updateFinalRatio();
 }
 
 void SamplePlayer::setAttack(float ms)
@@ -95,7 +98,9 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
     juce::SpinLock::ScopedTryLockType tryLock(bufferLock);
     if (!tryLock.isLocked()) return;
 
-    if (!isLoaded()) return;
+    const juce::AudioBuffer<float>* sourceBuffer =
+        (externalBuffer != nullptr ? externalBuffer : &fileBuffer);
+    if (sourceBuffer->getNumSamples() <= 0) return;
 
     // Clamp to actual output buffer size so we never write out of bounds
     const int safeSamples = juce::jmin(numSamples, outputBuffer.getNumSamples());
@@ -111,9 +116,9 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
 
     if (playPosition < 0.0 || muted) return;
 
-    const int srcSamples  = fileBuffer.getNumSamples();
+    const int srcSamples  = sourceBuffer->getNumSamples();
     const int outChannels = outputBuffer.getNumChannels();
-    const int srcChannels = fileBuffer.getNumChannels();
+    const int srcChannels = sourceBuffer->getNumChannels();
 
     // Advance smoothers over the silent pre-trigger region so they stay in sync
     const int loopStart = juce::jlimit(0, safeSamples, startOffset_);
@@ -168,10 +173,10 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
         for (int ch = 0; ch < outChannels; ++ch)
         {
             const int   srcCh = (srcChannels == 1) ? 0 : (ch % srcChannels);
-            const float y0    = fileBuffer.getSample(srcCh, pm1);
-            const float y1    = fileBuffer.getSample(srcCh, pos0);
-            const float y2    = fileBuffer.getSample(srcCh, pp1);
-            const float y3    = fileBuffer.getSample(srcCh, pp2);
+            const float y0    = sourceBuffer->getSample(srcCh, pm1);
+            const float y1    = sourceBuffer->getSample(srcCh, pos0);
+            const float y2    = sourceBuffer->getSample(srcCh, pp1);
+            const float y3    = sourceBuffer->getSample(srcCh, pp2);
 
             // Catmull-Rom coefficients
             const float c1     = 0.5f * (y2 - y0);
@@ -183,6 +188,6 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
             outputBuffer.addSample(ch, i, sample * chGain * env);
         }
 
-        playPosition += (double)pitchRatio;
+        playPosition += (double)finalPitchRatio;
     }
 }

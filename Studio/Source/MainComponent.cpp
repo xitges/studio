@@ -1509,7 +1509,8 @@ void MainComponent::timerCallback()
 {
     if (!audioEngine.isPlaying()) return;
 
-    const double bpm = project.bpm > 0.0 ? project.bpm : 70.0;
+    //const double bpm = project.bpm > 0.0 ? project.bpm : 70.0;
+    const double bpm = audioEngine.getBPM();
     const double sr  = audioEngine.getSampleRate();
 
     if (toolbar.getPlayMode() == PlayMode::Song)
