@@ -291,16 +291,26 @@ namespace SynthPresets
     {
         return {
             //  name              en    wv  atk    dec    sus    rel    cut    res   lfoR  lfoD  lfoT
-            { "Soft Keys",      make(true, 3,   1, 220, 0.05f,  120, 6500, 0.10f, 0.00f, 0.00f) },
-            { "Plucked Pulse",  make(true, 2,   1, 180, 0.22f,  110, 3600, 0.32f, 4.80f, 0.02f, 1) },
-            { "Bowed Pad",      make(true, 3, 180, 520, 0.78f, 1400, 2200, 0.18f, 4.60f, 0.02f, 1) },
-            { "Fat Bass",       make(true, 2,   1, 100, 0.72f,  120,  520, 0.58f, 0.00f, 0.00f) },
-            { "Chiptune Pulse", make(true, 2,   1,  35, 0.00f,   25,11000, 0.05f, 0.00f, 0.00f) },
-            { "Bright Lead",    make(true, 1,   6,  90, 0.78f,  180, 6800, 0.28f, 5.20f, 0.04f, 1) },
-            { "Warm Pad",       make(true, 3, 420, 680, 0.82f, 2200, 1800, 0.12f, 0.35f, 0.06f) },
-            { "Short Pluck",    make(true, 2,   1, 110, 0.03f,   90, 5200, 0.30f, 0.00f, 0.00f) },
-            { "Brass Lead",     make(true, 2,  18, 110, 0.78f,  150, 2600, 0.32f, 5.40f, 0.03f, 1) },
+            { "Studio Piano",   make(true, 3,   2, 280, 0.12f,  420, 4800, 0.14f, 0.00f, 0.00f) },
+            { "Soft EP",        make(true, 0,   3, 360, 0.22f,  780, 5200, 0.08f, 0.00f, 0.00f) },
+            { "Plucked Pulse",  make(true, 2,   2, 150, 0.18f,  220, 3100, 0.28f, 5.10f, 0.02f, 1) },
+            { "Fat Bass",       make(true, 2,   2, 120, 0.76f,  260,  430, 0.46f, 0.00f, 0.00f) },
+            { "Deep Sub",       make(true, 0,   6, 180, 0.88f,  360,  260, 0.10f, 0.00f, 0.00f) },
+            { "Bright Lead",    make(true, 1,   5, 100, 0.72f,  280, 5600, 0.24f, 5.00f, 0.05f, 1) },
+            { "Mono Brass",     make(true, 2,  10, 170, 0.62f,  320, 1700, 0.40f, 4.80f, 0.02f, 0) },
+            { "Glass Bell",     make(true, 0,   1, 420, 0.00f, 1400, 7200, 0.06f, 0.00f, 0.00f) },
+            { "Bowed Pad",      make(true, 3, 220, 620, 0.84f, 2400, 2600, 0.16f, 4.40f, 0.03f, 1) },
+            { "Warm Pad",       make(true, 3, 320, 760, 0.86f, 3400, 2100, 0.10f, 0.28f, 0.08f) },
+            { "Air Pad",        make(true, 3, 520, 880, 0.90f, 4200, 3400, 0.08f, 0.24f, 0.10f) },
+            { "Chiptune Pulse", make(true, 2,   1,  40, 0.00f,   90, 9600, 0.05f, 0.00f, 0.00f) },
         };
+    }
+
+    inline std::vector<Preset> mergeFactoryAndCustom(const std::vector<Preset>& customPresets)
+    {
+        auto presets = getAll();
+        presets.insert(presets.end(), customPresets.begin(), customPresets.end());
+        return presets;
     }
 } // namespace SynthPresets
 
@@ -480,4 +490,6 @@ struct Project
 
     // M8 — VST/AU instrument plugins (one slot per channel)
     std::array<PluginSlot, 16> channelInstrumentPlugins = {};
+
+    std::vector<SynthPresets::Preset> customSynthPresets;
 };

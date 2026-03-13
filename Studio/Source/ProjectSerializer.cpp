@@ -198,6 +198,28 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         }
     }
 
+    auto* synthPresetEl = root.createNewChildElement("CustomSynthPresets");
+    for (const auto& preset : project.customSynthPresets)
+    {
+        auto* pEl = synthPresetEl->createNewChildElement("Preset");
+        pEl->setAttribute("name", preset.name);
+        pEl->setAttribute("enabled", preset.params.enabled ? 1 : 0);
+        pEl->setAttribute("waveform", preset.params.waveform);
+        pEl->setAttribute("attack", (double)preset.params.attack);
+        pEl->setAttribute("decay", (double)preset.params.decay);
+        pEl->setAttribute("sustain", (double)preset.params.sustain);
+        pEl->setAttribute("release", (double)preset.params.release);
+        pEl->setAttribute("cutoff", (double)preset.params.cutoff);
+        pEl->setAttribute("resonance", (double)preset.params.resonance);
+        pEl->setAttribute("lfoRate", (double)preset.params.lfoRate);
+        pEl->setAttribute("lfoDepth", (double)preset.params.lfoDepth);
+        pEl->setAttribute("lfoTarget", preset.params.lfoTarget);
+        pEl->setAttribute("ddspEnabled", preset.params.ddspAuto.enabled ? 1 : 0);
+        pEl->setAttribute("ddspAmount", (double)preset.params.ddspAuto.amount);
+        pEl->setAttribute("ddspBrightness", (double)preset.params.ddspAuto.brightness);
+        pEl->setAttribute("ddspMotion", (double)preset.params.ddspAuto.motion);
+    }
+
     return root.writeTo(file);
 }
 
@@ -504,6 +526,33 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 lane.points.push_back(pt);
             }
             loaded.automationLanes.push_back(lane);
+        }
+    }
+
+    if (auto* synthPresetEl = xml->getChildByName("CustomSynthPresets"))
+    {
+        for (auto* pEl : synthPresetEl->getChildIterator())
+        {
+            SynthPresets::Preset preset;
+            preset.name = pEl->getStringAttribute("name");
+            preset.params.enabled = pEl->getIntAttribute("enabled", 1) != 0;
+            preset.params.waveform = pEl->getIntAttribute("waveform", 1);
+            preset.params.attack = (float)pEl->getDoubleAttribute("attack", 5.0);
+            preset.params.decay = (float)pEl->getDoubleAttribute("decay", 80.0);
+            preset.params.sustain = (float)pEl->getDoubleAttribute("sustain", 0.6);
+            preset.params.release = (float)pEl->getDoubleAttribute("release", 200.0);
+            preset.params.cutoff = (float)pEl->getDoubleAttribute("cutoff", 4000.0);
+            preset.params.resonance = (float)pEl->getDoubleAttribute("resonance", 0.3);
+            preset.params.lfoRate = (float)pEl->getDoubleAttribute("lfoRate", 2.0);
+            preset.params.lfoDepth = (float)pEl->getDoubleAttribute("lfoDepth", 0.0);
+            preset.params.lfoTarget = pEl->getIntAttribute("lfoTarget", 0);
+            preset.params.ddspAuto.enabled = pEl->getIntAttribute("ddspEnabled", 0) != 0;
+            preset.params.ddspAuto.amount = (float)pEl->getDoubleAttribute("ddspAmount", 0.0);
+            preset.params.ddspAuto.brightness = (float)pEl->getDoubleAttribute("ddspBrightness", 0.5);
+            preset.params.ddspAuto.motion = (float)pEl->getDoubleAttribute("ddspMotion", 0.25);
+
+            if (preset.name.isNotEmpty())
+                loaded.customSynthPresets.push_back(std::move(preset));
         }
     }
 

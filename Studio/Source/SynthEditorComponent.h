@@ -68,6 +68,10 @@ public:
     };
 
     std::function<void()> onParamsChanged;
+    std::function<void(const SynthParams&, int)> onPreviewRequested;
+    std::function<void(const SynthParams&)> onSavePresetRequested;
+    std::function<void(const juce::String&)> onRenamePresetRequested;
+    std::function<void(const juce::String&)> onDeletePresetRequested;
 
     SynthEditorPanel()
     {
@@ -99,12 +103,6 @@ public:
         presetLbl.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
         addAndMakeVisible(presetLbl);
 
-        // Populate from database
-        {
-            const auto presets = SynthPresets::getAll();
-            for (int i = 0; i < (int)presets.size(); ++i)
-                presetBox.addItem(presets[(size_t)i].name, i + 1);
-        }
         presetBox.setTextWhenNothingSelected("-- Select Preset --");
         presetBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff16213e));
         presetBox.setColour(juce::ComboBox::textColourId,       juce::Colour(0xffb0b0d8));
@@ -112,16 +110,87 @@ public:
         presetBox.onChange = [this]
         {
             const int id = presetBox.getSelectedId();
+            updatePresetActionState();
             if (id <= 0) return;
-            const auto presets = SynthPresets::getAll();
             const int idx = id - 1;
-            if (idx < (int)presets.size())
+            if (idx < (int)availablePresets.size())
             {
-                loadParams(presets[(size_t)idx].params);
+                loadParams(availablePresets[(size_t)idx].params);
                 notify();   // propagates to AudioEngine + ProjectModel
             }
         };
         addAndMakeVisible(presetBox);
+
+        savePresetBtn.setButtonText("Save Preset");
+        savePresetBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2d6a4f));
+        savePresetBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff40916c));
+        savePresetBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        savePresetBtn.onClick = [this]
+        {
+            if (onSavePresetRequested)
+                onSavePresetRequested(makeCurrentParams());
+        };
+        addAndMakeVisible(savePresetBtn);
+
+        renamePresetBtn.setButtonText("Rename");
+        renamePresetBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff7f5539));
+        renamePresetBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff9c6644));
+        renamePresetBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        renamePresetBtn.onClick = [this]
+        {
+            if (onRenamePresetRequested)
+            {
+                const auto presetName = getSelectedPresetName();
+                if (presetName.isNotEmpty() && isSelectedPresetCustom())
+                    onRenamePresetRequested(presetName);
+            }
+        };
+        addAndMakeVisible(renamePresetBtn);
+
+        deletePresetBtn.setButtonText("Delete");
+        deletePresetBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff7f1d1d));
+        deletePresetBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffb91c1c));
+        deletePresetBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        deletePresetBtn.onClick = [this]
+        {
+            if (onDeletePresetRequested)
+            {
+                const auto presetName = getSelectedPresetName();
+                if (presetName.isNotEmpty() && isSelectedPresetCustom())
+                    onDeletePresetRequested(presetName);
+            }
+        };
+        addAndMakeVisible(deletePresetBtn);
+
+        testNoteLbl.setText("Test Note", juce::dontSendNotification);
+        testNoteLbl.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        testNoteLbl.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+        addAndMakeVisible(testNoteLbl);
+
+        testNoteBox.addItem("C2", 1);
+        testNoteBox.addItem("C3", 2);
+        testNoteBox.addItem("C4", 3);
+        testNoteBox.addItem("C5", 4);
+        testNoteBox.setSelectedId(3, juce::dontSendNotification);
+        testNoteBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff16213e));
+        testNoteBox.setColour(juce::ComboBox::textColourId,       juce::Colour(0xffb0b0d8));
+        testNoteBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xff3498db).withAlpha(0.6f));
+        addAndMakeVisible(testNoteBox);
+
+        testBtn.setButtonText("Test Sound");
+        testBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff204a87));
+        testBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3498db));
+        testBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        testBtn.onClick = [this]
+        {
+            if (onPreviewRequested)
+            {
+                auto params = makeCurrentParams();
+                params.enabled = true;
+                onPreviewRequested(params, getSelectedPreviewMidiNote());
+            }
+        };
+        addAndMakeVisible(testBtn);
 
         // ---- Enable toggle -----------------------------------------------
         enableBtn.setButtonText("Enable Synth");
@@ -190,7 +259,34 @@ public:
         makeLabel(lfoDepthLbl,  "LFO Depth");
         makeLabel(lfoTargetLbl, "LFO Target");
 
+        setAvailablePresets(SynthPresets::getAll());
         updateWaveformPreview();
+    }
+
+    void setAvailablePresets(const std::vector<SynthPresets::Preset>& presets,
+                             const juce::String& selectPresetName = {})
+    {
+        availablePresets = presets;
+        factoryPresetCount = (int)SynthPresets::getAll().size();
+        presetBox.clear(juce::dontSendNotification);
+        for (int i = 0; i < (int)availablePresets.size(); ++i)
+            presetBox.addItem(availablePresets[(size_t)i].name, i + 1);
+
+        if (selectPresetName.isNotEmpty())
+        {
+            for (int i = 0; i < (int)availablePresets.size(); ++i)
+            {
+                if (availablePresets[(size_t)i].name == selectPresetName)
+                {
+                    presetBox.setSelectedId(i + 1, juce::dontSendNotification);
+                    updatePresetActionState();
+                    return;
+                }
+            }
+        }
+
+        presetBox.setSelectedId(0, juce::dontSendNotification);
+        updatePresetActionState();
     }
 
     void loadParams(const SynthParams& p)
@@ -242,13 +338,13 @@ public:
             g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
             g.drawText(text, 10, y, 400, 14, juce::Justification::centredLeft);
             g.setColour(juce::Colour(0xff3498db).withAlpha(0.4f));
-            g.drawLine(10.0f, (float)(y + 14), 410.0f, (float)(y + 14), 1.0f);
+            g.drawLine(10.0f, (float)(y + 14), 450.0f, (float)(y + 14), 1.0f);
         };
 
-        sectionHeader("NOTE AUTO PATCH", 172);
-        sectionHeader("ADSR ENVELOPE",   282);
-        sectionHeader("FILTER",          392);
-        sectionHeader("LFO",             452);
+        sectionHeader("NOTE AUTO PATCH", 244);
+        sectionHeader("ADSR ENVELOPE",   354);
+        sectionHeader("FILTER",          464);
+        sectionHeader("LFO",             524);
     }
 
     void resized() override
@@ -258,7 +354,17 @@ public:
         // Row 0 — Preset selector
         int y = 10;
         presetLbl.setBounds(10,  y + 4, 46, 18);
-        presetBox.setBounds(60,  y,     300, 26);
+        presetBox.setBounds(60,  y,     240, 26);
+        savePresetBtn.setBounds(312, y, 118, 26);
+        y += 36;
+
+        renamePresetBtn.setBounds(60, y, 110, 26);
+        deletePresetBtn.setBounds(180, y, 110, 26);
+        y += 36;
+
+        testNoteLbl.setBounds(10, y + 4, 60, 18);
+        testNoteBox.setBounds(74, y, 88, 26);
+        testBtn.setBounds(176, y, 124, 26);
         y += 36;
 
         // Row 1 — Enable + Waveform
@@ -270,26 +376,26 @@ public:
         previewLbl.setBounds(10, y + 4, 80, 18);
         waveformPreview.setBounds(10, y + 24, 390, 88);
 
-        y = 190;
+        y = 262;
         ddspEnableBtn.setBounds(10, y, 120, 26);
         y += 34;
         ddspAmountLbl    .setBounds(10, y, lblW, h); ddspAmountSl    .setBounds(100, y, slW, h); y += h + pad;
         ddspBrightnessLbl.setBounds(10, y, lblW, h); ddspBrightnessSl.setBounds(100, y, slW, h); y += h + pad;
         ddspMotionLbl    .setBounds(10, y, lblW, h); ddspMotionSl    .setBounds(100, y, slW, h);
 
-        y = 300;
+        y = 372;
         attackLbl .setBounds(10, y, lblW, h); attackSl .setBounds(100, y, slW, h); y += h + pad;
         decayLbl  .setBounds(10, y, lblW, h); decaySl  .setBounds(100, y, slW, h); y += h + pad;
         sustainLbl.setBounds(10, y, lblW, h); sustainSl.setBounds(100, y, slW, h); y += h + pad;
         releaseLbl.setBounds(10, y, lblW, h); releaseSl.setBounds(100, y, slW, h);
 
         // Filter
-        y = 410;
+        y = 482;
         cutoffLbl   .setBounds(10, y, lblW, h); cutoffSl   .setBounds(100, y, slW, h); y += h + pad;
         resonanceLbl.setBounds(10, y, lblW, h); resonanceSl.setBounds(100, y, slW, h);
 
         // LFO
-        y = 470;
+        y = 542;
         lfoRateLbl  .setBounds(10, y, lblW, h); lfoRateSl  .setBounds(100, y, slW, h); y += h + pad;
         lfoDepthLbl .setBounds(10, y, lblW, h); lfoDepthSl .setBounds(100, y, slW, h); y += h + pad;
         lfoTargetLbl.setBounds(10, y, lblW, h); lfoTargetBox.setBounds(100, y, 100, h);
@@ -314,9 +420,49 @@ private:
         if (onParamsChanged) onParamsChanged();
     }
 
+    juce::String getSelectedPresetName() const
+    {
+        const int idx = presetBox.getSelectedId() - 1;
+        return (idx >= 0 && idx < (int)availablePresets.size())
+            ? availablePresets[(size_t)idx].name
+            : juce::String{};
+    }
+
+    bool isSelectedPresetCustom() const
+    {
+        const int idx = presetBox.getSelectedId() - 1;
+        return idx >= factoryPresetCount && idx < (int)availablePresets.size();
+    }
+
+    void updatePresetActionState()
+    {
+        const bool canEditSelected = isSelectedPresetCustom();
+        renamePresetBtn.setEnabled(canEditSelected);
+        deletePresetBtn.setEnabled(canEditSelected);
+        renamePresetBtn.setAlpha(canEditSelected ? 1.0f : 0.45f);
+        deletePresetBtn.setAlpha(canEditSelected ? 1.0f : 0.45f);
+    }
+
+    int getSelectedPreviewMidiNote() const
+    {
+        switch (testNoteBox.getSelectedId())
+        {
+            case 1: return 36;
+            case 2: return 48;
+            case 4: return 72;
+            default: return 60;
+        }
+    }
+
     // Preset selector
     juce::ComboBox presetBox;
     juce::Label    presetLbl;
+    juce::TextButton savePresetBtn;
+    juce::TextButton renamePresetBtn;
+    juce::TextButton deletePresetBtn;
+    juce::ComboBox testNoteBox;
+    juce::Label    testNoteLbl;
+    juce::TextButton testBtn;
 
     juce::TextButton enableBtn;
     juce::TextButton ddspEnableBtn;
@@ -337,6 +483,8 @@ private:
     juce::Slider   lfoRateSl, lfoDepthSl;
     juce::ComboBox lfoTargetBox;
     juce::Label    lfoRateLbl, lfoDepthLbl, lfoTargetLbl;
+    std::vector<SynthPresets::Preset> availablePresets;
+    int factoryPresetCount = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -354,7 +502,7 @@ public:
     {
         setContentNonOwned(&panel, false);
         setResizable(false, false);
-        setSize(430, 610);
+        setSize(470, 690);
     }
 
     void setChannelName(const juce::String& name)

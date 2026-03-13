@@ -88,6 +88,7 @@ private:
     void     restorePlayModeAfterPianoRollPlayback();
     void     exportCurrentPianoRollToMidi();
     void     importCurrentPianoRollFromMidi();
+    void     refreshSynthEditorPresetList(const juce::String& selectPresetName = {});
 
     // M6 — undo/redo
     juce::UndoManager undoManager;

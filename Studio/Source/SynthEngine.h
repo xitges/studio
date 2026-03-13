@@ -116,8 +116,11 @@ public:
         frequency_  = 440.0 * std::pow(2.0, (midiPitch - 69) / 12.0);
         const float startJitter = SynthVoicing::stableHash01(voiceSlot * 131 + 11);
         const float secondJitter = SynthVoicing::stableHash01(voiceSlot * 197 + 53);
+        const float subJitter = SynthVoicing::stableHash01(voiceSlot * 223 + 97);
+        const float driftJitter = SynthVoicing::stableHash01(voiceSlot * 283 + 149);
         phase_      = startJitter;
         phase2_     = secondJitter;
+        subPhase_   = subJitter;
         lfoPhase_   = 0.0;
 
         static constexpr std::array<float, 8> kDetuneCents { -3.5f, -1.75f, -0.75f, 0.0f,
@@ -126,6 +129,13 @@ public:
             kDetuneCents[(size_t)juce::jlimit(0, (int)kDetuneCents.size() - 1, voiceSlot)]);
         voicePan_ = juce::jlimit(-0.22f, 0.22f,
                                  ((float)voiceSlot - 3.5f) * 0.055f + (startJitter - 0.5f) * 0.05f);
+        const float driftCents = (driftJitter - 0.5f) * 1.6f;
+        driftRatio_ = SynthVoicing::detuneRatioFromCents(driftCents);
+        filterEnvDepth_ = juce::jlimit(0.04f, 0.85f,
+                                       0.18f + (1.0f - p.sustain) * 0.34f + velocity * 0.16f
+                                     + (p.waveform == 1 || p.waveform == 2 ? 0.07f : 0.0f));
+        transientPunch_ = 1.0f + velocity * 0.20f
+                        + ((p.waveform == 1 || p.waveform == 2) ? 0.08f : 0.0f);
 
         const float attackSamples  = juce::jmax(kMinAttackSamples, p.attack  * 0.001f * (float)sr);
         const float decaySamples   = juce::jmax(1.0f, p.decay   * 0.001f * (float)sr);
@@ -242,37 +252,58 @@ public:
                 }
 
                 // Frequency with optional pitch LFO
-                double freq = frequency_;
+                double freq = frequency_ * driftRatio_;
                 if (params_.lfoDepth > 0.0f && params_.lfoTarget == 1)
                     freq *= std::pow(2.0, (double)(lfoVal * params_.lfoDepth * 2.0f) / 12.0);
 
-                // Cutoff with optional LFO — recompute filter only when modulating
+                const float cutoffKeyTrack = 1.0f + juce::jlimit(-0.18f, 0.28f, ((float)pitch_ - 60.0f) * 0.0105f);
+                const float envOpen = std::pow(juce::jlimit(0.0f, 1.0f, envLevel_), 0.55f);
+                const float envCutoff = params_.cutoff * (1.0f + filterEnvDepth_ * envOpen);
+                float modCutoff = envCutoff * cutoffKeyTrack;
                 if (params_.lfoDepth > 0.0f && params_.lfoTarget == 0)
-                {
-                    const float modCutoff = juce::jlimit(50.0f, 20000.0f,
-                                                         params_.cutoff * (1.0f + lfoVal * params_.lfoDepth));
-                    computeFilter(modCutoff, params_.resonance, sr, b0, b1, b2, a1, a2);
-                }
+                    modCutoff *= (1.0f + lfoVal * params_.lfoDepth * 0.75f);
+                modCutoff = juce::jlimit(50.0f, 20000.0f, modCutoff);
+                computeFilter(modCutoff, params_.resonance, sr, b0, b1, b2, a1, a2);
 
                 // Oscillator
                 const double dt = freq / sr;
                 const double dt2 = (freq * detuneRatio_) / sr;
+                const double dtSub = juce::jlimit(0.0, 0.49, (freq * 0.5) / sr);
                 phase_ += dt;
                 if (phase_ >= 1.0) phase_ -= 1.0;
                 phase2_ += dt2;
                 if (phase2_ >= 1.0) phase2_ -= 1.0;
+                subPhase_ += dtSub;
+                if (subPhase_ >= 1.0) subPhase_ -= 1.0;
 
                 const float osc    = generateSample((float)phase_, dt, params_.waveform);
                 const float osc1   = generateSample((float)phase2_, dt2, params_.waveform);
-                const float sample = ((osc + osc1) * 0.5) * envLevel_ * velocity_ * 0.25f;  // 0.25 headroom for polyphony
+                const float subOsc = generateSubSample((float)subPhase_, params_.waveform);
+                const float subMix = (params_.waveform == 0) ? 0.0f
+                                   : (params_.waveform == 2 ? 0.28f
+                                      : (params_.waveform == 1 ? 0.22f : 0.14f));
+                const float transientDrive = 1.0f + (1.0f - envLevel_) * (0.18f + velocity_ * 0.12f)
+                                           + (envOpen * 0.08f);
+                const float harmonicDrive = 1.12f + params_.resonance * 0.85f
+                                          + ((params_.waveform == 1 || params_.waveform == 2) ? 0.18f : 0.0f);
+                const float bodyBlend = (params_.waveform == 3) ? 0.52f : 0.58f;
+                const float rawSample = osc * bodyBlend + osc1 * 0.34f + subOsc * subMix;
+                const float sample = SynthVoicing::softClip(rawSample * harmonicDrive * transientDrive)
+                                   * envLevel_ * velocity_ * 0.28f * transientPunch_;
 
                 // Biquad LP filter (direct-form I)
-                const float filtered = b0 * sample + z1L_;
+                const float filtered = SynthVoicing::softClip((b0 * sample + z1L_)
+                                                            * (1.0f + params_.resonance * 0.30f));
                 z1L_ = b1 * sample - a1 * filtered + z2L_;
                 z2L_ = b2 * sample - a2 * filtered;
 
-                synthOutL = filtered * panL;
-                synthOutR = filtered * panR;
+                const float air = juce::jlimit(0.0f, 0.22f,
+                                               ((params_.cutoff - 1800.0f) / 12000.0f) * 0.18f
+                                             + (params_.waveform == 3 ? 0.03f : 0.0f));
+                const float outputSample = SynthVoicing::softClip(filtered + (rawSample - filtered) * air);
+
+                synthOutL = outputSample * panL;
+                synthOutR = outputSample * panR;
             }
 
             if (noteOnFadeRemaining_ > 0)
@@ -300,6 +331,7 @@ private:
     double frequency_         = 440.0;
     double phase_             = 0.0;
     double phase2_            = 0.0;
+    double subPhase_          = 0.0;
     double lfoPhase_          = 0.0;
 
     Env    envState_          = Env::Idle;
@@ -311,6 +343,9 @@ private:
     float  sustainLvl_        = 0.7f;
     SynthParams params_       = {};
     float  detuneRatio_       = 1.0f;
+    float  driftRatio_        = 1.0f;
+    float  filterEnvDepth_    = 0.22f;
+    float  transientPunch_    = 1.0f;
     float  voicePan_          = 0.0f;
     int    voiceSlot_         = 0;
 
@@ -381,6 +416,20 @@ private:
             }
             case 3: return 1.0f - 4.0f * std::abs(p - 0.5f);                        // triangle — already band-limited
             default: return 0.0f;
+        }
+    }
+
+    float generateSubSample(float p, int waveform) const
+    {
+        switch (waveform)
+        {
+            case 2:
+            case 3:
+                return 1.0f - 4.0f * std::abs(p - 0.5f);
+            case 1:
+                return std::sin(p * juce::MathConstants<float>::twoPi);
+            default:
+                return 0.0f;
         }
     }
 

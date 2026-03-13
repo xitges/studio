@@ -778,11 +778,13 @@ MainComponent::MainComponent()
         if (synthEditorWindow == nullptr)
         {
             synthEditorWindow = std::make_unique<SynthEditorWindow>();
-            synthEditorWindow->centreWithSize(430, 610);
+            synthEditorWindow->centreWithSize(470, 690);
         }
 
         synthEditorWindow->setChannelName(
             juce::String(ch + 1));   // simple "1"-based label for now
+
+        refreshSynthEditorPresetList();
 
         if (auto* pat = findPattern(activePatternId))
             synthEditorWindow->panel.loadParams(pat->synthParams[(size_t)ch]);
@@ -793,6 +795,128 @@ MainComponent::MainComponent()
                 synthEditorWindow->panel.applyToParams(pat->synthParams[(size_t)ch]);
             audioEngine.updatePatternSnapshot();  // keep snapshot in sync for real-time modulation
             markDirty();
+        };
+        synthEditorWindow->panel.onPreviewRequested = [this, ch](const SynthParams& params, int midiPitch)
+        {
+            audioEngine.previewSynthNote(ch, midiPitch, params);
+        };
+        synthEditorWindow->panel.onSavePresetRequested = [this](const SynthParams& params)
+        {
+            auto dialog = std::make_shared<juce::AlertWindow>("Save Synth Preset",
+                                                              "Enter a preset name for the current synth settings.",
+                                                              juce::MessageBoxIconType::NoIcon);
+            dialog->addTextEditor("name", "My Preset");
+            dialog->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+            dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+            dialog->enterModalState(true, juce::ModalCallbackFunction::create([this, dialog, params](int result)
+            {
+                if (result != 1)
+                    return;
+
+                auto presetName = dialog->getTextEditorContents("name").trim();
+                if (presetName.isEmpty())
+                    return;
+
+                const auto factoryPresets = SynthPresets::getAll();
+                const bool conflictsWithFactory = std::any_of(factoryPresets.begin(), factoryPresets.end(),
+                                                              [&presetName](const SynthPresets::Preset& preset)
+                                                              {
+                                                                  return preset.name.equalsIgnoreCase(presetName);
+                                                              });
+                if (conflictsWithFactory)
+                    presetName << " Custom";
+
+                auto existing = std::find_if(project.customSynthPresets.begin(),
+                                             project.customSynthPresets.end(),
+                                             [&presetName](const SynthPresets::Preset& preset)
+                                             {
+                                                 return preset.name.equalsIgnoreCase(presetName);
+                                             });
+
+                if (existing != project.customSynthPresets.end())
+                    existing->params = params;
+                else
+                    project.customSynthPresets.push_back({ presetName, params });
+
+                refreshSynthEditorPresetList(presetName);
+                markDirty();
+            }));
+        };
+        synthEditorWindow->panel.onRenamePresetRequested = [this](const juce::String& oldName)
+        {
+            auto dialog = std::make_shared<juce::AlertWindow>("Rename Synth Preset",
+                                                              "Enter a new name for the selected custom preset.",
+                                                              juce::MessageBoxIconType::NoIcon);
+            dialog->addTextEditor("name", oldName);
+            dialog->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
+            dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+            dialog->enterModalState(true, juce::ModalCallbackFunction::create([this, dialog, oldName](int result)
+            {
+                if (result != 1)
+                    return;
+
+                auto newName = dialog->getTextEditorContents("name").trim();
+                if (newName.isEmpty())
+                    return;
+
+                const auto factoryPresets = SynthPresets::getAll();
+                const bool conflictsWithFactory = std::any_of(factoryPresets.begin(), factoryPresets.end(),
+                                                              [&newName](const SynthPresets::Preset& preset)
+                                                              {
+                                                                  return preset.name.equalsIgnoreCase(newName);
+                                                              });
+                if (conflictsWithFactory)
+                    newName << " Custom";
+
+                auto existing = std::find_if(project.customSynthPresets.begin(),
+                                             project.customSynthPresets.end(),
+                                             [&oldName](const SynthPresets::Preset& preset)
+                                             {
+                                                 return preset.name == oldName;
+                                             });
+                if (existing == project.customSynthPresets.end())
+                    return;
+
+                auto conflictingCustom = std::find_if(project.customSynthPresets.begin(),
+                                                      project.customSynthPresets.end(),
+                                                      [&newName, &oldName](const SynthPresets::Preset& preset)
+                                                      {
+                                                          return preset.name.equalsIgnoreCase(newName)
+                                                              && preset.name != oldName;
+                                                      });
+                if (conflictingCustom != project.customSynthPresets.end())
+                    newName << " Copy";
+
+                existing->name = newName;
+                refreshSynthEditorPresetList(newName);
+                markDirty();
+            }));
+        };
+        synthEditorWindow->panel.onDeletePresetRequested = [this](const juce::String& presetName)
+        {
+            auto dialog = std::make_shared<juce::AlertWindow>("Delete Synth Preset",
+                                                              "Delete the selected custom preset?",
+                                                              juce::MessageBoxIconType::WarningIcon);
+            dialog->addButton("Delete", 1, juce::KeyPress(juce::KeyPress::returnKey));
+            dialog->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+            dialog->enterModalState(true, juce::ModalCallbackFunction::create([this, dialog, presetName](int result)
+            {
+                juce::ignoreUnused(dialog);
+                if (result != 1)
+                    return;
+
+                project.customSynthPresets.erase(
+                    std::remove_if(project.customSynthPresets.begin(),
+                                   project.customSynthPresets.end(),
+                                   [&presetName](const SynthPresets::Preset& preset)
+                                   {
+                                       return preset.name == presetName;
+                                   }),
+                    project.customSynthPresets.end());
+
+                refreshSynthEditorPresetList();
+                markDirty();
+            }));
         };
 
         synthEditorWindow->setVisible(true);
@@ -1452,6 +1576,8 @@ void MainComponent::reloadProjectIntoUI()
     if (auto* activePat = findPattern(activePatternId))
         mixer.updateRoutingLabels(activePat->channelMixerRouting);
 
+    refreshSynthEditorPresetList();
+
     // M11 — ensure playlist tracks exist
     if (project.playlistTracks.empty())
         for (int t = 0; t < 8; ++t)
@@ -1609,6 +1735,16 @@ void MainComponent::syncChannelRackToProject()
     // Save current rack state (including names/types) into the active pattern
     if (auto* pat = findPattern(activePatternId))
         channelRack.saveToPattern(*pat);
+}
+
+void MainComponent::refreshSynthEditorPresetList(const juce::String& selectPresetName)
+{
+    if (synthEditorWindow == nullptr)
+        return;
+
+    synthEditorWindow->panel.setAvailablePresets(
+        SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
+        selectPresetName);
 }
 
 int MainComponent::ensureAutoBassChannel()

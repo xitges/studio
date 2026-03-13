@@ -375,6 +375,7 @@ private:
     const ChannelSourceSnapshot& getChannelSourceSnapshot() const;
     void updateChannelSourceSnapshot(int channelIndex, std::shared_ptr<juce::AudioBuffer<float>> buffer);
     const SongSampleCacheMap& getSongSampleCache() const;
+    void resetSongChannelMixState();
 
     // M5 — mixer intermediate buffers
     juce::AudioBuffer<float> stagingBuf;                         // temp per-channel render
@@ -412,6 +413,9 @@ private:
     SongSampleCacheMap songSampleCaches_[2];
     std::atomic<int> activeSongCacheIdx_{0};
     int songPlayerClipId[16] = {};
+    std::array<float, 16> songChannelVolume_ = {};
+    std::array<float, 16> songChannelPan_ = {};
+    std::array<int, 16> songChannelMixerRouting_ = {};
 
     // Double-buffer snapshot: message thread writes to inactive slot,
     // audio thread reads from active slot via atomic index.
