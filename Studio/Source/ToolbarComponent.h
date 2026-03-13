@@ -30,6 +30,12 @@ public:
     bool     isPlaying()   const { return playing; }
     PlayMode getPlayMode() const { return playMode; }
     double   getBPM()      const { return bpmSlider.getValue(); }
+    void setBPM(double bpm)      { bpmSlider.setValue(bpm, juce::dontSendNotification); }
+    void setPlayMode(PlayMode mode)
+    {
+        playMode = mode;
+        playModeBox.setSelectedId((int)playMode + 1, juce::dontSendNotification);
+    }
 
     // Toggle Song ↔ Pattern mode and fire onPlayModeChanged
     void togglePlayMode()

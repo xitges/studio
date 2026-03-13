@@ -320,6 +320,8 @@ struct PlaylistClip
 struct Project
 {
     double bpm = 140.0;
+    PlayMode playMode = PlayMode::Pattern;
+    int activePatternId = 1;
     KeySignature keySignature;
 
     // channel rack state (global: only count is global; names/types live in Pattern)

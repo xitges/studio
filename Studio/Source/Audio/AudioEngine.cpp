@@ -292,6 +292,12 @@ void AudioEngine::loadLaunchpadSample(int padIdx, const juce::File& file)
     launchpadPlayers[(size_t)padIdx].loadFile(file);
 }
 
+void AudioEngine::unloadLaunchpadSample(int padIdx)
+{
+    if (padIdx < 0 || padIdx >= 64) return;
+    launchpadPlayers[(size_t)padIdx].clear();
+}
+
 void AudioEngine::allSynthNotesOff()
 {
     for (auto& ps : polySynths)

@@ -153,6 +153,21 @@ public:
         nudgeSession(aligned - firstBeat);
     }
 
+    void nudgeSessionPitch(int deltaSemitones)
+    {
+        if (pattern == nullptr) return;
+        auto& nl = pattern->notes[channel];
+        const int endIdx = juce::jmin(sessionEndIdx, (int)nl.size() - 1);
+        if (sessionStartIdx > endIdx) return;
+
+        for (int i = sessionStartIdx; i <= endIdx; ++i)
+            nl[(size_t)i].pitch = juce::jlimit(minPitch, maxPitch,
+                                               nl[(size_t)i].pitch + deltaSemitones);
+
+        if (onNotesChanged) onNotesChanged();
+        repaint();
+    }
+
     bool hasSession() const
     {
         if (pattern == nullptr) return false;
@@ -459,6 +474,11 @@ public:
         // Cursor navigation — Arrow keys
         if (kc == juce::KeyPress::leftKey)
         {
+            if (key.getModifiers().isShiftDown())
+            {
+                nudgeSession(-snapBeats);
+                return true;
+            }
             cursorBeat = juce::jmax(0.0f, cursorBeat - snapBeats);
             repaint();
             scrollToCursor();
@@ -466,6 +486,11 @@ public:
         }
         if (kc == juce::KeyPress::rightKey)
         {
+            if (key.getModifiers().isShiftDown())
+            {
+                nudgeSession(snapBeats);
+                return true;
+            }
             const float maxBeat = pattern ? (float)(pattern->stepCount) * 0.25f : 4.0f;
             cursorBeat = juce::jmin(maxBeat - snapBeats, cursorBeat + snapBeats);
             repaint();
@@ -474,6 +499,11 @@ public:
         }
         if (kc == juce::KeyPress::upKey)
         {
+            if (key.getModifiers().isShiftDown())
+            {
+                nudgeSessionPitch(+1);
+                return true;
+            }
             cursorPitch = moveCursorByScaleStep(+1);
             repaint();
             scrollToCursor();
@@ -481,6 +511,11 @@ public:
         }
         if (kc == juce::KeyPress::downKey)
         {
+            if (key.getModifiers().isShiftDown())
+            {
+                nudgeSessionPitch(-1);
+                return true;
+            }
             cursorPitch = moveCursorByScaleStep(-1);
             repaint();
             scrollToCursor();
@@ -1336,13 +1371,19 @@ class PianoRollWindow : public juce::DocumentWindow
         juce::ComboBox     quantizeBox;
         juce::ComboBox     keyRootBox;
         juce::ComboBox     keyScaleBox;
+        juce::TextButton   loadMidiBtn   { "Load MIDI" };
+        juce::TextButton   saveMidiBtn   { "Save MIDI" };
         juce::TextButton   clearBtn      { "Clear" };
         juce::TextButton   triggerBtn    { "Trigger" };
         juce::TextButton   nudgeLeftBtn  { "<" };
         juce::TextButton   nudgeRightBtn { ">" };
+        juce::TextButton   nudgeUpBtn    { "^" };
+        juce::TextButton   nudgeDownBtn  { "v" };
         juce::TextButton   alignBtn      { "Align" };
 
         std::function<void(const KeySignature&)> onKeySignatureChanged;
+        std::function<void()> onImportMidi;
+        std::function<void()> onExportMidi;
 
         bool blinkState = false;
         bool clampingHorizontalScroll = false;
@@ -1442,6 +1483,24 @@ class PianoRollWindow : public juce::DocumentWindow
             };
             addAndMakeVisible(nudgeRightBtn);
 
+            nudgeUpBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff1c2030));
+            nudgeUpBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffaabbdd));
+            nudgeUpBtn.onClick = [this]
+            {
+                pianoRoll.nudgeSessionPitch(+1);
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(nudgeUpBtn);
+
+            nudgeDownBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff1c2030));
+            nudgeDownBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffaabbdd));
+            nudgeDownBtn.onClick = [this]
+            {
+                pianoRoll.nudgeSessionPitch(-1);
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(nudgeDownBtn);
+
             // ---- Align (snap session start to nearest grid unit) ------------
             alignBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff1c2030));
             alignBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffaabbdd));
@@ -1539,6 +1598,24 @@ class PianoRollWindow : public juce::DocumentWindow
             keyScaleBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             keyScaleBox.onChange = [this] { applySelectedKeySignature(); };
             addAndMakeVisible(keyScaleBox);
+
+            loadMidiBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff20324a));
+            loadMidiBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffd6e4ff));
+            loadMidiBtn.onClick = [this]
+            {
+                if (onImportMidi) onImportMidi();
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(loadMidiBtn);
+
+            saveMidiBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff20324a));
+            saveMidiBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffd6e4ff));
+            saveMidiBtn.onClick = [this]
+            {
+                if (onExportMidi) onExportMidi();
+                pianoRoll.grabKeyboardFocus();
+            };
+            addAndMakeVisible(saveMidiBtn);
         }
 
         void setKeySignature(const KeySignature& key)
@@ -1559,18 +1636,23 @@ class PianoRollWindow : public juce::DocumentWindow
             keyRootBox.setBounds(108, 0, 76, snapH);
             keyScaleBox.setBounds(188, 0, 72, snapH);
 
-            // Right side: [Clear | REC | edit snap]
-            clearBtn.setBounds(getWidth() - 96 - 52 - 50, 0, 46, snapH);
-            recBtn  .setBounds(getWidth() - 96 - 52,      0, 48, snapH);
-            snapBox .setBounds(getWidth() - 96,           0, 90, snapH);
+            // Right side: [Load MIDI | Save MIDI | Clear | REC | edit snap]
+            int rightX = getWidth();
+            snapBox    .setBounds(rightX - 90, 0, 90, snapH); rightX -= 96;
+            recBtn     .setBounds(rightX - 48, 0, 48, snapH); rightX -= 52;
+            clearBtn   .setBounds(rightX - 46, 0, 46, snapH); rightX -= 50;
+            saveMidiBtn.setBounds(rightX - 78, 0, 78, snapH); rightX -= 82;
+            loadMidiBtn.setBounds(rightX - 78, 0, 78, snapH);
 
-            // Centre: [Trigger | < | > | Align]  — session controls
+            // Centre: [Trigger | < | > | ^ | v | Align]  — session controls
             {
-                const int totalW  = 56 + 28 + 28 + 44;   // 156 px
+                const int totalW  = 56 + 28 + 28 + 28 + 28 + 44;
                 int mx = (getWidth() - totalW) / 2;
                 triggerBtn   .setBounds(mx, 0, 54, snapH);  mx += 58;
                 nudgeLeftBtn .setBounds(mx, 0, 26, snapH);  mx += 30;
                 nudgeRightBtn.setBounds(mx, 0, 26, snapH);  mx += 30;
+                nudgeUpBtn   .setBounds(mx, 0, 26, snapH);  mx += 30;
+                nudgeDownBtn .setBounds(mx, 0, 26, snapH);  mx += 30;
                 alignBtn     .setBounds(mx, 0, 42, snapH);
             }
 
@@ -1600,9 +1682,13 @@ class PianoRollWindow : public juce::DocumentWindow
             const bool hasSession = pianoRoll.hasSession();
             nudgeLeftBtn .setEnabled(hasSession);
             nudgeRightBtn.setEnabled(hasSession);
+            nudgeUpBtn   .setEnabled(hasSession);
+            nudgeDownBtn .setEnabled(hasSession);
             alignBtn     .setEnabled(hasSession);
             nudgeLeftBtn .setAlpha(hasSession ? 1.0f : 0.4f);
             nudgeRightBtn.setAlpha(hasSession ? 1.0f : 0.4f);
+            nudgeUpBtn   .setAlpha(hasSession ? 1.0f : 0.4f);
+            nudgeDownBtn .setAlpha(hasSession ? 1.0f : 0.4f);
             alignBtn     .setAlpha(hasSession ? 1.0f : 0.4f);
         }
 

@@ -79,6 +79,8 @@ private:
     void     selectPattern(int id);
     void     syncPatternToEngine();
     void     syncChannelRackToProject();
+    void     exportCurrentPianoRollToMidi();
+    void     importCurrentPianoRollFromMidi();
 
     // M6 — undo/redo
     juce::UndoManager undoManager;

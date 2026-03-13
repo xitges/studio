@@ -12,6 +12,8 @@ struct LambdaAction : public juce::UndoableAction
     bool perform() override { return performFn(); }
     bool undo()    override { return undoFn();    }
 };
+
+constexpr int kMidiPpq = 960;
 } // namespace
 
 MainComponent::MainComponent()
@@ -102,12 +104,16 @@ MainComponent::MainComponent()
 
     toolbar.onBPMChanged = [this](double bpm)
     {
+        project.bpm = bpm;
         audioEngine.setBPM(bpm);
+        markDirty();
     };
 
     toolbar.onPlayModeChanged = [this](PlayMode mode)
     {
+        project.playMode = mode;
         audioEngine.setPlayMode(mode);
+        markDirty();
     };
 
     // M2.1 — Pattern selector
@@ -636,6 +642,8 @@ MainComponent::MainComponent()
                 project.keySignature = key;
                 markDirty();
             };
+            pianoRollWindow->content.onExportMidi = [this] { exportCurrentPianoRollToMidi(); };
+            pianoRollWindow->content.onImportMidi = [this] { importCurrentPianoRollFromMidi(); };
         }
 
         pianoRollWindow->setVisible(true);
@@ -985,6 +993,8 @@ void MainComponent::selectPattern(int id)
         channelRack.saveToPattern(*cur);
 
     activePatternId = id;
+    project.activePatternId = id;
+    markDirty();
 
     // Load new pattern into channel rack, samples, and sync steps to engine immediately
     if (auto* newPat = findPattern(activePatternId))
@@ -1055,6 +1065,179 @@ void MainComponent::markDirty()
     toolbar.setProjectTitle(title, true);
 }
 
+void MainComponent::exportCurrentPianoRollToMidi()
+{
+    if (pianoRollChannel < 0) return;
+    auto* pat = findPattern(activePatternId);
+    if (pat == nullptr) return;
+    const int exportPatternId = activePatternId;
+    const int exportChannel = pianoRollChannel;
+
+    const auto channelName = pat->channelNames[(size_t)exportChannel].isNotEmpty()
+        ? pat->channelNames[(size_t)exportChannel]
+        : ("Channel " + juce::String(exportChannel + 1));
+    const auto defaultName = juce::File::createLegalFileName(
+        pat->name + " - " + channelName + ".mid");
+
+    fileChooser = std::make_shared<juce::FileChooser>(
+        "Export Piano Roll Notes",
+        currentFile.existsAsFile() ? currentFile.getParentDirectory().getChildFile(defaultName)
+                                   : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                         .getChildFile(defaultName),
+        "*.mid");
+
+    fileChooser->launchAsync(
+        juce::FileBrowserComponent::saveMode |
+        juce::FileBrowserComponent::canSelectFiles |
+        juce::FileBrowserComponent::warnAboutOverwriting,
+        [this, exportPatternId, exportChannel](const juce::FileChooser& fc)
+        {
+            auto chosen = fc.getResult();
+            if (chosen == juce::File()) return;
+
+            auto* exportPat = findPattern(exportPatternId);
+            if (exportPat == nullptr) return;
+
+            juce::MidiMessageSequence sequence;
+            sequence.addEvent(juce::MidiMessage::tempoMetaEvent(
+                juce::roundToInt(60000000.0 / juce::jmax(1.0, project.bpm))), 0.0);
+
+            const auto& notes = exportPat->notes[(size_t)exportChannel];
+            for (const auto& note : notes)
+            {
+                const double startTick = juce::jmax(0.0, (double)note.startBeat * kMidiPpq);
+                const double endTick = juce::jmax(startTick + 1.0,
+                                                  (double)(note.startBeat + note.lengthBeats) * kMidiPpq);
+                const auto velocity = (juce::uint8)juce::jlimit(1, 127,
+                    (int)std::round(juce::jlimit(0.0f, 1.0f, note.velocity) * 127.0f));
+                sequence.addEvent(juce::MidiMessage::noteOn(1, juce::jlimit(0, 127, note.pitch), velocity), startTick);
+                sequence.addEvent(juce::MidiMessage::noteOff(1, juce::jlimit(0, 127, note.pitch)), endTick);
+            }
+
+            sequence.updateMatchedPairs();
+            juce::MidiFile midiFile;
+            midiFile.setTicksPerQuarterNote(kMidiPpq);
+            midiFile.addTrack(sequence);
+
+            if (auto stream = std::unique_ptr<juce::FileOutputStream>(chosen.createOutputStream()))
+            {
+                if (midiFile.writeTo(*stream))
+                    return;
+            }
+
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::MessageBoxIconType::WarningIcon,
+                "MIDI Export Failed",
+                "Could not write the MIDI note file.");
+        });
+}
+
+void MainComponent::importCurrentPianoRollFromMidi()
+{
+    if (pianoRollChannel < 0) return;
+    auto* pat = findPattern(activePatternId);
+    if (pat == nullptr) return;
+    const int importPatternId = activePatternId;
+    const int importChannel = pianoRollChannel;
+
+    fileChooser = std::make_shared<juce::FileChooser>(
+        "Import Piano Roll Notes",
+        currentFile.existsAsFile() ? currentFile.getParentDirectory()
+                                   : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+        "*.mid");
+
+    fileChooser->launchAsync(
+        juce::FileBrowserComponent::openMode |
+        juce::FileBrowserComponent::canSelectFiles,
+        [this, importPatternId, importChannel](const juce::FileChooser& fc)
+        {
+            auto chosen = fc.getResult();
+            if (!chosen.existsAsFile()) return;
+
+            auto* importPat = findPattern(importPatternId);
+            if (importPat == nullptr) return;
+
+            std::unique_ptr<juce::FileInputStream> stream(chosen.createInputStream());
+            if (stream == nullptr)
+                return;
+
+            juce::MidiFile midiFile;
+            if (!midiFile.readFrom(*stream))
+            {
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::MessageBoxIconType::WarningIcon,
+                    "MIDI Import Failed",
+                    "Could not read the MIDI note file.");
+                return;
+            }
+
+            const int timeFormat = midiFile.getTimeFormat();
+            const double ticksPerBeat = timeFormat > 0 ? (double)timeFormat : (double)kMidiPpq;
+
+            std::vector<NoteEvent> importedNotes;
+            double maxEndBeat = 0.0;
+
+            for (int trackIdx = 0; trackIdx < midiFile.getNumTracks(); ++trackIdx)
+            {
+                if (auto* srcTrack = midiFile.getTrack(trackIdx))
+                {
+                    juce::MidiMessageSequence track(*srcTrack);
+                    track.updateMatchedPairs();
+                    for (int i = 0; i < track.getNumEvents(); ++i)
+                    {
+                        if (auto* event = track.getEventPointer(i))
+                        {
+                            if (!event->message.isNoteOn())
+                                continue;
+
+                            const auto* off = event->noteOffObject;
+                            const double startBeat = juce::jmax(0.0, event->message.getTimeStamp() / ticksPerBeat);
+                            const double endBeat = (off != nullptr)
+                                ? juce::jmax(startBeat + 0.05, off->message.getTimeStamp() / ticksPerBeat)
+                                : (startBeat + 0.25);
+
+                            NoteEvent note;
+                            note.pitch = juce::jlimit(0, 127, event->message.getNoteNumber());
+                            note.startBeat = (float)startBeat;
+                            note.lengthBeats = (float)juce::jmax(0.05, endBeat - startBeat);
+                            note.velocity = juce::jlimit(0.0f, 1.0f, event->message.getFloatVelocity());
+                            importedNotes.push_back(note);
+                            maxEndBeat = juce::jmax(maxEndBeat, endBeat);
+                        }
+                    }
+                }
+            }
+
+            std::sort(importedNotes.begin(), importedNotes.end(),
+                      [](const NoteEvent& a, const NoteEvent& b)
+                      {
+                          if (a.startBeat == b.startBeat) return a.pitch < b.pitch;
+                          return a.startBeat < b.startBeat;
+                      });
+
+            audioEngine.ensureCacheLoaderStopped();
+            audioEngine.stop();
+            audioEngine.allSynthNotesOff();
+            channelRack.setPlaybackStep(-1);
+            playlist.setPlayheadBar(-1.0);
+            if (pianoRollWindow != nullptr)
+                pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
+
+            importPat->notes[(size_t)importChannel] = std::move(importedNotes);
+            const int importedSteps = juce::jlimit(1, kMaxPatternSteps,
+                                                   (int)std::ceil(maxEndBeat / 0.25));
+            importPat->stepCount = juce::jmax(importPat->stepCount, importedSteps);
+
+            audioEngine.setPatternStepCount(importPat->stepCount);
+            audioEngine.updatePatternSnapshot();
+
+            if (pianoRollWindow != nullptr)
+                pianoRollWindow->content.pianoRoll.setPattern(importPat, importChannel, project.bpm);
+
+            markDirty();
+        });
+}
+
 void MainComponent::reloadProjectIntoUI()
 {
     undoManager.clearUndoHistory();   // M6: stale actions reference old project data
@@ -1072,46 +1255,48 @@ void MainComponent::reloadProjectIntoUI()
         const auto& pad = project.launchpadPads[(size_t)i];
         if (pad.filePath.isNotEmpty())
             audioEngine.loadLaunchpadSample(i, juce::File(pad.filePath));
+        else
+            audioEngine.unloadLaunchpadSample(i);
     }
     if (launchpadWindow != nullptr)
         launchpadWindow->panel.setProject(&project);
 
-    // Set active pattern to first in list
-    activePatternId = project.patterns.empty() ? 1 : project.patterns.front().id;
+    // Restore active pattern if valid, otherwise fall back to the first pattern
+    activePatternId = project.activePatternId;
+    if (findPattern(activePatternId) == nullptr)
+        activePatternId = project.patterns.empty() ? 1 : project.patterns.front().id;
+    project.activePatternId = activePatternId;
 
     // Restore channel count (names/types come from the pattern via loadPattern)
     {
-        const juce::String* names = project.patterns.empty()
-            ? nullptr : project.patterns.front().channelNames;
+        const auto* activePat = findPattern(activePatternId);
+        const juce::String* names = activePat != nullptr ? activePat->channelNames : nullptr;
         channelRack.resetToChannelCount(project.channelCount, names);
     }
 
-    // Load first pattern into channel rack and restore its samples
-    if (!project.patterns.empty())
+    // Load active pattern into channel rack and restore its samples
+    if (auto* activePat = findPattern(activePatternId))
     {
-        const auto& firstPat = project.patterns.front();
-        channelRack.loadPattern(firstPat);
+        channelRack.loadPattern(*activePat);
         for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
         {
-            if (firstPat.samplePaths[ch].isNotEmpty())
-                audioEngine.loadSample(ch, juce::File(firstPat.samplePaths[ch]));
+            if (activePat->samplePaths[ch].isNotEmpty())
+                audioEngine.loadSample(ch, juce::File(activePat->samplePaths[ch]));
             else
                 audioEngine.unloadSample(ch);
         }
     }
 
     // Refresh toolbar
+    toolbar.setBPM(project.bpm);
+    toolbar.setPlayMode(project.playMode);
     toolbar.updatePatternList(project.patterns, activePatternId);
 
     // Rebuild snapshot from the newly loaded active pattern
     audioEngine.setActivePattern(activePatternId);
     audioEngine.updatePatternSnapshot();
-
-    // Sync BPM slider (don't fire callback — just visual update)
-    // BPM is read from toolbar on Play, so we update the slider directly:
-    // (Toolbar doesn't expose a setBPM setter — add a small approach via the slider)
-    // We'll fire the BPM change so audioEngine is in sync too.
     audioEngine.setBPM(project.bpm);
+    audioEngine.setPlayMode(project.playMode);
 
     // Refresh playlist
     playlist.setProject(&project);
@@ -1128,8 +1313,8 @@ void MainComponent::reloadProjectIntoUI()
         // Routing now lives in Pattern constructor (channelMixerRouting[i] = i % 8)
     }
     mixer.loadFromProject(project);
-    if (!project.patterns.empty())
-        mixer.updateRoutingLabels(project.patterns.front().channelMixerRouting);
+    if (auto* activePat = findPattern(activePatternId))
+        mixer.updateRoutingLabels(activePat->channelMixerRouting);
 
     // M11 — ensure playlist tracks exist
     if (project.playlistTracks.empty())
@@ -1184,6 +1369,21 @@ void MainComponent::reloadProjectIntoUI()
         }
     }
 
+    if (pianoRollWindow != nullptr && pianoRollWindow->isVisible() && pianoRollChannel >= 0)
+    {
+        if (auto* pat = findPattern(activePatternId))
+        {
+            pianoRollWindow->content.pianoRoll.setPattern(pat, pianoRollChannel, project.bpm);
+            pianoRollWindow->content.setKeySignature(project.keySignature);
+        }
+    }
+
+    if (synthEditorWindow != nullptr && synthEditorWindow->isVisible() && synthEditorChannel >= 0)
+    {
+        if (auto* pat = findPattern(activePatternId))
+            synthEditorWindow->panel.loadParams(pat->synthParams[(size_t)synthEditorChannel]);
+    }
+
     projectDirty = false;
     toolbar.setProjectTitle(currentFile.getFileNameWithoutExtension(), false);
 }
@@ -1205,6 +1405,8 @@ void MainComponent::newProject()
                 {
                     project = Project{};
                     project.bpm = 70.0;
+                    project.playMode = PlayMode::Pattern;
+                    project.activePatternId = 1;
                     project.patterns.reserve(64);
                     Pattern def; def.id = 1; def.name = "Pattern 1"; def.stepCount = 16;
                     project.patterns.push_back(def);
@@ -1218,6 +1420,8 @@ void MainComponent::newProject()
 
     project = Project{};
     project.bpm = 70.0;
+    project.playMode = PlayMode::Pattern;
+    project.activePatternId = 1;
     project.patterns.reserve(64);
     Pattern def; def.id = 1; def.name = "Pattern 1"; def.stepCount = 16;
     project.patterns.push_back(def);

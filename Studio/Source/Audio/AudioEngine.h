@@ -188,6 +188,7 @@ public:
     // Launchpad — trigger one-shot sample on a pad; load sample file
     void triggerLaunchpadPad  (int padIdx);
     void loadLaunchpadSample  (int padIdx, const juce::File& file);
+    void unloadLaunchpadSample(int padIdx);
 
     // M15 — preview a file from the sample browser (dedicated player, no channel affected)
     void previewBrowserFile(const juce::File& f);

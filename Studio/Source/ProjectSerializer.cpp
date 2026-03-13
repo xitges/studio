@@ -18,6 +18,8 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
     juce::XmlElement root("StudioProject");
     root.setAttribute("version", 1);
     root.setAttribute("bpm",     project.bpm);
+    root.setAttribute("playMode", (int)project.playMode);
+    root.setAttribute("activePatternId", project.activePatternId);
     root.setAttribute("keyTonic", project.keySignature.tonic);
     root.setAttribute("keyScale", project.keySignature.scale == ScaleType::Minor ? "minor" : "major");
 
@@ -211,6 +213,8 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
 
     Project loaded;
     loaded.bpm = xml->getDoubleAttribute("bpm", 70.0);
+    loaded.playMode = (PlayMode)juce::jlimit(0, 1, xml->getIntAttribute("playMode", (int)PlayMode::Pattern));
+    loaded.activePatternId = xml->getIntAttribute("activePatternId", 1);
     loaded.keySignature.tonic = juce::jlimit(0, 11, xml->getIntAttribute("keyTonic", 0));
     loaded.keySignature.scale = xml->getStringAttribute("keyScale", "major").equalsIgnoreCase("minor")
         ? ScaleType::Minor

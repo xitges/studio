@@ -78,6 +78,25 @@ namespace DDSPAutoPatch
     }
 }
 
+namespace SynthVoicing
+{
+    inline float stableHash01(int seed)
+    {
+        const auto x = (juce::uint32)seed * 747796405u + 2891336453u;
+        return (float)((x >> 8) & 0x00ffffffu) / (float)0x01000000u;
+    }
+
+    inline float softClip(float x)
+    {
+        return x / (1.0f + 0.6f * std::abs(x));
+    }
+
+    inline float detuneRatioFromCents(float cents)
+    {
+        return std::pow(2.0f, cents / 1200.0f);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // One polyphonic voice
 // ---------------------------------------------------------------------------
@@ -85,14 +104,26 @@ class SynthVoice
 {
 public:
     // Trigger a note. noteLenSamples: auto-release after this many samples.
-    void noteOn(int midiPitch, float velocity, double sr, const SynthParams& p, int noteLenSamples)
+    void noteOn(int midiPitch, float velocity, double sr, const SynthParams& p, int noteLenSamples,
+                int voiceSlot = 0)
     {
         pitch_      = midiPitch;
         velocity_   = velocity;
         params_     = p;
+        voiceSlot_  = voiceSlot;
         frequency_  = 440.0 * std::pow(2.0, (midiPitch - 69) / 12.0);
-        phase_      = 0.0;
+        const float startJitter = SynthVoicing::stableHash01(voiceSlot * 131 + midiPitch * 17 + 11);
+        const float secondJitter = SynthVoicing::stableHash01(voiceSlot * 197 + midiPitch * 29 + 53);
+        phase_      = startJitter;
+        phase2_     = secondJitter;
         lfoPhase_   = 0.0;
+
+        static constexpr std::array<float, 8> kDetuneCents { -3.5f, -1.75f, -0.75f, 0.0f,
+                                                              0.85f, 1.8f, 2.8f, 4.0f };
+        detuneRatio_ = SynthVoicing::detuneRatioFromCents(
+            kDetuneCents[(size_t)juce::jlimit(0, (int)kDetuneCents.size() - 1, voiceSlot)]);
+        voicePan_ = juce::jlimit(-0.22f, 0.22f,
+                                 ((float)voiceSlot - 3.5f) * 0.055f + (startJitter - 0.5f) * 0.05f);
 
         const float attackSamples  = juce::jmax(1.0f, p.attack  * 0.001f * (float)sr);
         const float decaySamples   = juce::jmax(1.0f, p.decay   * 0.001f * (float)sr);
@@ -135,6 +166,9 @@ public:
         computeFilter(params_.cutoff, params_.resonance, sr, b0, b1, b2, a1, a2);
 
         const double lfoInc = params_.lfoRate / sr;
+        const float panAngle = (voicePan_ + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+        const float panL = std::cos(panAngle);
+        const float panR = std::sin(panAngle);
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -191,20 +225,23 @@ public:
 
             // Oscillator
             const double dt = freq / sr;
+            const double dt2 = (freq * detuneRatio_) / sr;
             phase_ += dt;
             if (phase_ >= 1.0) phase_ -= 1.0;
+            phase2_ += dt2;
+            if (phase2_ >= 1.0) phase2_ -= 1.0;
 
             const float osc    = generateSample((float)phase_, dt, params_.waveform);
-            const float osc1   = generateSample((float)phase_, dt, params_.waveform) * 1.05f;
+            const float osc1   = generateSample((float)phase2_, dt2, params_.waveform);
             const float sample = ((osc + osc1) * 0.5) * envLevel_ * velocity_ * 0.25f;  // 0.25 headroom for polyphony
 
             // Biquad LP filter (direct-form I)
-            const float outL = b0 * sample + z1L_;
-            z1L_ = b1 * sample - a1 * outL + z2L_;
-            z2L_ = b2 * sample - a2 * outL;
+            const float filtered = b0 * sample + z1L_;
+            z1L_ = b1 * sample - a1 * filtered + z2L_;
+            z2L_ = b2 * sample - a2 * filtered;
 
-            L[i] += outL;
-            R[i] += outL;
+            L[i] += filtered * panL;
+            R[i] += filtered * panR;
         }
     }
 
@@ -215,6 +252,7 @@ private:
     float  velocity_          = 0.8f;
     double frequency_         = 440.0;
     double phase_             = 0.0;
+    double phase2_            = 0.0;
     double lfoPhase_          = 0.0;
 
     Env    envState_          = Env::Idle;
@@ -224,6 +262,9 @@ private:
     float  releaseInc_        = 0.0f;
     float  sustainLvl_        = 0.7f;
     SynthParams params_       = {};
+    float  detuneRatio_       = 1.0f;
+    float  voicePan_          = 0.0f;
+    int    voiceSlot_         = 0;
 
     int    noteLenRemaining_  = 0;
 
@@ -315,7 +356,7 @@ public:
             stealIdx_ = (stealIdx_ + 1) % kNumVoices;
         }
 
-        voices_[voiceIdx].noteOn(pitch, velocity, sr, p, noteLenSamples);
+        voices_[voiceIdx].noteOn(pitch, velocity, sr, p, noteLenSamples, voiceIdx);
     }
 
     void noteOff(int pitch)
@@ -341,9 +382,23 @@ public:
     // Renders and adds into the provided L/R float pointers.
     void renderNextBlock(float* L, float* R, int numSamples, double sr)
     {
+        int activeVoiceCount = 0;
         for (auto& v : voices_)
             if (v.isActive())
+            {
+                ++activeVoiceCount;
                 v.renderAdd(L, R, numSamples, sr);
+            }
+
+        if (activeVoiceCount > 1)
+        {
+            const float gainComp = 1.0f / std::sqrt(1.0f + 0.38f * (float)(activeVoiceCount - 1));
+            for (int i = 0; i < numSamples; ++i)
+            {
+                L[i] = SynthVoicing::softClip(L[i] * gainComp);
+                R[i] = SynthVoicing::softClip(R[i] * gainComp);
+            }
+        }
     }
 
     void reset()
