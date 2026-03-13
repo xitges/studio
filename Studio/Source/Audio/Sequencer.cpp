@@ -26,10 +26,7 @@ void Sequencer::start()
     currentStep   = 0;
     sampleCounter = 0.0;
     playing       = true;
-
-    for (int ch = 0; ch < CHANNEL_COUNT; ++ch)
-        if (pattern[ch][currentStep])
-            onTrigger(ch, 0);
+    fireStepZeroOnNextBlock = true;
 }
 
 void Sequencer::stop()
@@ -69,6 +66,12 @@ void Sequencer::processBlock(int numSamples)
 {
     if (!playing) return;
 
+    if (fireStepZeroOnNextBlock)
+    {
+        fireStepZeroOnNextBlock = false;
+        triggerCurrentStep(0);
+    }
+
     const double prevCounter = sampleCounter;
     sampleCounter += numSamples;
 
@@ -90,7 +93,11 @@ void Sequencer::advanceStep(int offsetInBuffer)
         return;
 
     currentStep = (currentStep + 1) % stepCount;
+    triggerCurrentStep(offsetInBuffer);
+}
 
+void Sequencer::triggerCurrentStep(int offsetInBuffer)
+{
     for (int ch = 0; ch < CHANNEL_COUNT; ++ch)
         if (pattern[ch][currentStep])
             onTrigger(ch, offsetInBuffer);

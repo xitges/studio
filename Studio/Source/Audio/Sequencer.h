@@ -49,8 +49,10 @@ private:
     double samplesPerStep   = 0.0;
     double sampleCounter    = 0.0;
     bool   playing          = false;
+    bool   fireStepZeroOnNextBlock = false;
 
     void advanceStep(int offsetInBuffer);
+    void triggerCurrentStep(int offsetInBuffer);
     void recalcSamplesPerStep();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sequencer)

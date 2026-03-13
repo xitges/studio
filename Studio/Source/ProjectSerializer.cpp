@@ -18,6 +18,8 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
     juce::XmlElement root("StudioProject");
     root.setAttribute("version", 1);
     root.setAttribute("bpm",     project.bpm);
+    root.setAttribute("keyTonic", project.keySignature.tonic);
+    root.setAttribute("keyScale", project.keySignature.scale == ScaleType::Minor ? "minor" : "major");
 
     // ---- Patterns
     auto* patternsEl = root.createNewChildElement("Patterns");
@@ -59,6 +61,10 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             chEl->setAttribute("spLfoRate",   (double)sp.lfoRate);
             chEl->setAttribute("spLfoDepth",  (double)sp.lfoDepth);
             chEl->setAttribute("spLfoTarget", sp.lfoTarget);
+            chEl->setAttribute("spDdspEnabled",    sp.ddspAuto.enabled ? 1 : 0);
+            chEl->setAttribute("spDdspAmount",     (double)sp.ddspAuto.amount);
+            chEl->setAttribute("spDdspBrightness", (double)sp.ddspAuto.brightness);
+            chEl->setAttribute("spDdspMotion",     (double)sp.ddspAuto.motion);
             chEl->setAttribute("mixRoute",    pat.channelMixerRouting[ch]);
         }
 
@@ -205,6 +211,10 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
 
     Project loaded;
     loaded.bpm = xml->getDoubleAttribute("bpm", 70.0);
+    loaded.keySignature.tonic = juce::jlimit(0, 11, xml->getIntAttribute("keyTonic", 0));
+    loaded.keySignature.scale = xml->getStringAttribute("keyScale", "major").equalsIgnoreCase("minor")
+        ? ScaleType::Minor
+        : ScaleType::Major;
 
     // ---- Patterns
     if (auto* patternsEl = xml->getChildByName("Patterns"))
@@ -250,6 +260,10 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 sp.lfoRate     = (float)chEl->getDoubleAttribute("spLfoRate",   2.0);
                 sp.lfoDepth    = (float)chEl->getDoubleAttribute("spLfoDepth",  0.0);
                 sp.lfoTarget   = chEl->getIntAttribute("spLfoTarget", 0);
+                sp.ddspAuto.enabled    = chEl->getIntAttribute("spDdspEnabled", 0) != 0;
+                sp.ddspAuto.amount     = (float)chEl->getDoubleAttribute("spDdspAmount", 0.0);
+                sp.ddspAuto.brightness = (float)chEl->getDoubleAttribute("spDdspBrightness", 0.5);
+                sp.ddspAuto.motion     = (float)chEl->getDoubleAttribute("spDdspMotion", 0.25);
             }
 
             // NoteEvents (M3)

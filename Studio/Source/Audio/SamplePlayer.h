@@ -48,6 +48,16 @@ public:
         externalBuffer = externalSharedBuffer.get();
         playPosition = -1.0;
     }
+    std::shared_ptr<juce::AudioBuffer<float>> takeLoadedBuffer()
+    {
+        juce::SpinLock::ScopedLockType lock(bufferLock);
+        auto result = std::make_shared<juce::AudioBuffer<float>>();
+        std::swap(*result, fileBuffer);
+        externalSharedBuffer.reset();
+        externalBuffer = nullptr;
+        playPosition = -1.0;
+        return result;
+    }
     const juce::AudioBuffer<float>& getBuffer() const    { return fileBuffer; }
 
     // M1.1 — Volume & Pan

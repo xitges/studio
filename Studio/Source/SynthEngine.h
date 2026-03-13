@@ -11,7 +11,72 @@
 #include <JuceHeader.h>
 #include <array>
 #include <cmath>
+#include <vector>
 #include "ProjectModel.h"
+
+namespace DDSPAutoPatch
+{
+    inline float blendFloat(float base, float generated, float amount)
+    {
+        return base + (generated - base) * juce::jlimit(0.0f, 1.0f, amount);
+    }
+
+    inline SynthParams generate(const SynthParams& base, int midiPitch, float velocity,
+                                double noteLengthSeconds = 0.25)
+    {
+        if (!base.ddspAuto.enabled || base.ddspAuto.amount <= 0.001f)
+            return base;
+
+        const float amount = juce::jlimit(0.0f, 1.0f, base.ddspAuto.amount);
+        const float brightnessBias = juce::jlimit(0.0f, 1.0f, base.ddspAuto.brightness);
+        const float motionBias = juce::jlimit(0.0f, 1.0f, base.ddspAuto.motion);
+        const float vel = juce::jlimit(0.0f, 1.0f, velocity);
+        const float pitchNorm = juce::jlimit(0.0f, 1.0f, (float)(midiPitch - 24) / 84.0f);
+        const float lenNorm = juce::jlimit(0.0f, 1.0f, (float)(noteLengthSeconds / 1.6));
+
+        SynthParams generated = base;
+        const float targetBrightness = juce::jlimit(0.0f, 1.0f,
+                                                    brightnessBias * 0.65f + pitchNorm * 0.25f + vel * 0.10f);
+
+        generated.waveform =
+            targetBrightness < 0.24f ? 0 :
+            targetBrightness < 0.50f ? 3 :
+            targetBrightness < 0.72f ? 2 : 1;
+
+        generated.attack = juce::jlimit(1.0f, 2000.0f,
+            8.0f + (1.0f - vel) * 40.0f + (1.0f - pitchNorm) * 25.0f + lenNorm * 110.0f);
+        generated.decay = juce::jlimit(10.0f, 2200.0f,
+            80.0f + (1.0f - pitchNorm) * 240.0f + lenNorm * 600.0f + brightnessBias * 80.0f);
+        generated.sustain = juce::jlimit(0.0f, 1.0f,
+            0.18f + lenNorm * 0.55f + (1.0f - targetBrightness) * 0.18f);
+        generated.release = juce::jlimit(20.0f, 4000.0f,
+            120.0f + lenNorm * 1400.0f + (1.0f - vel) * 180.0f + motionBias * 220.0f);
+        generated.cutoff = juce::jlimit(80.0f, 20000.0f,
+            250.0f + targetBrightness * 12000.0f + vel * 3500.0f + pitchNorm * 2500.0f);
+        generated.resonance = juce::jlimit(0.05f, 0.92f,
+            0.12f + (1.0f - targetBrightness) * 0.22f + motionBias * 0.20f);
+        generated.lfoRate = juce::jlimit(0.1f, 20.0f,
+            0.6f + motionBias * 6.0f + pitchNorm * 1.2f);
+        generated.lfoDepth = juce::jlimit(0.0f, 1.0f,
+            motionBias * 0.34f + lenNorm * 0.10f);
+        generated.lfoTarget = motionBias >= 0.45f ? 1 : 0;
+
+        SynthParams result = base;
+        result.attack    = blendFloat(base.attack,    generated.attack,    amount);
+        result.decay     = blendFloat(base.decay,     generated.decay,     amount);
+        result.sustain   = blendFloat(base.sustain,   generated.sustain,   amount);
+        result.release   = blendFloat(base.release,   generated.release,   amount);
+        result.cutoff    = blendFloat(base.cutoff,    generated.cutoff,    amount);
+        result.resonance = blendFloat(base.resonance, generated.resonance, amount);
+        result.lfoRate   = blendFloat(base.lfoRate,   generated.lfoRate,   amount);
+        result.lfoDepth  = blendFloat(base.lfoDepth,  generated.lfoDepth,  amount);
+        if (amount >= 0.5f)
+            result.waveform = generated.waveform;
+        if (amount >= 0.35f)
+            result.lfoTarget = generated.lfoTarget;
+        return result;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // One polyphonic voice
@@ -24,6 +89,7 @@ public:
     {
         pitch_      = midiPitch;
         velocity_   = velocity;
+        params_     = p;
         frequency_  = 440.0 * std::pow(2.0, (midiPitch - 69) / 12.0);
         phase_      = 0.0;
         lfoPhase_   = 0.0;
@@ -61,14 +127,14 @@ public:
     bool isActive()  const { return envState_ != Env::Idle; }
     int  getPitch()  const { return pitch_; }
 
-    void renderAdd(float* L, float* R, int numSamples, double sr, const SynthParams& p)
+    void renderAdd(float* L, float* R, int numSamples, double sr)
     {
         if (envState_ == Env::Idle) return;
 
         float b0, b1, b2, a1, a2;
-        computeFilter(p.cutoff, p.resonance, sr, b0, b1, b2, a1, a2);
+        computeFilter(params_.cutoff, params_.resonance, sr, b0, b1, b2, a1, a2);
 
-        const double lfoInc = p.lfoRate / sr;
+        const double lfoInc = params_.lfoRate / sr;
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -103,7 +169,7 @@ public:
 
             // LFO
             float lfoVal = 0.0f;
-            if (p.lfoDepth > 0.0f)
+            if (params_.lfoDepth > 0.0f)
             {
                 lfoVal = std::sin((float)(lfoPhase_ * juce::MathConstants<double>::twoPi));
                 lfoPhase_ += lfoInc;
@@ -112,15 +178,15 @@ public:
 
             // Frequency with optional pitch LFO
             double freq = frequency_;
-            if (p.lfoDepth > 0.0f && p.lfoTarget == 1)
-                freq *= std::pow(2.0, (double)(lfoVal * p.lfoDepth * 2.0f) / 12.0);
+            if (params_.lfoDepth > 0.0f && params_.lfoTarget == 1)
+                freq *= std::pow(2.0, (double)(lfoVal * params_.lfoDepth * 2.0f) / 12.0);
 
             // Cutoff with optional LFO — recompute filter only when modulating
-            if (p.lfoDepth > 0.0f && p.lfoTarget == 0)
+            if (params_.lfoDepth > 0.0f && params_.lfoTarget == 0)
             {
                 const float modCutoff = juce::jlimit(50.0f, 20000.0f,
-                                                     p.cutoff * (1.0f + lfoVal * p.lfoDepth));
-                computeFilter(modCutoff, p.resonance, sr, b0, b1, b2, a1, a2);
+                                                     params_.cutoff * (1.0f + lfoVal * params_.lfoDepth));
+                computeFilter(modCutoff, params_.resonance, sr, b0, b1, b2, a1, a2);
             }
 
             // Oscillator
@@ -128,8 +194,8 @@ public:
             phase_ += dt;
             if (phase_ >= 1.0) phase_ -= 1.0;
 
-            const float osc    = generateSample((float)phase_, dt, p.waveform);
-            const float osc1   = generateSample((float)phase_, dt, p.waveform) * 1.05;
+            const float osc    = generateSample((float)phase_, dt, params_.waveform);
+            const float osc1   = generateSample((float)phase_, dt, params_.waveform) * 1.05f;
             const float sample = ((osc + osc1) * 0.5) * envLevel_ * velocity_ * 0.25f;  // 0.25 headroom for polyphony
 
             // Biquad LP filter (direct-form I)
@@ -157,6 +223,7 @@ private:
     float  decayInc_          = 0.0f;
     float  releaseInc_        = 0.0f;
     float  sustainLvl_        = 0.7f;
+    SynthParams params_       = {};
 
     int    noteLenRemaining_  = 0;
 
@@ -272,11 +339,11 @@ public:
     }
 
     // Renders and adds into the provided L/R float pointers.
-    void renderNextBlock(float* L, float* R, int numSamples, double sr, const SynthParams& p)
+    void renderNextBlock(float* L, float* R, int numSamples, double sr)
     {
         for (auto& v : voices_)
             if (v.isActive())
-                v.renderAdd(L, R, numSamples, sr, p);
+                v.renderAdd(L, R, numSamples, sr);
     }
 
     void reset()
@@ -291,3 +358,32 @@ private:
     std::array<SynthVoice, kNumVoices> voices_;
     int stealIdx_ = 0;
 };
+
+namespace SynthPreview
+{
+    inline std::vector<float> renderWaveform(const SynthParams& params, int numSamples, double sampleRate = 44100.0)
+    {
+        std::vector<float> left((size_t)numSamples, 0.0f);
+        std::vector<float> right((size_t)numSamples, 0.0f);
+
+        SynthVoice voice;
+        const int previewPitch = 60;
+        const int previewLength = juce::jmax(numSamples / 2, 1);
+        const auto previewParams = DDSPAutoPatch::generate(params, previewPitch, 1.0f, 0.3);
+        voice.noteOn(previewPitch, 1.0f, sampleRate, previewParams, previewLength);
+        voice.renderAdd(left.data(), right.data(), numSamples, sampleRate);
+
+        float peak = 0.0f;
+        for (const auto sample : left)
+            peak = juce::jmax(peak, std::abs(sample));
+
+        if (peak > 0.0001f)
+        {
+            const float gain = 1.0f / peak;
+            for (auto& sample : left)
+                sample *= gain;
+        }
+
+        return left;
+    }
+}

@@ -23,6 +23,7 @@ public:
         pattern = p;
         channel = ch;
         bpm     = bpmValue;
+        cursorPitch = MusicTheory::snapPitchToScale(cursorPitch, keySignature);
         updateSizeForZoom();
         repaint();
     }
@@ -39,6 +40,14 @@ public:
     }
 
     void setSnapBeats(float s) { snapBeats = s; repaint(); }
+    void setKeySignature(const KeySignature& newKey)
+    {
+        keySignature = newKey;
+        cursorPitch = MusicTheory::snapPitchToScale(cursorPitch, keySignature);
+        repaint();
+    }
+    KeySignature getKeySignature() const { return keySignature; }
+    int getKeyboardWidth() const { return keyWidth; }
 
     void clearNotes()
     {
@@ -175,6 +184,54 @@ public:
         drawPlayhead(g);
         drawVelocityLane(g);
         drawArmedOverlay(g);
+    }
+
+    void paintKeyboardOverlay(juce::Graphics& g, int viewY, int overlayHeight)
+    {
+        g.fillAll(juce::Colour(0xff1a1a2e));
+        g.setColour(currentRecState == RecState::Armed
+                        ? juce::Colour(0xff2e1800)
+                        : recording_
+                            ? juce::Colour(0xff3a0a0a)
+                            : juce::Colour(0xff0f3460));
+        g.fillRect(0, 0, keyWidth, headerH);
+
+        g.saveState();
+        g.reduceClipRegion(0, headerH, keyWidth, overlayHeight - headerH);
+        g.addTransform(juce::AffineTransform::translation(0.0f, (float)-viewY));
+        drawPianoKeys(g);
+        drawVelocityKeyStub(g);
+        g.restoreState();
+
+        g.setColour(juce::Colour(0xff0f3460));
+        g.drawLine((float)keyWidth, 0.0f, (float)keyWidth, (float)overlayHeight, 1.0f);
+    }
+
+    void previewPitchAtVisibleY(int visibleY, int viewY)
+    {
+        const int pitch = pitchFromY(visibleY + viewY);
+        if (pitch >= minPitch && pitch <= maxPitch && onKeyPreview)
+            onKeyPreview(pitch);
+    }
+
+    void setKeyboardHoverVisibleY(int visibleY, int viewY)
+    {
+        const int pitch = pitchFromY(visibleY + viewY);
+        const int newHover = (pitch >= minPitch && pitch <= maxPitch) ? pitch : -1;
+        if (hoverPitch != newHover)
+        {
+            hoverPitch = newHover;
+            repaint();
+        }
+    }
+
+    void clearKeyboardHover()
+    {
+        if (hoverPitch != -1)
+        {
+            hoverPitch = -1;
+            repaint();
+        }
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -417,14 +474,14 @@ public:
         }
         if (kc == juce::KeyPress::upKey)
         {
-            cursorPitch = juce::jmin(maxPitch, cursorPitch + 1);
+            cursorPitch = moveCursorByScaleStep(+1);
             repaint();
             scrollToCursor();
             return true;
         }
         if (kc == juce::KeyPress::downKey)
         {
-            cursorPitch = juce::jmax(minPitch, cursorPitch - 1);
+            cursorPitch = moveCursorByScaleStep(-1);
             repaint();
             scrollToCursor();
             return true;
@@ -634,6 +691,7 @@ private:
 
     int   hoverPitch      = -1;
     float hoverStepBeat   = -1.0f;   // beat position of hovered 1/16 column (-1 = none)
+    KeySignature keySignature {};
     int   draggingIdx     = -1;
     int   draggingVelIdx  = -1;   // index of note being velocity-edited
     bool  resizingNote    = false;
@@ -669,6 +727,23 @@ private:
     {
         const int m = pitch % 12;
         return m == 1 || m == 3 || m == 6 || m == 8 || m == 10;
+    }
+    bool  isScalePitch(int pitch) const { return MusicTheory::isPitchInScale(pitch, keySignature); }
+    int   moveCursorByScaleStep(int direction) const
+    {
+        const int snapped = MusicTheory::snapPitchToScale(cursorPitch, keySignature);
+        return juce::jlimit(minPitch, maxPitch,
+                            MusicTheory::moveScaleStep(snapped, keySignature, direction));
+    }
+    juce::Colour rowColourForPitch(int pitch) const
+    {
+        if (isScalePitch(pitch))
+            return isBlackKey(pitch) ? juce::Colour(0xff1a2140) : juce::Colour(0xff252f58);
+        return isBlackKey(pitch) ? juce::Colour(0xff161628) : juce::Colour(0xff1e1e3a);
+    }
+    juce::String pitchLabel(int pitch) const
+    {
+        return MusicTheory::noteNameForPitch(pitch, keySignature) + juce::String(pitch / 12 - 1);
     }
 
     // Find the topmost note whose time range contains `beat` (for vel lane hit)
@@ -713,11 +788,14 @@ private:
         {
             const int y = yFromPitch(pitch);
             const bool black = isBlackKey(pitch);
+            const bool inScale = isScalePitch(pitch);
 
             const bool hovered  = (pitch == hoverPitch);
             const bool kbActive = (pitch >= 0 && pitch < 128 && keyboardHeldPitch[pitch]);
             g.setColour(kbActive        ? juce::Colour(0xffff9500)
                         : hovered       ? juce::Colour(0xff3498db)
+                        : inScale       ? (black ? juce::Colour(0xff2d3658)
+                                                  : juce::Colour(0xff465987))
                         : black         ? juce::Colour(0xff2a2a2a)
                                         : juce::Colour(0xff3a3a4a));
             g.fillRect(0, y, keyWidth, noteH);
@@ -725,18 +803,28 @@ private:
             g.setColour(juce::Colour(0xff111122));
             g.drawLine(0.0f, (float)(y + noteH), (float)keyWidth, (float)(y + noteH), 0.5f);
 
-            // Label C notes
-            if (pitch % 12 == 0)
+            if (pitch % 12 == keySignature.tonic || pitch % 12 == 0)
             {
                 g.setColour(juce::Colours::white.withAlpha(0.7f));
                 g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
-                g.drawText("C" + juce::String(pitch / 12 - 1),
+                g.drawText(pitchLabel(pitch),
                            2, y, keyWidth - 4, noteH, juce::Justification::centredLeft);
             }
         }
         // Right border
         g.setColour(juce::Colour(0xff0f3460));
         g.drawLine((float)keyWidth, 0.0f, (float)keyWidth, (float)getHeight(), 1.0f);
+    }
+
+    void drawVelocityKeyStub(juce::Graphics& g)
+    {
+        const int laneY = velLaneY();
+        g.setColour(juce::Colour(0xff888892));
+        g.fillRect(0, laneY, keyWidth, velLaneH);
+        g.setColour(juce::Colour(0xffb0b0b8));
+        g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+        g.drawText("VELOCITY", 2, laneY + 2, keyWidth - 4, 11,
+                   juce::Justification::centredLeft);
     }
 
     void drawGrid(juce::Graphics& g)
@@ -749,9 +837,7 @@ private:
         for (int pitch = minPitch; pitch <= maxPitch; ++pitch)
         {
             const int y = yFromPitch(pitch);
-            g.setColour(isBlackKey(pitch)
-                ? juce::Colour(0xff161628)
-                : juce::Colour(0xff1e1e3a));
+            g.setColour(rowColourForPitch(pitch));
             g.fillRect(keyWidth, y, getWidth() - keyWidth, noteH);
         }
 
@@ -891,15 +977,17 @@ private:
             const juce::Colour fill = (t < 0.5f)
                 ? baseLow.interpolatedWith(baseMid,  t * 2.0f)
                 : baseMid.interpolatedWith(baseHigh, (t - 0.5f) * 2.0f);
+            const bool inScale = isScalePitch(n.pitch);
+            const juce::Colour noteFill = inScale ? fill : fill.withAlpha(0.45f);
 
             const bool isVelDragging = (i == draggingVelIdx);
-            g.setColour((i == draggingIdx || isVelDragging) ? fill.brighter(0.35f) : fill);
+            g.setColour((i == draggingIdx || isVelDragging) ? noteFill.brighter(0.35f) : noteFill);
             g.fillRoundedRectangle(r.toFloat(), 2.0f);
-            g.setColour(fill.darker(0.3f));
+            g.setColour(noteFill.darker(0.3f));
             g.drawRoundedRectangle(r.toFloat(), 2.0f, 1.0f);
 
             // Resize handle stripe
-            g.setColour(fill.brighter(0.5f).withAlpha(0.6f));
+            g.setColour(noteFill.brighter(0.5f).withAlpha(0.6f));
             g.fillRect(r.getRight() - 3, r.getY() + 2, 2, r.getHeight() - 4);
 
             // Velocity value hint when dragging this note's velocity
@@ -1027,7 +1115,7 @@ private:
             int nx = vp->getViewPositionX();
             int ny = vp->getViewPositionY();
 
-            if (cx < nx + margin)                        nx = juce::jmax(0, cx - margin);
+            if (cx < nx + margin)                        nx = juce::jmax(keyWidth, cx - margin);
             else if (cx > nx + va.getWidth() - margin)   nx = cx - va.getWidth() + margin;
 
             if (cy < ny + margin)                        ny = juce::jmax(0, cy - margin);
@@ -1177,22 +1265,87 @@ class PianoRollWindow : public juce::DocumentWindow
 {
     // DocumentWindow only accepts a single content component, so we wrap
     // the viewport + snap selector together in a plain Component.
+    struct PianoRollViewport : public juce::Viewport
+    {
+        std::function<void(const juce::Rectangle<int>&)> onVisibleAreaChanged;
+
+        void visibleAreaChanged(const juce::Rectangle<int>& newVisibleArea) override
+        {
+            juce::Viewport::visibleAreaChanged(newVisibleArea);
+            if (onVisibleAreaChanged)
+                onVisibleAreaChanged(newVisibleArea);
+        }
+    };
+
+    struct KeyboardOverlay : public juce::Component,
+                             private juce::Timer
+    {
+        explicit KeyboardOverlay(PianoRollComponent& owner) : pianoRoll(owner)
+        {
+            startTimerHz(30);
+        }
+
+        void setViewY(int newViewY)
+        {
+            if (viewY != newViewY)
+            {
+                viewY = newViewY;
+                repaint();
+            }
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            pianoRoll.paintKeyboardOverlay(g, viewY, getHeight());
+        }
+
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            pianoRoll.previewPitchAtVisibleY(e.getPosition().y, viewY);
+        }
+
+        void mouseMove(const juce::MouseEvent& e) override
+        {
+            pianoRoll.setKeyboardHoverVisibleY(e.getPosition().y, viewY);
+        }
+
+        void mouseExit(const juce::MouseEvent&) override
+        {
+            pianoRoll.clearKeyboardHover();
+        }
+
+    private:
+        void timerCallback() override
+        {
+            repaint();
+        }
+
+        PianoRollComponent& pianoRoll;
+        int viewY = 0;
+    };
+
     struct ContentPane : public juce::Component,
                          private juce::Timer
     {
         PianoRollComponent pianoRoll;
-        juce::Viewport     viewport;
+        PianoRollViewport  viewport;
+        KeyboardOverlay    keyboardOverlay { pianoRoll };
         juce::ComboBox     snapBox;
         juce::TextButton   recBtn        { "REC" };
         juce::TextButton   quantizeBtn   { "Q" };
         juce::ComboBox     quantizeBox;
+        juce::ComboBox     keyRootBox;
+        juce::ComboBox     keyScaleBox;
         juce::TextButton   clearBtn      { "Clear" };
         juce::TextButton   triggerBtn    { "Trigger" };
         juce::TextButton   nudgeLeftBtn  { "<" };
         juce::TextButton   nudgeRightBtn { ">" };
         juce::TextButton   alignBtn      { "Align" };
 
+        std::function<void(const KeySignature&)> onKeySignatureChanged;
+
         bool blinkState = false;
+        bool clampingHorizontalScroll = false;
 
         ContentPane()
         {
@@ -1200,6 +1353,22 @@ class PianoRollWindow : public juce::DocumentWindow
             viewport.setScrollBarsShown(true, true);
             viewport.setScrollBarThickness(8);
             addAndMakeVisible(viewport);
+            addAndMakeVisible(keyboardOverlay);
+            viewport.onVisibleAreaChanged = [this](const juce::Rectangle<int>& area)
+            {
+                if (clampingHorizontalScroll)
+                    return;
+
+                if (area.getX() < pianoRoll.getKeyboardWidth())
+                {
+                    clampingHorizontalScroll = true;
+                    viewport.setViewPosition(pianoRoll.getKeyboardWidth(), area.getY());
+                    clampingHorizontalScroll = false;
+                    return;
+                }
+
+                keyboardOverlay.setViewY(area.getY());
+            };
 
             // ---- Edit snap box (left of REC) --------------------------------
             snapBox.addItem("0.05",  1);
@@ -1350,15 +1519,45 @@ class PianoRollWindow : public juce::DocumentWindow
                     pianoRoll.setQuantizeGrid(grids[idx]);
             };
             addAndMakeVisible(quantizeBox);
+
+            static constexpr const char* noteNames[] =
+                { "C", "C#/Db", "D", "D#/Eb", "E", "F", "F#/Gb", "G", "G#/Ab", "A", "A#/Bb", "B" };
+            for (int i = 0; i < 12; ++i)
+                keyRootBox.addItem(noteNames[i], i + 1);
+            keyRootBox.setSelectedId(1, juce::dontSendNotification);
+            keyRootBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff26385a));
+            keyRootBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            keyRootBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+            keyRootBox.onChange = [this] { applySelectedKeySignature(); };
+            addAndMakeVisible(keyRootBox);
+
+            keyScaleBox.addItem("Major", 1);
+            keyScaleBox.addItem("Minor", 2);
+            keyScaleBox.setSelectedId(1, juce::dontSendNotification);
+            keyScaleBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff26385a));
+            keyScaleBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            keyScaleBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+            keyScaleBox.onChange = [this] { applySelectedKeySignature(); };
+            addAndMakeVisible(keyScaleBox);
+        }
+
+        void setKeySignature(const KeySignature& key)
+        {
+            keyRootBox.setSelectedId(key.tonic + 1, juce::dontSendNotification);
+            keyScaleBox.setSelectedId(key.scale == ScaleType::Minor ? 2 : 1, juce::dontSendNotification);
+            pianoRoll.setKeySignature(key);
+            keyboardOverlay.repaint();
         }
 
         void resized() override
         {
             const int snapH = 26;
 
-            // Left side: [Q toggle | quantize grid]
+            // Left side: [Q toggle | quantize grid | key root | key scale]
             quantizeBtn.setBounds(4,   1, 28, snapH - 2);
             quantizeBox.setBounds(34,  0, 68, snapH);
+            keyRootBox.setBounds(108, 0, 76, snapH);
+            keyScaleBox.setBounds(188, 0, 72, snapH);
 
             // Right side: [Clear | REC | edit snap]
             clearBtn.setBounds(getWidth() - 96 - 52 - 50, 0, 46, snapH);
@@ -1375,11 +1574,16 @@ class PianoRollWindow : public juce::DocumentWindow
                 alignBtn     .setBounds(mx, 0, 42, snapH);
             }
 
-            viewport.setBounds(0, snapH, getWidth(), getHeight() - snapH);
+            const int keyboardW = pianoRoll.getKeyboardWidth();
+            keyboardOverlay.setBounds(0, snapH, keyboardW, getHeight() - snapH);
+            viewport.setBounds(keyboardW, snapH, getWidth() - keyboardW, getHeight() - snapH);
 
             const int cw = juce::jmax(viewport.getWidth(),  pianoRoll.getNeededWidth());
             const int ch = juce::jmax(viewport.getHeight(), pianoRoll.getNeededHeight());
             pianoRoll.setSize(cw, ch);
+            if (viewport.getViewPositionX() < keyboardW)
+                viewport.setViewPosition(keyboardW, viewport.getViewPositionY());
+            keyboardOverlay.setViewY(viewport.getViewPositionY());
         }
 
         // --- Timer: drives armed blink ---
@@ -1400,6 +1604,18 @@ class PianoRollWindow : public juce::DocumentWindow
             nudgeLeftBtn .setAlpha(hasSession ? 1.0f : 0.4f);
             nudgeRightBtn.setAlpha(hasSession ? 1.0f : 0.4f);
             alignBtn     .setAlpha(hasSession ? 1.0f : 0.4f);
+        }
+
+    private:
+        void applySelectedKeySignature()
+        {
+            KeySignature key;
+            key.tonic = juce::jlimit(0, 11, keyRootBox.getSelectedId() - 1);
+            key.scale = keyScaleBox.getSelectedId() == 2 ? ScaleType::Minor : ScaleType::Major;
+            pianoRoll.setKeySignature(key);
+            keyboardOverlay.repaint();
+            if (onKeySignatureChanged)
+                onKeySignatureChanged(key);
         }
     };
 

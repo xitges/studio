@@ -11,6 +11,7 @@
 #include <JuceHeader.h>
 #include <functional>
 #include "ProjectModel.h"
+#include "SynthEngine.h"
 
 // ---------------------------------------------------------------------------
 // Content panel
@@ -18,6 +19,54 @@
 class SynthEditorPanel : public juce::Component
 {
 public:
+    struct WaveformPreview : public juce::Component
+    {
+        void setWaveform(std::vector<float> samples)
+        {
+            waveform = std::move(samples);
+            repaint();
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            g.fillAll(juce::Colour(0xff10182d));
+            g.setColour(juce::Colour(0xff203050));
+            for (float pct : { 0.25f, 0.5f, 0.75f })
+            {
+                const float y = pct * (float)getHeight();
+                g.drawLine(0.0f, y, (float)getWidth(), y, 0.5f);
+            }
+
+            g.setColour(juce::Colour(0xff3498db).withAlpha(0.25f));
+            g.drawLine(0.0f, getHeight() * 0.5f, (float)getWidth(), getHeight() * 0.5f, 1.0f);
+
+            if (waveform.empty())
+                return;
+
+            juce::Path path;
+            const float midY = getHeight() * 0.5f;
+            const float scaleY = juce::jmax(1.0f, getHeight() * 0.42f);
+            for (size_t i = 0; i < waveform.size(); ++i)
+            {
+                const float x = juce::jmap((float)i, 0.0f, (float)juce::jmax<size_t>(1, waveform.size() - 1),
+                                           0.0f, (float)getWidth());
+                const float y = midY - waveform[i] * scaleY;
+                if (i == 0)
+                    path.startNewSubPath(x, y);
+                else
+                    path.lineTo(x, y);
+            }
+
+            g.setColour(juce::Colour(0xff8fd3ff));
+            g.strokePath(path, juce::PathStrokeType(2.0f));
+            g.setColour(juce::Colour(0xff4aa3df));
+            g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 6.0f, 1.0f);
+        }
+
+    private:
+        std::vector<float> waveform;
+    };
+
     std::function<void()> onParamsChanged;
 
     SynthEditorPanel()
@@ -92,6 +141,26 @@ public:
         waveBox.onChange = [this] { notify(); };
         addAndMakeVisible(waveBox);
         makeLabel(waveLbl, "Waveform");
+        previewLbl.setText("Wave Preview", juce::dontSendNotification);
+        previewLbl.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        previewLbl.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+        addAndMakeVisible(previewLbl);
+        addAndMakeVisible(waveformPreview);
+
+        ddspEnableBtn.setButtonText("Auto Patch");
+        ddspEnableBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2c2c54));
+        ddspEnableBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff8e44ad));
+        ddspEnableBtn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+        ddspEnableBtn.setClickingTogglesState(true);
+        ddspEnableBtn.onClick = [this] { notify(); };
+        addAndMakeVisible(ddspEnableBtn);
+
+        makeSlider(ddspAmountSl,     0.0, 1.0,  0.01, 0.0);  ddspAmountSl.onValueChange     = [this] { notify(); };
+        makeSlider(ddspBrightnessSl, 0.0, 1.0,  0.01, 0.5);  ddspBrightnessSl.onValueChange = [this] { notify(); };
+        makeSlider(ddspMotionSl,     0.0, 1.0,  0.01, 0.25); ddspMotionSl.onValueChange     = [this] { notify(); };
+        makeLabel(ddspAmountLbl,     "Blend");
+        makeLabel(ddspBrightnessLbl, "Brightness");
+        makeLabel(ddspMotionLbl,     "Motion");
 
         // ADSR
         makeSlider(attackSl,  1.0,  2000.0, 1.0,  5.0);   attackSl.onValueChange  = [this] { notify(); };
@@ -120,6 +189,8 @@ public:
         makeLabel(lfoRateLbl,   "LFO Rate (Hz)");
         makeLabel(lfoDepthLbl,  "LFO Depth");
         makeLabel(lfoTargetLbl, "LFO Target");
+
+        updateWaveformPreview();
     }
 
     void loadParams(const SynthParams& p)
@@ -135,6 +206,11 @@ public:
         lfoRateSl.setValue (p.lfoRate,  juce::dontSendNotification);
         lfoDepthSl.setValue(p.lfoDepth, juce::dontSendNotification);
         lfoTargetBox.setSelectedId(p.lfoTarget + 1, juce::dontSendNotification);
+        ddspEnableBtn.setToggleState(p.ddspAuto.enabled, juce::dontSendNotification);
+        ddspAmountSl.setValue(p.ddspAuto.amount, juce::dontSendNotification);
+        ddspBrightnessSl.setValue(p.ddspAuto.brightness, juce::dontSendNotification);
+        ddspMotionSl.setValue(p.ddspAuto.motion, juce::dontSendNotification);
+        updateWaveformPreview();
     }
 
     void applyToParams(SynthParams& p) const
@@ -150,6 +226,10 @@ public:
         p.lfoRate   = (float)lfoRateSl.getValue();
         p.lfoDepth  = (float)lfoDepthSl.getValue();
         p.lfoTarget = lfoTargetBox.getSelectedId() - 1;
+        p.ddspAuto.enabled    = ddspEnableBtn.getToggleState();
+        p.ddspAuto.amount     = (float)ddspAmountSl.getValue();
+        p.ddspAuto.brightness = (float)ddspBrightnessSl.getValue();
+        p.ddspAuto.motion     = (float)ddspMotionSl.getValue();
     }
 
     void paint(juce::Graphics& g) override
@@ -165,9 +245,10 @@ public:
             g.drawLine(10.0f, (float)(y + 14), 410.0f, (float)(y + 14), 1.0f);
         };
 
-        sectionHeader("ADSR ENVELOPE", 88);
-        sectionHeader("FILTER",        198);
-        sectionHeader("LFO",           258);
+        sectionHeader("NOTE AUTO PATCH", 172);
+        sectionHeader("ADSR ENVELOPE",   282);
+        sectionHeader("FILTER",          392);
+        sectionHeader("LFO",             452);
     }
 
     void resized() override
@@ -184,39 +265,71 @@ public:
         enableBtn.setBounds(10,  y, 120, 26);
         waveLbl.setBounds  (150, y + 4, 70, 18);
         waveBox.setBounds  (220, y, 120, 26);
+        y += 36;
 
-        // ADSR section (section header at y+26+16 = y+42 → paint uses absolute 88)
-        y = 106;
+        previewLbl.setBounds(10, y + 4, 80, 18);
+        waveformPreview.setBounds(10, y + 24, 390, 88);
+
+        y = 190;
+        ddspEnableBtn.setBounds(10, y, 120, 26);
+        y += 34;
+        ddspAmountLbl    .setBounds(10, y, lblW, h); ddspAmountSl    .setBounds(100, y, slW, h); y += h + pad;
+        ddspBrightnessLbl.setBounds(10, y, lblW, h); ddspBrightnessSl.setBounds(100, y, slW, h); y += h + pad;
+        ddspMotionLbl    .setBounds(10, y, lblW, h); ddspMotionSl    .setBounds(100, y, slW, h);
+
+        y = 300;
         attackLbl .setBounds(10, y, lblW, h); attackSl .setBounds(100, y, slW, h); y += h + pad;
         decayLbl  .setBounds(10, y, lblW, h); decaySl  .setBounds(100, y, slW, h); y += h + pad;
         sustainLbl.setBounds(10, y, lblW, h); sustainSl.setBounds(100, y, slW, h); y += h + pad;
         releaseLbl.setBounds(10, y, lblW, h); releaseSl.setBounds(100, y, slW, h);
 
         // Filter
-        y = 216;
+        y = 410;
         cutoffLbl   .setBounds(10, y, lblW, h); cutoffSl   .setBounds(100, y, slW, h); y += h + pad;
         resonanceLbl.setBounds(10, y, lblW, h); resonanceSl.setBounds(100, y, slW, h);
 
         // LFO
-        y = 276;
+        y = 470;
         lfoRateLbl  .setBounds(10, y, lblW, h); lfoRateSl  .setBounds(100, y, slW, h); y += h + pad;
         lfoDepthLbl .setBounds(10, y, lblW, h); lfoDepthSl .setBounds(100, y, slW, h); y += h + pad;
         lfoTargetLbl.setBounds(10, y, lblW, h); lfoTargetBox.setBounds(100, y, 100, h);
     }
 
 private:
-    void notify() { if (onParamsChanged) onParamsChanged(); }
+    SynthParams makeCurrentParams() const
+    {
+        SynthParams params;
+        applyToParams(params);
+        return params;
+    }
+
+    void updateWaveformPreview()
+    {
+        waveformPreview.setWaveform(SynthPreview::renderWaveform(makeCurrentParams(), 256));
+    }
+
+    void notify()
+    {
+        updateWaveformPreview();
+        if (onParamsChanged) onParamsChanged();
+    }
 
     // Preset selector
     juce::ComboBox presetBox;
     juce::Label    presetLbl;
 
     juce::TextButton enableBtn;
+    juce::TextButton ddspEnableBtn;
     juce::ComboBox   waveBox;
     juce::Label      waveLbl;
+    juce::Label      previewLbl;
+    WaveformPreview  waveformPreview;
 
     juce::Slider attackSl, decaySl, sustainSl, releaseSl;
     juce::Label  attackLbl, decayLbl, sustainLbl, releaseLbl;
+
+    juce::Slider ddspAmountSl, ddspBrightnessSl, ddspMotionSl;
+    juce::Label  ddspAmountLbl, ddspBrightnessLbl, ddspMotionLbl;
 
     juce::Slider cutoffSl, resonanceSl;
     juce::Label  cutoffLbl, resonanceLbl;
@@ -241,7 +354,7 @@ public:
     {
         setContentNonOwned(&panel, false);
         setResizable(false, false);
-        setSize(430, 406);
+        setSize(430, 610);
     }
 
     void setChannelName(const juce::String& name)

@@ -14,7 +14,89 @@
 
 enum class PlayMode    { Pattern, Song };
 enum class ChannelType { Drum, Melodic };
+enum class ScaleType   { Major, Minor };
 inline constexpr int kMaxPatternSteps = 128;
+
+struct KeySignature
+{
+    int tonic = 0; // 0=C, 1=C#/Db, ... 11=B
+    ScaleType scale = ScaleType::Major;
+};
+
+namespace MusicTheory
+{
+    inline const std::array<int, 7>& getScaleIntervals(ScaleType scale)
+    {
+        static const std::array<int, 7> major { 0, 2, 4, 5, 7, 9, 11 };
+        static const std::array<int, 7> minor { 0, 2, 3, 5, 7, 8, 10 };
+        return scale == ScaleType::Minor ? minor : major;
+    }
+
+    inline bool isPitchInScale(int midiPitch, const KeySignature& key)
+    {
+        const int pc = ((midiPitch % 12) + 12) % 12;
+        const int rel = (pc - key.tonic + 12) % 12;
+        for (const auto interval : getScaleIntervals(key.scale))
+            if (interval == rel)
+                return true;
+        return false;
+    }
+
+    inline int snapPitchToScale(int midiPitch, const KeySignature& key)
+    {
+        if (isPitchInScale(midiPitch, key))
+            return midiPitch;
+
+        for (int delta = 1; delta < 12; ++delta)
+        {
+            const int down = juce::jmax(0, midiPitch - delta);
+            if (isPitchInScale(down, key))
+                return down;
+
+            const int up = juce::jmin(127, midiPitch + delta);
+            if (isPitchInScale(up, key))
+                return up;
+        }
+
+        return juce::jlimit(0, 127, midiPitch);
+    }
+
+    inline int moveScaleStep(int midiPitch, const KeySignature& key, int direction)
+    {
+        const int step = direction >= 0 ? 1 : -1;
+        int pitch = juce::jlimit(0, 127, midiPitch + step);
+        while (pitch > 0 && pitch < 127)
+        {
+            if (isPitchInScale(pitch, key))
+                return pitch;
+            pitch += step;
+        }
+        return juce::jlimit(0, 127, pitch);
+    }
+
+    inline bool preferFlats(const KeySignature& key)
+    {
+        if (key.scale == ScaleType::Major)
+            return key.tonic == 5 || key.tonic == 10 || key.tonic == 3 || key.tonic == 8 || key.tonic == 1;
+        return key.tonic == 2 || key.tonic == 7 || key.tonic == 0 || key.tonic == 5 || key.tonic == 10;
+    }
+
+    inline juce::String noteNameForPitch(int midiPitch, const KeySignature& key)
+    {
+        static const std::array<const char*, 12> sharpNames
+            { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        static const std::array<const char*, 12> flatNames
+            { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" };
+
+        const int pc = ((midiPitch % 12) + 12) % 12;
+        return preferFlats(key) ? flatNames[(size_t)pc] : sharpNames[(size_t)pc];
+    }
+
+    inline juce::String scaleName(ScaleType scale)
+    {
+        return scale == ScaleType::Minor ? "Minor" : "Major";
+    }
+}
 
 // M3 — one note in a melodic channel's piano roll
 struct NoteEvent
@@ -28,6 +110,14 @@ struct NoteEvent
 // M13 — synthesizer parameters per channel
 struct SynthParams
 {
+    struct DDSPAutoSettings
+    {
+        bool  enabled    = false;
+        float amount     = 0.0f;  // 0..1 blend between base patch and generated patch
+        float brightness = 0.5f;  // 0..1 timbral bias
+        float motion     = 0.25f; // 0..1 vibrato / movement bias
+    };
+
     bool  enabled   = false;
     int   waveform  = 1;        // 0=Sine 1=Saw 2=Square 3=Triangle
     float attack    = 5.0f;     // ms
@@ -39,6 +129,7 @@ struct SynthParams
     float lfoRate   = 2.0f;     // Hz
     float lfoDepth  = 0.0f;     // 0.0 – 1.0
     int   lfoTarget = 0;        // 0 = cutoff, 1 = pitch
+    DDSPAutoSettings ddspAuto;
 };
 
 // Instrument preset database — factory presets for SynthEditorPanel ComboBox
@@ -67,15 +158,15 @@ namespace SynthPresets
     {
         return {
             //  name              en    wv  atk    dec    sus    rel    cut    res   lfoR  lfoD  lfoT
-            { "Piano",          make(true, 3,   5, 400, 0.20f,  450, 3000, 0.15f, 0.00f, 0.00f) },
-            { "Electric Guitar",make(true, 1,   2, 250, 0.45f,  200, 4800, 0.25f, 4.00f, 0.03f) },
-            { "Cello / Pad",    make(true, 1, 350, 300, 0.85f, 1500, 1600, 0.35f, 0.50f, 0.10f) },
-            { "Fat Bass",       make(true, 1,   3, 150, 0.80f,  250,  700, 0.70f, 0.10f, 0.02f) },
-            { "Retro Game",     make(true, 2,   1,  50, 0.00f,   40, 8000, 0.10f, 6.00f, 0.05f) },
-            { "Lead Synth",     make(true, 1,  10, 120, 0.70f,  350, 5500, 0.60f, 4.50f, 0.12f) },
-            { "Warm Pad",       make(true, 0, 500, 400, 0.90f, 1800, 1000, 0.15f, 0.30f, 0.08f) },
-            { "Pluck",          make(true, 3,   1, 200, 0.00f,  300, 4500, 0.45f, 0.00f, 0.00f) },
-            { "Trumpet",        make(true, 1,  35, 150, 0.85f,  250, 3800, 0.40f, 5.00f, 0.08f, 1) },
+            { "Soft Keys",      make(true, 3,   1, 220, 0.05f,  120, 6500, 0.10f, 0.00f, 0.00f) },
+            { "Plucked Pulse",  make(true, 2,   1, 180, 0.22f,  110, 3600, 0.32f, 4.80f, 0.02f, 1) },
+            { "Bowed Pad",      make(true, 3, 180, 520, 0.78f, 1400, 2200, 0.18f, 4.60f, 0.02f, 1) },
+            { "Fat Bass",       make(true, 2,   1, 100, 0.72f,  120,  520, 0.58f, 0.00f, 0.00f) },
+            { "Chiptune Pulse", make(true, 2,   1,  35, 0.00f,   25,11000, 0.05f, 0.00f, 0.00f) },
+            { "Bright Lead",    make(true, 1,   6,  90, 0.78f,  180, 6800, 0.28f, 5.20f, 0.04f, 1) },
+            { "Warm Pad",       make(true, 3, 420, 680, 0.82f, 2200, 1800, 0.12f, 0.35f, 0.06f) },
+            { "Short Pluck",    make(true, 2,   1, 110, 0.03f,   90, 5200, 0.30f, 0.00f, 0.00f) },
+            { "Brass Lead",     make(true, 2,  18, 110, 0.78f,  150, 2600, 0.32f, 5.40f, 0.03f, 1) },
         };
     }
 } // namespace SynthPresets
@@ -229,6 +320,7 @@ struct PlaylistClip
 struct Project
 {
     double bpm = 140.0;
+    KeySignature keySignature;
 
     // channel rack state (global: only count is global; names/types live in Pattern)
     int channelCount = 3;

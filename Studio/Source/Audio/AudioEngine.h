@@ -70,17 +70,17 @@ public:
     void setStepPattern(int channelIndex, int stepIndex, bool active);
 
     double getSampleRate()         const { return sampleRate; }
-    long   getSongSamplePosition() const { return songSamplePosition; }
+    long   getSongSamplePosition() const { return songSamplePosition.load(std::memory_order_relaxed); }
     double getPatternBeatPos()     const { return patternBeatPos; }   // M3
-    double getBPM() const { return bpm; }
+    double getBPM() const { return bpm.load(std::memory_order_relaxed); }
     // Fired on the message thread when the Song-mode sample cache is ready
     std::function<void()> onSongCacheReady;
 
     // Seek song playback to an arbitrary bar position
     void seekSongToBar(double bar)
     {
-        const double samplesPerBar = (sampleRate * 60.0 / bpm) * 4.0;
-        songSamplePosition = (long)(bar * samplesPerBar);
+        const double samplesPerBar = (sampleRate * 60.0 / bpm.load(std::memory_order_relaxed)) * 4.0;
+        songSamplePosition.store((long)(bar * samplesPerBar), std::memory_order_relaxed);
     }
 
     // AudioIODeviceCallback
@@ -128,7 +128,7 @@ public:
 
     float getChannelBasePitch(int ch) const
     {
-        return (ch >= 0 && ch < 16) ? channelBasePitch[ch] : 0.0f;
+        return (ch >= 0 && ch < 16) ? channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) : 0.0f;
     }
 
     // M13 — trigger a synth note directly (used by piano key preview for melodic synth channels)
@@ -144,7 +144,8 @@ public:
         if (cacheLoader_ != nullptr && cacheLoader_->isThreadRunning())
         {
             cacheLoader_->signalThreadShouldExit();
-            cacheLoader_->waitForThreadToExit(1000);
+            if (!cacheLoader_->waitForThreadToExit(1000))
+                DBG("CacheLoader did not stop within timeout");
         }
     }
 
@@ -156,7 +157,11 @@ public:
         if (cacheLoader_ != nullptr && cacheLoader_->isThreadRunning())
         {
             cacheLoader_->signalThreadShouldExit();
-            cacheLoader_->waitForThreadToExit(1000);
+            if (!cacheLoader_->waitForThreadToExit(1000))
+            {
+                DBG("CacheLoader did not stop within timeout");
+                return;
+            }
         }
         cacheLoader_ = std::make_unique<CacheLoader>(*this);
         cacheLoader_->startThread();
@@ -211,6 +216,11 @@ public:
     bool getPluginState(int ch, juce::MemoryBlock& stateOut) const;
 
 private:
+    SynthParams makeNoteSynthParams(const SynthParams& baseParams,
+                                    int midiPitch,
+                                    float velocity,
+                                    int noteLenSamples) const;
+
     struct RuntimePlaybackState
     {
         double projectBpm   = 140.0;
@@ -301,30 +311,6 @@ private:
                 voice.setMuted(muted);
         }
 
-        void setVolume(float volume)
-        {
-            for (auto& voice : voices)
-                voice.setVolume(volume);
-        }
-
-        void setPan(float pan)
-        {
-            for (auto& voice : voices)
-                voice.setPan(pan);
-        }
-
-        void setAttack(float attackMs)
-        {
-            for (auto& voice : voices)
-                voice.setAttack(attackMs);
-        }
-
-        void setRelease(float releaseMs)
-        {
-            for (auto& voice : voices)
-                voice.setRelease(releaseMs);
-        }
-
         SamplePlayer& allocateVoice()
         {
             auto& voice = voices[(size_t)nextVoice];
@@ -339,10 +325,16 @@ private:
         }
     };
 
+    struct ChannelSourceSnapshot
+    {
+        std::array<std::shared_ptr<juce::AudioBuffer<float>>, 16> buffers;
+    };
+
+    using SongSampleCacheMap = std::map<int, std::array<std::shared_ptr<juce::AudioBuffer<float>>, 16>>;
+
     juce::AudioDeviceManager deviceManager;
     juce::MixerAudioSource   mixer;
 
-    std::array<std::shared_ptr<juce::AudioBuffer<float>>, 16> channelSourceBuffers_;
     std::array<SampleVoicePool, 16> sampleVoicePools;
     std::array<PolySynth, 16>   polySynths;       // M13
     std::array<FXChain, 8>      fxChains;         // M14
@@ -358,25 +350,28 @@ private:
     Project* project  = nullptr;
     PlayMode playMode = PlayMode::Pattern;
 
-    bool   songPlaying        = false;
-    long   songSamplePosition = 0;
-    double bpm                = 140.0;
+    std::atomic<bool> songPlaying { false };
+    std::atomic<long> songSamplePosition { 0 };
+    std::atomic<double> bpm { 140.0 };
 
     // M3 — beat tracking for NoteEvent playback
     double patternBeatPos  = 0.0;
     int    activePatternId = 0;
-    std::array<float, 16> sampleChannelVolume_;
-    std::array<float, 16> sampleChannelPan_;
-    std::array<float, 16> sampleChannelAttackMs_;
-    std::array<float, 16> sampleChannelReleaseMs_;
-    float  channelBasePitch[16] = {};   // stores user pitch-slider values per channel
-    bool   channelMuted [16]   = {};   // user mute state (independent of solo)
-    bool   channelSoloed[16]   = {};   // user solo state
+    std::array<std::atomic<float>, 16> sampleChannelVolume_;
+    std::array<std::atomic<float>, 16> sampleChannelPan_;
+    std::array<std::atomic<float>, 16> sampleChannelAttackMs_;
+    std::array<std::atomic<float>, 16> sampleChannelReleaseMs_;
+    std::array<std::atomic<float>, 16> channelBasePitch {};   // stores user pitch-slider values per channel
+    std::array<std::atomic<bool>, 16>  channelMuted {};       // user mute state (independent of solo)
+    std::array<std::atomic<bool>, 16>  channelSoloed {};      // user solo state
 
     void applyChannelMuteLogic();      // recompute SamplePlayer mute from muted[]+soloed[]
     void rebuildRuntimeStateFromProject();
-    std::shared_ptr<RuntimePlaybackState> getRuntimeState() const;
-    void publishRuntimeState(std::shared_ptr<RuntimePlaybackState> state);
+    const RuntimePlaybackState& getRuntimeState() const;
+    void updateRuntimeState(const std::function<void(RuntimePlaybackState&)>& updater);
+    const ChannelSourceSnapshot& getChannelSourceSnapshot() const;
+    void updateChannelSourceSnapshot(int channelIndex, std::shared_ptr<juce::AudioBuffer<float>> buffer);
+    const SongSampleCacheMap& getSongSampleCache() const;
 
     // M5 — mixer intermediate buffers
     juce::AudioBuffer<float> stagingBuf;                         // temp per-channel render
@@ -403,22 +398,24 @@ private:
                                float pitchSemitones,
                                float bpmRatio);
     void dispatchScheduledSampleTriggers();
-    std::shared_ptr<const juce::AudioBuffer<float>> getChannelSourceBuffer(int channelIndex) const;
+    const juce::AudioBuffer<float>* getChannelSourceBuffer(int channelIndex) const;
+    std::shared_ptr<const juce::AudioBuffer<float>> getChannelSourceBufferShared(int channelIndex) const;
 
     const Pattern* findPatternById(int patternId) const;
 
     // Song mode: pre-decoded audio cache built in background before playback
-    std::map<int, std::array<juce::AudioBuffer<float>, 16>> songSampleCache;
+    ChannelSourceSnapshot channelSourceSnapshots_[2];
+    std::atomic<int> activeChannelSourceSnapshotIdx_{0};
+    SongSampleCacheMap songSampleCaches_[2];
+    std::atomic<int> activeSongCacheIdx_{0};
     int songPlayerClipId[16] = {};
 
     // Double-buffer snapshot: message thread writes to inactive slot,
     // audio thread reads from active slot via atomic index.
     PlaybackSnapshot snapshots_[2];
     std::atomic<int> activeSnapshotIdx_{0};
-
-    // Lock protecting buildSongSampleCache from concurrent pattern modification
-    juce::CriticalSection cacheLoaderLock_;
-    std::shared_ptr<RuntimePlaybackState> runtimeState_;
+    RuntimePlaybackState runtimeStates_[2];
+    std::atomic<int> activeRuntimeStateIdx_{0};
     ScheduledSampleTriggerQueue scheduledSampleTriggers_;
 
     // Background cache loader — avoids UI freeze on Play in Song mode
@@ -429,7 +426,6 @@ private:
         CacheLoader(AudioEngine& e) : juce::Thread("SampleCacheLoader"), engine(e) {}
         void run() override
         {
-            const juce::ScopedLock lock(engine.cacheLoaderLock_);
             engine.buildSongSampleCache();
             if (!threadShouldExit())
                 juce::MessageManager::callAsync([this] { if (onDone) onDone(); });

@@ -572,6 +572,7 @@ MainComponent::MainComponent()
         if (auto* pat = findPattern(activePatternId))
         {
             pianoRollWindow->content.pianoRoll.setPattern(pat, ch, project.bpm);
+            pianoRollWindow->content.setKeySignature(project.keySignature);
             pianoRollWindow->content.pianoRoll.onNotesChanged = [this] { markDirty(); };
             pianoRollWindow->content.pianoRoll.onNoteDeleted  = [this, ch](int pitch)
             {
@@ -630,6 +631,11 @@ MainComponent::MainComponent()
             {
                 return audioEngine.isPlaying();
             };
+            pianoRollWindow->content.onKeySignatureChanged = [this](const KeySignature& key)
+            {
+                project.keySignature = key;
+                markDirty();
+            };
         }
 
         pianoRollWindow->setVisible(true);
@@ -652,7 +658,7 @@ MainComponent::MainComponent()
         if (synthEditorWindow == nullptr)
         {
             synthEditorWindow = std::make_unique<SynthEditorWindow>();
-            synthEditorWindow->centreWithSize(430, 406);
+            synthEditorWindow->centreWithSize(430, 610);
         }
 
         synthEditorWindow->setChannelName(
@@ -1007,7 +1013,10 @@ void MainComponent::selectPattern(int id)
     // Update open piano roll to the newly selected pattern
     if (pianoRollWindow != nullptr && pianoRollWindow->isVisible() && pianoRollChannel >= 0)
         if (auto* pat = findPattern(activePatternId))
+        {
             pianoRollWindow->content.pianoRoll.setPattern(pat, pianoRollChannel, project.bpm);
+            pianoRollWindow->content.setKeySignature(project.keySignature);
+        }
 }
 
 void MainComponent::syncPatternToEngine()
