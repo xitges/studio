@@ -121,10 +121,10 @@ MainComponent::MainComponent()
     p1.channelNames[0] = "Kick";
     p1.channelNames[1] = "Snare";
     p1.channelNames[2] = "HiHat";
-    // Default beat
-    p1.steps[0][0] = p1.steps[0][4] = p1.steps[0][8] = p1.steps[0][12] = true;
-    p1.steps[1][4] = p1.steps[1][12] = true;
-    for (int s = 0; s < 16; ++s) p1.steps[2][s] = true;
+    // Default beat (variation A = index 0)
+    p1.variations[0].steps[0][0] = p1.variations[0].steps[0][4] = p1.variations[0].steps[0][8] = p1.variations[0].steps[0][12] = true;
+    p1.variations[0].steps[1][4] = p1.variations[0].steps[1][12] = true;
+    for (int s = 0; s < 16; ++s) p1.variations[0].steps[2][s] = true;
     project.patterns.push_back(p1);
 
     PlaylistClip c1; c1.id=1; c1.patternId=1; c1.name="Intro Beat";
@@ -494,10 +494,11 @@ MainComponent::MainComponent()
     {
         markDirty();
         const int patId = activePatternId;
+        const int varIdx = channelRack.activeVariation;
         undoManager.perform(new LambdaAction(
-            [this, patId, ch, step, newState]() -> bool {
+            [this, patId, ch, step, newState, varIdx]() -> bool {
                 if (auto* p = findPattern(patId)) {
-                    p->steps[ch][step] = newState;
+                    p->variations[varIdx].steps[ch][step] = newState;
                     if (patId == activePatternId) {
                         channelRack.setStep(ch, step, newState);
                         audioEngine.setStepPattern(ch, step, newState);  // live sync
@@ -506,9 +507,9 @@ MainComponent::MainComponent()
                 }
                 markDirty(); return true;
             },
-            [this, patId, ch, step, oldState]() -> bool {
+            [this, patId, ch, step, oldState, varIdx]() -> bool {
                 if (auto* p = findPattern(patId)) {
-                    p->steps[ch][step] = oldState;
+                    p->variations[varIdx].steps[ch][step] = oldState;
                     if (patId == activePatternId) {
                         channelRack.setStep(ch, step, oldState);
                         audioEngine.setStepPattern(ch, step, oldState);  // live sync
@@ -834,6 +835,29 @@ MainComponent::MainComponent()
         markDirty();
     };
 
+    // Pattern Variation (A/B/C/D) — save current variation, switch, reload
+    channelRack.onVariationChanged = [this](int varIdx)
+    {
+        // Save current step edits to the current pattern's current variation
+        if (auto* pat = findPattern(activePatternId))
+            channelRack.saveToPattern(*pat);
+        // Tell AudioEngine which variation to use for pattern mode playback
+        audioEngine.setActiveVariation(varIdx);
+        audioEngine.updatePatternSnapshot();
+        // Reload the newly selected variation into the UI
+        if (auto* pat = findPattern(activePatternId))
+            channelRack.loadPattern(*pat, varIdx);
+        // Update piano roll if open
+        if (pianoRollWindow != nullptr && pianoRollWindow->isVisible() && pianoRollChannel >= 0)
+        {
+            if (auto* pat = findPattern(activePatternId))
+            {
+                pianoRollWindow->content.pianoRoll.variationIdx = varIdx;
+                pianoRollWindow->content.setPattern(pat, pianoRollChannel, project.bpm);
+            }
+        }
+    };
+
     // ---- M13: Synth Editor
     channelRack.onOpenSynthEditor = [this](int ch)
     {
@@ -849,10 +873,12 @@ MainComponent::MainComponent()
         synthEditorWindow->setChannelName(
             juce::String(ch + 1));   // simple "1"-based label for now
 
-        refreshSynthEditorPresetList();
-
-        if (auto* pat = findPattern(activePatternId))
-            synthEditorWindow->panel.loadParams(pat->synthParams[(size_t)ch]);
+        {
+            auto* pat = findPattern(activePatternId);
+            refreshSynthEditorPresetList(pat != nullptr ? pat->synthParams[(size_t)ch].presetName : juce::String{});
+            if (pat != nullptr)
+                synthEditorWindow->panel.loadParams(pat->synthParams[(size_t)ch]);
+        }
 
         synthEditorWindow->panel.onParamsChanged = [this, ch]
         {
@@ -1080,6 +1106,145 @@ MainComponent::MainComponent()
         ));
     };
 
+    channelRack.onDeleteChannel = [this](int ch)
+    {
+        if (project.channelCount <= 1) return;
+
+        // Save current rack edits into the active pattern first
+        if (auto* pat = findPattern(activePatternId))
+            channelRack.saveToPattern(*pat);
+
+        // Capture per-pattern channel data for undo
+        struct ChSnap
+        {
+            struct VarData { bool steps[Pattern::kMaxSteps] = {}; std::vector<NoteEvent> notes; };
+            juce::String name;
+            ChannelType  type       = ChannelType::Drum;
+            juce::String samplePath;
+            SynthParams  synthParams;
+            int          mixerRoute = 0;
+            float        volume = 0.8f, pan = 0.0f, pitch = 0.0f;
+            VarData      varData[Pattern::kMaxVariations];
+        };
+
+        auto snap = std::make_shared<std::vector<ChSnap>>();
+        for (auto& pat : project.patterns)
+        {
+            ChSnap s;
+            s.name        = pat.channelNames[ch];
+            s.type        = pat.channelTypes[ch];
+            s.samplePath  = pat.samplePaths[ch];
+            s.synthParams = pat.synthParams[ch];
+            s.mixerRoute  = pat.channelMixerRouting[ch];
+            s.volume      = pat.channelVolume[ch];
+            s.pan         = pat.channelPan[ch];
+            s.pitch       = pat.channelPitch[ch];
+            for (int v = 0; v < Pattern::kMaxVariations; ++v)
+            {
+                for (int st = 0; st < Pattern::kMaxSteps; ++st)
+                    s.varData[v].steps[st] = pat.variations[v].steps[ch][st];
+                s.varData[v].notes = pat.variations[v].notes[ch];
+            }
+            snap->push_back(std::move(s));
+        }
+        const int oldCount = project.channelCount;
+
+        auto doDelete = [this, ch]()
+        {
+            for (auto& pat : project.patterns)
+            {
+                for (int i = ch; i < project.channelCount - 1; ++i)
+                {
+                    pat.channelNames[i]        = pat.channelNames[i + 1];
+                    pat.channelTypes[i]        = pat.channelTypes[i + 1];
+                    pat.samplePaths[i]         = pat.samplePaths[i + 1];
+                    pat.synthParams[i]         = pat.synthParams[i + 1];
+                    pat.channelMixerRouting[i] = pat.channelMixerRouting[i + 1];
+                    pat.channelVolume[i]       = pat.channelVolume[i + 1];
+                    pat.channelPan[i]          = pat.channelPan[i + 1];
+                    pat.channelPitch[i]        = pat.channelPitch[i + 1];
+                    for (int v = 0; v < Pattern::kMaxVariations; ++v)
+                    {
+                        for (int st = 0; st < Pattern::kMaxSteps; ++st)
+                            pat.variations[v].steps[i][st] = pat.variations[v].steps[i + 1][st];
+                        pat.variations[v].notes[i] = pat.variations[v].notes[i + 1];
+                    }
+                }
+                const int last = project.channelCount - 1;
+                pat.channelNames[last]        = "Channel " + juce::String(last + 1);
+                pat.channelTypes[last]        = ChannelType::Drum;
+                pat.samplePaths[last]         = {};
+                pat.synthParams[last]         = SynthParams{};
+                pat.channelMixerRouting[last] = last % 8;
+                pat.channelVolume[last]       = 0.8f;
+                pat.channelPan[last]          = 0.0f;
+                pat.channelPitch[last]        = 0.0f;
+                for (int v = 0; v < Pattern::kMaxVariations; ++v)
+                {
+                    for (int st = 0; st < Pattern::kMaxSteps; ++st)
+                        pat.variations[v].steps[last][st] = false;
+                    pat.variations[v].notes[last].clear();
+                }
+            }
+            project.channelCount--;
+            reloadProjectIntoUI();
+            audioEngine.updatePatternSnapshot();
+            markDirty();
+        };
+
+        auto doRestore = [this, ch, oldCount, snap]()
+        {
+            project.channelCount = oldCount;
+            int patIdx = 0;
+            for (auto& pat : project.patterns)
+            {
+                if (patIdx >= (int)snap->size()) break;
+                const auto& s = (*snap)[(size_t)patIdx++];
+                // Shift existing channels up to make room
+                for (int i = project.channelCount - 1; i > ch; --i)
+                {
+                    pat.channelNames[i]        = pat.channelNames[i - 1];
+                    pat.channelTypes[i]        = pat.channelTypes[i - 1];
+                    pat.samplePaths[i]         = pat.samplePaths[i - 1];
+                    pat.synthParams[i]         = pat.synthParams[i - 1];
+                    pat.channelMixerRouting[i] = pat.channelMixerRouting[i - 1];
+                    pat.channelVolume[i]       = pat.channelVolume[i - 1];
+                    pat.channelPan[i]          = pat.channelPan[i - 1];
+                    pat.channelPitch[i]        = pat.channelPitch[i - 1];
+                    for (int v = 0; v < Pattern::kMaxVariations; ++v)
+                    {
+                        for (int st = 0; st < Pattern::kMaxSteps; ++st)
+                            pat.variations[v].steps[i][st] = pat.variations[v].steps[i - 1][st];
+                        pat.variations[v].notes[i] = pat.variations[v].notes[i - 1];
+                    }
+                }
+                // Restore the deleted channel at index ch
+                pat.channelNames[ch]        = s.name;
+                pat.channelTypes[ch]        = s.type;
+                pat.samplePaths[ch]         = s.samplePath;
+                pat.synthParams[ch]         = s.synthParams;
+                pat.channelMixerRouting[ch] = s.mixerRoute;
+                pat.channelVolume[ch]       = s.volume;
+                pat.channelPan[ch]          = s.pan;
+                pat.channelPitch[ch]        = s.pitch;
+                for (int v = 0; v < Pattern::kMaxVariations; ++v)
+                {
+                    for (int st = 0; st < Pattern::kMaxSteps; ++st)
+                        pat.variations[v].steps[ch][st] = s.varData[v].steps[st];
+                    pat.variations[v].notes[ch] = s.varData[v].notes;
+                }
+            }
+            reloadProjectIntoUI();
+            audioEngine.updatePatternSnapshot();
+            markDirty();
+        };
+
+        undoManager.perform(new LambdaAction(
+            [doDelete]() -> bool { doDelete(); return true; },
+            [doRestore]() -> bool { doRestore(); return true; }
+        ));
+    };
+
     // ---- M5: Mixer
     addAndMakeVisible(mixer);
     mixer.setVisible(false);   // hidden until toolbar toggle
@@ -1215,7 +1380,7 @@ MainComponent::MainComponent()
                                 const int step = (int)std::round(hit.beatPos / 0.25)
                                                  % newPat.stepCount;
                                 if (step >= 0 && step < newPat.stepCount)
-                                    newPat.steps[ch][step] = true;
+                                    newPat.variations[0].steps[ch][step] = true;
                             }
 
                             project.patterns.push_back(newPat);
@@ -1352,9 +1517,12 @@ void MainComponent::selectPattern(int id)
 
         // Sync step pattern to engine so it plays correctly immediately
         audioEngine.setPatternStepCount(newPat->stepCount);
-        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
-            for (int s = 0; s < newPat->stepCount; ++s)
-                audioEngine.setStepPattern(ch, s, newPat->steps[ch][s]);
+        {
+            const int vi = channelRack.activeVariation;
+            for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+                for (int s = 0; s < newPat->stepCount; ++s)
+                    audioEngine.setStepPattern(ch, s, newPat->variations[vi].steps[ch][s]);
+        }
     }
 
     toolbar.updatePatternList(project.patterns, activePatternId);
@@ -1383,9 +1551,10 @@ void MainComponent::syncPatternToEngine()
     if (toolbar.getPlayMode() == PlayMode::Pattern)
     {
         audioEngine.setPatternStepCount(pat->stepCount);
+        const int vi = channelRack.activeVariation;
         for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
             for (int s = 0; s < pat->stepCount; ++s)
-                audioEngine.setStepPattern(ch, s, pat->steps[ch][s]);
+                audioEngine.setStepPattern(ch, s, pat->variations[vi].steps[ch][s]);
     }
 
     audioEngine.updatePatternSnapshot();
@@ -1443,7 +1612,8 @@ void MainComponent::exportCurrentPianoRollToMidi()
             sequence.addEvent(juce::MidiMessage::tempoMetaEvent(
                 juce::roundToInt(60000000.0 / juce::jmax(1.0, project.bpm))), 0.0);
 
-            const auto& notes = exportPat->notes[(size_t)exportChannel];
+            const int exportVarIdx = channelRack.activeVariation;
+            const auto& notes = exportPat->variations[exportVarIdx].notes[(size_t)exportChannel];
             for (const auto& note : notes)
             {
                 const double startTick = juce::jmax(0.0, (double)note.startBeat * kMidiPpq);
@@ -1573,7 +1743,7 @@ void MainComponent::importCurrentPianoRollFromMidi()
             if (pianoRollWindow != nullptr)
                 pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
 
-            importPat->notes[(size_t)importChannel] = std::move(importedNotes);
+            importPat->variations[channelRack.activeVariation].notes[(size_t)importChannel] = std::move(importedNotes);
             const int importedSteps = juce::jlimit(1, kMaxPatternSteps,
                                                    (int)std::ceil(maxEndBeat / 0.25));
             importPat->stepCount = importedSteps;
@@ -1889,7 +2059,8 @@ int MainComponent::ensureAutoBassChannel()
         pat.channelTypes[newChannel] = ChannelType::Melodic;
         pat.synthParams[newChannel] = bassParams;
         pat.samplePaths[newChannel].clear();
-        pat.notes[newChannel].clear();
+        for (int vi = 0; vi < Pattern::kMaxVariations; ++vi)
+            pat.variations[vi].notes[newChannel].clear();
     }
 
     project.channelCount = newChannel + 1;

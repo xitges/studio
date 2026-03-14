@@ -69,6 +69,7 @@ public:
     std::function<void(int newStepCount)>     onStepCountChanged;   // M3
     std::function<void(int ch, ChannelType)>  onChannelTypeChanged; // M3
     std::function<void(int ch)>               onOpenSynthEditor;    // M13
+    std::function<void(int ch)>               onDeleteChannel;      // delete channel
     std::function<int()>                      getCurrentStep;
 
     // M8 — VST/AU plugin actions
@@ -78,6 +79,10 @@ public:
 
     // M-Phase3 — mixer routing
     std::function<void(int ch, int trackIdx)> onChannelRoutingChanged;
+
+    // Pattern Variation (A/B/C/D)
+    int activeVariation = 0;  // 0=A 1=B 2=C 3=D
+    std::function<void(int)> onVariationChanged;  // fires when user clicks A/B/C/D tab
 
     void setChannelHasPlugin(int ch, bool has)
     {
@@ -134,9 +139,9 @@ public:
         return HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50;
     }
 
-    // M2.1 — Pattern load / save
-    void loadPattern(const Pattern& pat);
-    void saveToPattern(Pattern& pat) const;
+    // M2.1 — Pattern load / save (-1 = use activeVariation)
+    void loadPattern(const Pattern& pat, int varIdx = -1);
+    void saveToPattern(Pattern& pat, int varIdx = -1) const;
 
     // Channel count / name management
     int          getChannelCount() const { return (int)channels.size(); }
@@ -158,6 +163,10 @@ private:
     juce::TextButton addChannelBtn { "+ Add Channel" };
     juce::TextButton clearStepsBtn { "Clear Steps" };
     juce::Slider     stepCountSlider;
+
+    // Variation A/B/C/D buttons
+    juce::TextButton varBtnA { "A" }, varBtnB { "B" }, varBtnC { "C" }, varBtnD { "D" };
+    void updateVariationButtonStates();
 
     int dragHoverChannel = -1;
     int currentPlayStep  = -1;

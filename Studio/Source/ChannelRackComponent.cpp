@@ -59,12 +59,43 @@ ChannelRackComponent::ChannelRackComponent()
     };
     stepCount = 16;
 
+    // Variation A/B/C/D buttons
+    auto setupVarBtn = [this](juce::TextButton& btn, int idx)
+    {
+        btn.setClickingTogglesState(false);
+        btn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2a2a3a));
+        btn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3a5fa0));
+        btn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xffa0a0b8));
+        btn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+        btn.onClick = [this, idx]
+        {
+            activeVariation = idx;
+            updateVariationButtonStates();
+            if (onVariationChanged) onVariationChanged(idx);
+        };
+        addAndMakeVisible(btn);
+    };
+    setupVarBtn(varBtnA, 0);
+    setupVarBtn(varBtnB, 1);
+    setupVarBtn(varBtnC, 2);
+    setupVarBtn(varBtnD, 3);
+    updateVariationButtonStates();
+
     startTimerHz(30);
 }
 
 ChannelRackComponent::~ChannelRackComponent()
 {
     stopTimer();
+}
+
+void ChannelRackComponent::updateVariationButtonStates()
+{
+    varBtnA.setColour(juce::TextButton::buttonColourId, activeVariation == 0 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
+    varBtnB.setColour(juce::TextButton::buttonColourId, activeVariation == 1 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
+    varBtnC.setColour(juce::TextButton::buttonColourId, activeVariation == 2 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
+    varBtnD.setColour(juce::TextButton::buttonColourId, activeVariation == 3 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
+    repaint();
 }
 
 // ---------------------------------------------------------------------------
@@ -172,8 +203,10 @@ void ChannelRackComponent::addChannel(const juce::String& name)
 // ---------------------------------------------------------------------------
 
 // M2.1 — Load pattern steps into the UI grid
-void ChannelRackComponent::loadPattern(const Pattern& pat)
+void ChannelRackComponent::loadPattern(const Pattern& pat, int varIdx)
 {
+    const int vi = (varIdx >= 0) ? varIdx : activeVariation;
+
     // Sync step count
     stepCount = juce::jlimit(1, Pattern::kMaxSteps, pat.stepCount);
     stepCountSlider.setValue(stepCount, juce::dontSendNotification);
@@ -182,7 +215,7 @@ void ChannelRackComponent::loadPattern(const Pattern& pat)
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
     {
         for (int s = 0; s < Pattern::kMaxSteps; ++s)
-            channels[ch].steps[s] = pat.steps[ch][s];
+            channels[ch].steps[s] = pat.variations[vi].steps[ch][s];
 
         if (pat.samplePaths[ch].isNotEmpty())
             channels[ch].sampleName = juce::File(pat.samplePaths[ch]).getFileNameWithoutExtension();
@@ -212,13 +245,14 @@ void ChannelRackComponent::loadPattern(const Pattern& pat)
 }
 
 // M2.1 — Write UI grid state back into a Pattern
-void ChannelRackComponent::saveToPattern(Pattern& pat) const
+void ChannelRackComponent::saveToPattern(Pattern& pat, int varIdx) const
 {
+    const int vi = (varIdx >= 0) ? varIdx : activeVariation;
     pat.stepCount = stepCount;
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
     {
         for (int s = 0; s < Pattern::kMaxSteps; ++s)
-            pat.steps[ch][s] = channels[ch].steps[s];
+            pat.variations[vi].steps[ch][s] = channels[ch].steps[s];
 
         pat.channelVolume[ch] = channels[ch].volume;
         pat.channelPan[ch]    = channels[ch].pan;
@@ -460,6 +494,8 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
                                   true, t == curRoute);
             menu.addSubMenu("Route to Mixer Track", routeMenu);
         }
+        menu.addSeparator();
+        menu.addItem(8, "Delete Channel", (int)channels.size() > 1);
 
         menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
             [this, ch, isMelodic](int result)
@@ -504,6 +540,10 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
                 else if (result == 7)
                 {
                     if (onRemovePlugin) onRemovePlugin(ch);
+                }
+                else if (result == 8)
+                {
+                    if (onDeleteChannel) onDeleteChannel(ch);
                 }
                 else if (result >= 100 && result < 108)
                 {
@@ -592,9 +632,18 @@ void ChannelRackComponent::resized()
 
     // Bottom controls
     const int controlsY = HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 8;
-    addChannelBtn   .setBounds(10,  controlsY, 140, 30);
+    addChannelBtn  .setBounds(10,  controlsY, 140, 30);
     clearStepsBtn  .setBounds(160, controlsY, 110, 30);
-    stepCountSlider .setBounds(280, controlsY, 100, 30);
+    stepCountSlider.setBounds(280, controlsY, 100, 30);
+
+    // Variation buttons A/B/C/D — right of step count slider
+    const int varBtnW = 24, varBtnH = 24;
+    const int varBtnY = controlsY + (30 - varBtnH) / 2;
+    const int varBtnX = 388;
+    varBtnA.setBounds(varBtnX + 0 * (varBtnW + 2), varBtnY, varBtnW, varBtnH);
+    varBtnB.setBounds(varBtnX + 1 * (varBtnW + 2), varBtnY, varBtnW, varBtnH);
+    varBtnC.setBounds(varBtnX + 2 * (varBtnW + 2), varBtnY, varBtnW, varBtnH);
+    varBtnD.setBounds(varBtnX + 3 * (varBtnW + 2), varBtnY, varBtnW, varBtnH);
 
     // Per-channel controls layout
     for (int i = 0; i < (int)channels.size(); ++i)

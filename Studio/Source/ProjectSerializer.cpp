@@ -35,14 +35,8 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
 
         for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
         {
-            juce::String bits;
-            bits.preallocateBytes(Pattern::kMaxSteps + 1);
-            for (int s = 0; s < Pattern::kMaxSteps; ++s)
-                bits += pat.steps[ch][s] ? "1" : "0";
-
             auto* chEl = patEl->createNewChildElement("Ch");
             chEl->setAttribute("i",          ch);
-            chEl->setAttribute("steps",      bits);
             chEl->setAttribute("samplePath", pat.samplePaths[ch]);
             chEl->setAttribute("volume",     (double)pat.channelVolume[ch]);
             chEl->setAttribute("pan",        (double)pat.channelPan[ch]);
@@ -63,25 +57,31 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             chEl->setAttribute("spLfoRate",   (double)sp.lfoRate);
             chEl->setAttribute("spLfoDepth",  (double)sp.lfoDepth);
             chEl->setAttribute("spLfoTarget", sp.lfoTarget);
+            chEl->setAttribute("spPresetName", sp.presetName);
             chEl->setAttribute("spDdspEnabled",    sp.ddspAuto.enabled ? 1 : 0);
             chEl->setAttribute("spDdspAmount",     (double)sp.ddspAuto.amount);
             chEl->setAttribute("spDdspBrightness", (double)sp.ddspAuto.brightness);
             chEl->setAttribute("spDdspMotion",     (double)sp.ddspAuto.motion);
             chEl->setAttribute("mixRoute",    pat.channelMixerRouting[ch]);
-        }
 
-        // NoteEvents (M3)
-        auto* notesEl = patEl->createNewChildElement("Notes");
-        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
-        {
-            for (const auto& note : pat.notes[ch])
+            // Save all 4 variations (steps + notes)
+            for (int vi = 0; vi < Pattern::kMaxVariations; ++vi)
             {
-                auto* nEl = notesEl->createNewChildElement("Note");
-                nEl->setAttribute("ch",    ch);
-                nEl->setAttribute("pitch", note.pitch);
-                nEl->setAttribute("start", (double)note.startBeat);
-                nEl->setAttribute("len",   (double)note.lengthBeats);
-                nEl->setAttribute("vel",   (double)note.velocity);
+                auto* varEl = chEl->createNewChildElement("Var");
+                varEl->setAttribute("idx", vi);
+                juce::String stepsStr;
+                stepsStr.preallocateBytes(pat.stepCount + 1);
+                for (int s = 0; s < pat.stepCount; ++s)
+                    stepsStr += (pat.variations[vi].steps[ch][s] ? "1" : "0");
+                varEl->setAttribute("steps", stepsStr);
+                for (const auto& note : pat.variations[vi].notes[ch])
+                {
+                    auto* nEl = varEl->createNewChildElement("Note");
+                    nEl->setAttribute("pitch", note.pitch);
+                    nEl->setAttribute("start", (double)note.startBeat);
+                    nEl->setAttribute("len",   (double)note.lengthBeats);
+                    nEl->setAttribute("vel",   (double)note.velocity);
+                }
             }
         }
     }
@@ -101,6 +101,7 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         clipEl->setAttribute("trackIndex", clip.trackIndex);
         clipEl->setAttribute("startBar",   clip.startBar);
         clipEl->setAttribute("lengthBars", clip.lengthBars);
+        clipEl->setAttribute("varIdx",     clip.variationIdx);
     }
 
     // ---- MixerTracks (M5)
@@ -256,12 +257,9 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
 
             for (auto* chEl : patEl->getChildIterator())
             {
+                if (chEl->getTagName() != "Ch") continue;
                 const int ch = chEl->getIntAttribute("i", -1);
                 if (ch < 0 || ch >= Pattern::kMaxChannels) continue;
-
-                const juce::String bits = chEl->getStringAttribute("steps");
-                for (int s = 0; s < juce::jmin(bits.length(), Pattern::kMaxSteps); ++s)
-                    pat.steps[ch][s] = (bits[s] == '1');
 
                 pat.samplePaths[ch]   = chEl->getStringAttribute("samplePath");
                 pat.channelVolume[ch] = (float)chEl->getDoubleAttribute("volume", 0.8);
@@ -286,26 +284,69 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 sp.lfoRate     = (float)chEl->getDoubleAttribute("spLfoRate",   2.0);
                 sp.lfoDepth    = (float)chEl->getDoubleAttribute("spLfoDepth",  0.0);
                 sp.lfoTarget   = chEl->getIntAttribute("spLfoTarget", 0);
+                sp.presetName  = chEl->getStringAttribute("spPresetName", {});
                 sp.ddspAuto.enabled    = chEl->getIntAttribute("spDdspEnabled", 0) != 0;
                 sp.ddspAuto.amount     = (float)chEl->getDoubleAttribute("spDdspAmount", 0.0);
                 sp.ddspAuto.brightness = (float)chEl->getDoubleAttribute("spDdspBrightness", 0.5);
                 sp.ddspAuto.motion     = (float)chEl->getDoubleAttribute("spDdspMotion", 0.25);
+
+                // Legacy: if the Ch element has a "steps" attribute (old single-variation format),
+                // load it into variation 0.
+                if (chEl->hasAttribute("steps"))
+                {
+                    const juce::String bits = chEl->getStringAttribute("steps");
+                    for (int s = 0; s < juce::jmin(bits.length(), Pattern::kMaxSteps); ++s)
+                        pat.variations[0].steps[ch][s] = (bits[s] == '1');
+                }
+
+                // New format: load per-variation data from <Var> children
+                for (auto* varEl : chEl->getChildIterator())
+                {
+                    if (varEl->getTagName() != "Var") continue;
+                    const int vi = varEl->getIntAttribute("idx", 0);
+                    if (vi < 0 || vi >= Pattern::kMaxVariations) continue;
+                    const juce::String stepsStr = varEl->getStringAttribute("steps");
+                    for (int s = 0; s < juce::jmin(stepsStr.length(), Pattern::kMaxSteps); ++s)
+                        pat.variations[vi].steps[ch][s] = (stepsStr[s] == '1');
+                    for (auto* nEl : varEl->getChildIterator())
+                    {
+                        if (nEl->getTagName() != "Note") continue;
+                        NoteEvent note;
+                        note.pitch       = nEl->getIntAttribute("pitch", 60);
+                        note.startBeat   = (float)nEl->getDoubleAttribute("start", 0.0);
+                        note.lengthBeats = (float)nEl->getDoubleAttribute("len",   0.25);
+                        note.velocity    = (float)nEl->getDoubleAttribute("vel",   0.8);
+                        pat.variations[vi].notes[ch].push_back(note);
+                    }
+                }
             }
 
-            // NoteEvents (M3)
+            // Legacy NoteEvents at pattern level (old format: <Notes><Note ch="..." .../></Notes>)
+            // Only load if this pattern has no <Var> children (truly old file).
             if (auto* notesEl = patEl->getChildByName("Notes"))
             {
-                for (auto* nEl : notesEl->getChildIterator())
+                // Check if any Ch element already has Var children (new format)
+                bool hasNewFormat = false;
+                for (auto* chEl : patEl->getChildIterator())
                 {
-                    const int ch = nEl->getIntAttribute("ch", -1);
-                    if (ch < 0 || ch >= Pattern::kMaxChannels) continue;
+                    if (chEl->getTagName() != "Ch") continue;
+                    if (chEl->getChildByName("Var") != nullptr) { hasNewFormat = true; break; }
+                }
 
-                    NoteEvent note;
-                    note.pitch       = nEl->getIntAttribute("pitch",  60);
-                    note.startBeat   = (float)nEl->getDoubleAttribute("start", 0.0);
-                    note.lengthBeats = (float)nEl->getDoubleAttribute("len",   0.25);
-                    note.velocity    = (float)nEl->getDoubleAttribute("vel",   0.8);
-                    pat.notes[ch].push_back(note);
+                if (!hasNewFormat)
+                {
+                    for (auto* nEl : notesEl->getChildIterator())
+                    {
+                        const int ch = nEl->getIntAttribute("ch", -1);
+                        if (ch < 0 || ch >= Pattern::kMaxChannels) continue;
+
+                        NoteEvent note;
+                        note.pitch       = nEl->getIntAttribute("pitch",  60);
+                        note.startBeat   = (float)nEl->getDoubleAttribute("start", 0.0);
+                        note.lengthBeats = (float)nEl->getDoubleAttribute("len",   0.25);
+                        note.velocity    = (float)nEl->getDoubleAttribute("vel",   0.8);
+                        pat.variations[0].notes[ch].push_back(note);
+                    }
                 }
             }
 
@@ -343,7 +384,7 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 }
                 for (int s = 0; s < pat.stepCount; ++s)
                 {
-                    if (pat.steps[ch][s]) { maxCh = juce::jmax(maxCh, ch); break; }
+                    if (pat.variations[0].steps[ch][s]) { maxCh = juce::jmax(maxCh, ch); break; }
                 }
             }
         }
@@ -364,12 +405,14 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
         for (auto* clipEl : clipsEl->getChildIterator())
         {
             PlaylistClip clip;
-            clip.id         = clipEl->getIntAttribute("id",         0);
-            clip.patternId  = clipEl->getIntAttribute("patternId", -1);
-            clip.name       = clipEl->getStringAttribute("name",    "Clip");
-            clip.trackIndex = clipEl->getIntAttribute("trackIndex", 0);
-            clip.startBar   = (float)clipEl->getDoubleAttribute("startBar",   0.0);
-            clip.lengthBars = (float)clipEl->getDoubleAttribute("lengthBars", 4.0);
+            clip.id           = clipEl->getIntAttribute("id",         0);
+            clip.patternId    = clipEl->getIntAttribute("patternId", -1);
+            clip.name         = clipEl->getStringAttribute("name",    "Clip");
+            clip.trackIndex   = clipEl->getIntAttribute("trackIndex", 0);
+            clip.startBar     = (float)clipEl->getDoubleAttribute("startBar",   0.0);
+            clip.lengthBars   = (float)clipEl->getDoubleAttribute("lengthBars", 4.0);
+            clip.variationIdx = juce::jlimit(0, Pattern::kMaxVariations - 1,
+                                             clipEl->getIntAttribute("varIdx", 0));
             loaded.playlistClips.push_back(clip);
         }
     }

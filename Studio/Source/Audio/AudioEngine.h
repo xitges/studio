@@ -115,6 +115,9 @@ public:
     // M3 — set active pattern for NoteEvent playback in pattern mode
     void setActivePattern(int patternId);
 
+    // Pattern variation (A/B/C/D) — selects which VariationData to read in pattern mode
+    void setActiveVariation(int idx);
+
     // M3 — preview a note from the piano roll keyboard (does not alter channelBasePitch)
     void previewNote(int ch, int midiPitch);
 
@@ -375,6 +378,7 @@ private:
     // M3 — beat tracking for NoteEvent playback
     double patternBeatPos  = 0.0;
     int    activePatternId = 0;
+    std::atomic<int> activeVariationIdx_ { 0 };
     std::array<std::atomic<float>, 16> sampleChannelVolume_;
     std::array<std::atomic<float>, 16> sampleChannelPan_;
     std::array<std::atomic<float>, 16> sampleChannelAttackMs_;

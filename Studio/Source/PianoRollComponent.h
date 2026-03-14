@@ -21,6 +21,8 @@ public:
         setWantsKeyboardFocus(true);
     }
 
+    int variationIdx = 0;   // which variation (0=A..3=D) to read/write notes from
+
     void setPattern(Pattern* p, int ch, double bpmValue)
     {
         pattern = p;
@@ -63,13 +65,16 @@ public:
     }
     KeySignature getKeySignature() const { return keySignature; }
     int getKeyboardWidth() const { return keyWidth; }
+
+    static constexpr int kKeyboardSpan = 16;   // # of keys: a,w,s,e,d,f,t,g,y,h,u,j,k,o,l,p
+    static constexpr int kRangeBarW    = 6;    // px width of the draggable range strip
     Pattern* getPatternModel() const { return pattern; }
     int getChannelIndex() const { return channel; }
 
     void clearNotes()
     {
         if (pattern == nullptr) return;
-        pattern->notes[channel].clear();
+        pattern->variations[variationIdx].notes[channel].clear();
         clearSelection(false);
         if (onNotesChanged) onNotesChanged();
         repaint();
@@ -82,7 +87,7 @@ public:
         if (pattern == nullptr || preset.steps.empty() || preset.scale != keySignature.scale)
             return false;
 
-        auto& noteList = pattern->notes[channel];
+        auto& noteList = pattern->variations[variationIdx].notes[channel];
         noteList.clear();
         selectedNoteIndices.clearQuick();
         sessionStartIdx = 0;
@@ -123,7 +128,7 @@ public:
         if (regions.empty())
             return false;
 
-        auto& targetNotes = pattern->notes[targetChannel];
+        auto& targetNotes = pattern->variations[variationIdx].notes[targetChannel];
         targetNotes.clear();
 
         for (int regionIndex = 0; regionIndex < (int)regions.size(); ++regionIndex)
@@ -171,6 +176,43 @@ public:
     std::function<void()> onSelectionChanged;
     std::function<void(bool selectMode)> onToolModeChanged;
 
+    // Fired when keyboard range changes (Z/X keys or drag) — wire to ContentPane label
+    std::function<void(int basePitch)> onKeyboardRangeChanged;
+
+    int  getKeyboardBasePitch() const { return keyboardBasePitch; }
+
+    // Returns [topY, bottomY] of the range bar strip in this component's coordinates
+    std::pair<int,int> getRangeBarContentY() const
+    {
+        const int topPitch = keyboardBasePitch + kKeyboardSpan - 1;
+        const int topY     = headerH + (maxPitch - topPitch) * noteH;
+        const int botY     = headerH + (maxPitch - keyboardBasePitch) * noteH + noteH;
+        return { topY, botY };
+    }
+
+    // Public interface for KeyboardOverlay drag
+    void startRangeDrag(int absoluteY)
+    {
+        rangeBarDragging    = true;
+        rangeBarDragStartY  = absoluteY;
+        rangeBarDragStartBase = keyboardBasePitch;
+        repaint();
+    }
+    void updateRangeDrag(int absoluteY)
+    {
+        if (!rangeBarDragging) return;
+        const int deltaSemitones = -(absoluteY - rangeBarDragStartY) / noteH;
+        keyboardBasePitch = juce::jlimit(minPitch, maxPitch - (kKeyboardSpan - 1),
+                                         rangeBarDragStartBase + deltaSemitones);
+        if (onKeyboardRangeChanged) onKeyboardRangeChanged(keyboardBasePitch);
+        repaint();
+    }
+    void stopRangeDrag()
+    {
+        rangeBarDragging = false;
+        repaint();
+    }
+
     // ---- Smart Record System -----------------------------------------------
     enum class RecState { Idle, Armed, Recording };
 
@@ -212,7 +254,7 @@ public:
     void nudgeSession(float deltaBeats)
     {
         if (pattern == nullptr) return;
-        auto& nl = pattern->notes[channel];
+        auto& nl = pattern->variations[variationIdx].notes[channel];
         const int endIdx = juce::jmin(sessionEndIdx, (int)nl.size() - 1);
         if (sessionStartIdx > endIdx) return;
 
@@ -231,7 +273,7 @@ public:
     void alignSession(float gridBeats)
     {
         if (pattern == nullptr) return;
-        auto& nl = pattern->notes[channel];
+        auto& nl = pattern->variations[variationIdx].notes[channel];
         const int endIdx = juce::jmin(sessionEndIdx, (int)nl.size() - 1);
         if (sessionStartIdx > endIdx) return;
 
@@ -243,7 +285,7 @@ public:
     void nudgeSessionPitch(int deltaSemitones)
     {
         if (pattern == nullptr) return;
-        auto& nl = pattern->notes[channel];
+        auto& nl = pattern->variations[variationIdx].notes[channel];
         const int endIdx = juce::jmin(sessionEndIdx, (int)nl.size() - 1);
         if (sessionStartIdx > endIdx) return;
 
@@ -274,7 +316,7 @@ public:
     bool hasSession() const
     {
         if (pattern == nullptr) return false;
-        const int endIdx = juce::jmin(sessionEndIdx, (int)pattern->notes[channel].size() - 1);
+        const int endIdx = juce::jmin(sessionEndIdx, (int)pattern->variations[variationIdx].notes[channel].size() - 1);
         return sessionStartIdx <= endIdx;
     }
 
@@ -285,7 +327,7 @@ public:
     {
         if (pattern == nullptr) return;
         selectedNoteIndices.clearQuick();
-        const auto& noteList = pattern->notes[channel];
+        const auto& noteList = pattern->variations[variationIdx].notes[channel];
         for (int i = 0; i < (int)noteList.size(); ++i)
             selectedNoteIndices.add(i);
         notifySelectionChanged();
@@ -307,7 +349,7 @@ public:
     void paint(juce::Graphics& g) override
     {
         g.fillAll(juce::Colour(0xff1a1a2e));
-        drawPianoKeys(g);
+        // Piano keys are drawn by KeyboardOverlay (fixed panel) — skip here
         drawGrid(g);
         drawHoverStep(g);
         drawCursor(g);
@@ -382,16 +424,23 @@ public:
             return;
         }
 
-        // Piano key area — preview note
+        // Piano key area
         if (pos.x < keyWidth)
         {
+            // Left strip → start range drag
+            if (pos.x < kRangeBarW)
+            {
+                startRangeDrag(pos.y);
+                return;
+            }
+            // Rest of key → preview note
             const int p = pitchFromY(pos.y);
             if (p >= minPitch && p <= maxPitch && onKeyPreview)
                 onKeyPreview(p);
             return;
         }
 
-        auto& noteList = pattern->notes[channel];
+        auto& noteList = pattern->variations[variationIdx].notes[channel];
 
         // Right-click → delete
         if (e.mods.isRightButtonDown())
@@ -460,6 +509,13 @@ public:
     {
         if (pattern == nullptr) return;
 
+        // Range bar drag
+        if (rangeBarDragging)
+        {
+            updateRangeDrag(e.getPosition().y);
+            return;
+        }
+
         // Velocity lane drag
         if (draggingVelIdx >= 0)
         {
@@ -505,12 +561,13 @@ public:
         {
             marqueeRect = makeMarqueeRect(pendingEmptyStartPos, e.getPosition());
             updateMarqueeSelection();
+            doAutoScroll(e);
             repaint();
             return;
         }
 
         if (draggingIdx < 0) return;
-        auto& noteList = pattern->notes[channel];
+        auto& noteList = pattern->variations[variationIdx].notes[channel];
         if (draggingIdx >= (int)noteList.size()) return;
 
         auto& note     = noteList[(size_t)draggingIdx];
@@ -530,6 +587,7 @@ public:
         else
         {
             moveDraggedSelection(snapBeat(dx), -(int)std::round(dy));
+            doAutoScroll(e);
         }
         if (onNotesChanged) onNotesChanged();
         repaint();
@@ -537,6 +595,8 @@ public:
 
     void mouseUp(const juce::MouseEvent&) override
     {
+        if (rangeBarDragging) { stopRangeDrag(); return; }
+
         if (pendingEmptyGesture && ! marqueeSelecting)
         {
             if (selectToolEnabled)
@@ -643,7 +703,7 @@ public:
         {
             if (pattern != nullptr && hasSelectedNotes())
             {
-                const auto& noteList = pattern->notes[channel];
+                const auto& noteList = pattern->variations[variationIdx].notes[channel];
                 noteClipboard.clear();
                 float earliest = 1e9f;
                 for (int i = 0; i < selectedNoteIndices.size(); ++i)
@@ -665,7 +725,7 @@ public:
         {
             if (pattern != nullptr && !noteClipboard.empty())
             {
-                auto& noteList = pattern->notes[channel];
+                auto& noteList = pattern->variations[variationIdx].notes[channel];
                 selectedNoteIndices.clearQuick();
                 for (const auto& src : noteClipboard)
                 {
@@ -688,7 +748,7 @@ public:
         {
             if (pattern != nullptr && hasSelectedNotes())
             {
-                auto& noteList = pattern->notes[channel];
+                auto& noteList = pattern->variations[variationIdx].notes[channel];
                 float earliest = 1e9f, latestEnd = -1e9f;
                 std::vector<NoteEvent> toDup;
                 for (int i = 0; i < selectedNoteIndices.size(); ++i)
@@ -746,16 +806,20 @@ public:
             }
         }
 
-        // Octave shift
+        // Octave shift (Z = down, X = up)
         if (kc == 'z' || kc == 'Z')
         {
-            octaveOffset = juce::jmax(-3, octaveOffset - 1);
+            keyboardBasePitch = juce::jlimit(minPitch, maxPitch - (kKeyboardSpan - 1),
+                                             keyboardBasePitch - 12);
+            if (onKeyboardRangeChanged) onKeyboardRangeChanged(keyboardBasePitch);
             repaint();
             return true;
         }
         if (kc == 'x' || kc == 'X')
         {
-            octaveOffset = juce::jmin(3, octaveOffset + 1);
+            keyboardBasePitch = juce::jlimit(minPitch, maxPitch - (kKeyboardSpan - 1),
+                                             keyboardBasePitch + 12);
+            if (onKeyboardRangeChanged) onKeyboardRangeChanged(keyboardBasePitch);
             repaint();
             return true;
         }
@@ -815,7 +879,7 @@ public:
         if (kc == juce::KeyPress::returnKey)
         {
             if (pattern == nullptr) return true;
-            auto& noteList = pattern->notes[channel];
+            auto& noteList = pattern->variations[variationIdx].notes[channel];
             // Only add if no note already exists at this exact beat+pitch
             bool exists = false;
             for (const auto& n : noteList)
@@ -847,7 +911,7 @@ public:
         if (kc == juce::KeyPress::deleteKey || kc == juce::KeyPress::backspaceKey)
         {
             if (pattern == nullptr) return true;
-            auto& noteList = pattern->notes[channel];
+            auto& noteList = pattern->variations[variationIdx].notes[channel];
 
             if (hasSelectedNotes())
             {
@@ -906,7 +970,7 @@ public:
         {
             const bool down  = juce::KeyPress::isKeyCurrentlyDown(km.keyCode);
             const int  idx   = km.keyCode & 0xff;
-            const int  pitch = 60 + octaveOffset * 12 + km.semitone;
+            const int  pitch = keyboardBasePitch + km.semitone;
             const int  pidx  = juce::jlimit(0, 127, pitch);
 
             if (down && !heldKeyState[idx])
@@ -973,8 +1037,8 @@ public:
                         n.startBeat   = prn.startBeat;
                         n.lengthBeats = len;
                         n.velocity    = 0.8f;
-                        pattern->notes[channel].push_back(n);
-                        sessionEndIdx = (int)pattern->notes[channel].size() - 1;
+                        pattern->variations[variationIdx].notes[channel].push_back(n);
+                        sessionEndIdx = (int)pattern->variations[variationIdx].notes[channel].size() - 1;
                         if (onNotesChanged) onNotesChanged();
                         needRepaint = true;
                     }
@@ -1004,7 +1068,12 @@ private:
     static constexpr int   velLaneSep   = 4;    // gap between note area and vel lane
     static constexpr float kMinNoteLen  = 0.05f;   // minimum note length (matches finest snap)
 
-    int   octaveOffset    = 0;
+    // Keyboard range — base pitch of lowest keyboard key ('a'), free semitone resolution
+    int  keyboardBasePitch  = 60;   // default C4
+    bool rangeBarDragging   = false;
+    int  rangeBarDragStartY = 0;
+    int  rangeBarDragStartBase = 0;
+
     bool  heldKeyState[256] = {};
     bool  keyboardHeldPitch[128] = {};
 
@@ -1176,7 +1245,7 @@ private:
 
     int appendNote(int pitch, float beat, float lengthBeats, float velocity)
     {
-        auto& noteList = pattern->notes[channel];
+        auto& noteList = pattern->variations[variationIdx].notes[channel];
         NoteEvent n;
         n.pitch = pitch;
         n.startBeat = beat;
@@ -1350,7 +1419,7 @@ private:
         if (pattern == nullptr)
             return regions;
 
-        const auto& noteList = pattern->notes[channel];
+        const auto& noteList = pattern->variations[variationIdx].notes[channel];
         if (noteList.empty())
             return regions;
 
@@ -1462,7 +1531,7 @@ private:
         if (pattern == nullptr)
             return;
 
-        const auto& noteList = pattern->notes[channel];
+        const auto& noteList = pattern->variations[variationIdx].notes[channel];
         for (int i = 0; i < selectedNoteIndices.size(); ++i)
         {
             const int idx = selectedNoteIndices[i];
@@ -1473,12 +1542,36 @@ private:
         }
     }
 
+    // Scroll the parent viewport when the mouse is near the top/bottom edge during drag
+    void doAutoScroll(const juce::MouseEvent& e)
+    {
+        auto* vp = findParentComponentOfClass<juce::Viewport>();
+        if (vp == nullptr) return;
+
+        const int mouseY   = e.getPosition().y;
+        const int viewTop  = vp->getViewPositionY();
+        const int viewBot  = viewTop + vp->getViewHeight();
+        const int margin   = 40;
+        const int maxSpeed = 16;
+
+        int scrollDY = 0;
+        if (mouseY < viewTop + margin)
+            scrollDY = -(int)juce::jmap((float)(mouseY - viewTop), 0.0f, (float)margin, (float)maxSpeed, 1.0f);
+        else if (mouseY > viewBot - margin)
+            scrollDY =  (int)juce::jmap((float)(viewBot - mouseY), 0.0f, (float)margin, (float)maxSpeed, 1.0f);
+
+        if (scrollDY != 0)
+            vp->setViewPosition(vp->getViewPositionX(),
+                                juce::jlimit(0, vp->getViewedComponent()->getHeight() - vp->getViewHeight(),
+                                             viewTop + scrollDY));
+    }
+
     void moveDraggedSelection(float requestedBeatDelta, int requestedPitchDelta)
     {
         if (pattern == nullptr || selectedNoteDragStates.empty())
             return;
 
-        auto& noteList = pattern->notes[channel];
+        auto& noteList = pattern->variations[variationIdx].notes[channel];
         float allowedBeatDelta = requestedBeatDelta;
         int allowedPitchDelta = requestedPitchDelta;
 
@@ -1505,7 +1598,7 @@ private:
         if (pattern == nullptr || selectedNoteIndices.isEmpty())
             return;
 
-        auto& noteList = pattern->notes[channel];
+        auto& noteList = pattern->variations[variationIdx].notes[channel];
         float allowedDelta = deltaBeats;
         for (int i = 0; i < selectedNoteIndices.size(); ++i)
         {
@@ -1530,7 +1623,7 @@ private:
         if (pattern == nullptr || selectedNoteIndices.isEmpty())
             return;
 
-        auto& noteList = pattern->notes[channel];
+        auto& noteList = pattern->variations[variationIdx].notes[channel];
         int allowedDelta = deltaSemitones;
         for (int i = 0; i < selectedNoteIndices.size(); ++i)
         {
@@ -1561,7 +1654,7 @@ private:
             return;
 
         juce::Array<int> nextSelection = pendingEmptyGestureAdditive ? marqueeBaseSelection : juce::Array<int>();
-        const auto& noteList = pattern->notes[channel];
+        const auto& noteList = pattern->variations[variationIdx].notes[channel];
         const auto area = marqueeRect;
 
         for (int i = 0; i < (int)noteList.size(); ++i)
@@ -1592,7 +1685,7 @@ private:
     int findNoteAtBeat(float beat) const
     {
         if (pattern == nullptr) return -1;
-        const auto& nl = pattern->notes[channel];
+        const auto& nl = pattern->variations[variationIdx].notes[channel];
         for (int i = (int)nl.size() - 1; i >= 0; --i)
         {
             if (beat >= nl[(size_t)i].startBeat &&
@@ -1606,11 +1699,11 @@ private:
     void setVelocityFromY(int idx, int mouseY)
     {
         if (pattern == nullptr || idx < 0 ||
-            idx >= (int)pattern->notes[channel].size()) return;
+            idx >= (int)pattern->variations[variationIdx].notes[channel].size()) return;
 
         const float vel = 1.0f - juce::jlimit(0.0f, 1.0f,
                                    (float)(mouseY - velLaneY()) / (float)(velLaneH - 2));
-        pattern->notes[channel][(size_t)idx].velocity = vel;
+        pattern->variations[variationIdx].notes[channel][(size_t)idx].velocity = vel;
         if (onNotesChanged) onNotesChanged();
         repaint();
     }
@@ -1656,6 +1749,56 @@ private:
         // Right border
         g.setColour(juce::Colour(0xff0f3460));
         g.drawLine((float)keyWidth, 0.0f, (float)keyWidth, (float)getHeight(), 1.0f);
+
+        // Keyboard range indicator strip
+        drawRangeBar(g);
+    }
+
+    void drawRangeBar(juce::Graphics& g)
+    {
+        const int clampedTop = juce::jmin(keyboardBasePitch + kKeyboardSpan - 1, maxPitch);
+        const juce::Colour barCol = rangeBarDragging ? juce::Colour(0xffff9500)
+                                                     : juce::Colour(0xffff9500).withAlpha(0.65f);
+
+        // Fill strip for each pitch in range
+        for (int pitch = keyboardBasePitch; pitch <= clampedTop; ++pitch)
+        {
+            const int y = yFromPitch(pitch);
+            g.setColour(barCol);
+            g.fillRect(0, y, kRangeBarW, noteH);
+        }
+
+        // Border lines to make it read as a single block
+        const int stripTop    = yFromPitch(clampedTop);
+        const int stripBottom = yFromPitch(keyboardBasePitch) + noteH;
+        g.setColour(juce::Colour(0xffff9500));
+        g.drawRect(0, stripTop, kRangeBarW, stripBottom - stripTop, 1);
+
+        // Top arrow ▲ (drag handle hint)
+        {
+            juce::Path tri;
+            tri.addTriangle(0.0f,          (float)stripTop,
+                            (float)kRangeBarW, (float)stripTop,
+                            (float)(kRangeBarW / 2), (float)(stripTop - 5));
+            g.setColour(juce::Colour(0xffff9500));
+            g.fillPath(tri);
+        }
+        // Bottom arrow ▼
+        {
+            juce::Path tri;
+            tri.addTriangle(0.0f,          (float)stripBottom,
+                            (float)kRangeBarW, (float)stripBottom,
+                            (float)(kRangeBarW / 2), (float)(stripBottom + 5));
+            g.setColour(juce::Colour(0xffff9500));
+            g.fillPath(tri);
+        }
+
+        // Base note label beside the strip (e.g. "C4")
+        const juce::String lbl = pitchLabel(keyboardBasePitch);
+        g.setColour(juce::Colour(0xffff9500).withAlpha(0.9f));
+        g.setFont(juce::Font(juce::FontOptions().withHeight(8.5f)));
+        g.drawText(lbl, kRangeBarW + 2, stripBottom - 11, 28, 10,
+                   juce::Justification::centredLeft);
     }
 
     void drawVelocityKeyStub(juce::Graphics& g)
@@ -1801,7 +1944,7 @@ private:
     void drawNotes(juce::Graphics& g)
     {
         if (pattern == nullptr) return;
-        const auto& noteList = pattern->notes[channel];
+        const auto& noteList = pattern->variations[variationIdx].notes[channel];
 
         for (int i = 0; i < (int)noteList.size(); ++i)
         {
@@ -1897,7 +2040,7 @@ private:
         }
 
         // Velocity bars
-        const auto& noteList = pattern->notes[channel];
+        const auto& noteList = pattern->variations[variationIdx].notes[channel];
         for (int i = 0; i < (int)noteList.size(); ++i)
         {
             const auto& n   = noteList[(size_t)i];
@@ -2050,7 +2193,7 @@ private:
         recording_      = false;
         pendingRecNotes_.fill({});
         if (pattern != nullptr)
-            sessionStartIdx = (int)pattern->notes[channel].size();
+            sessionStartIdx = (int)pattern->variations[variationIdx].notes[channel].size();
         sessionEndIdx = sessionStartIdx - 1;
         if (onRecordingStateChanged) onRecordingStateChanged();
         repaint();
@@ -2061,7 +2204,7 @@ private:
         currentRecState = RecState::Recording;
         recording_      = true;
         if (pattern != nullptr)
-            sessionStartIdx = (int)pattern->notes[channel].size();
+            sessionStartIdx = (int)pattern->variations[variationIdx].notes[channel].size();
         sessionEndIdx = sessionStartIdx - 1;
         if (onRecordingStateChanged) onRecordingStateChanged();
         repaint();
@@ -2094,8 +2237,8 @@ private:
                 n.startBeat   = prn.startBeat;
                 n.lengthBeats = len;
                 n.velocity    = 0.8f;
-                pattern->notes[channel].push_back(n);
-                sessionEndIdx = (int)pattern->notes[channel].size() - 1;
+                pattern->variations[variationIdx].notes[channel].push_back(n);
+                sessionEndIdx = (int)pattern->variations[variationIdx].notes[channel].size() - 1;
                 anyCommitted  = true;
             }
             if (anyCommitted && onNotesChanged) onNotesChanged();
@@ -2156,7 +2299,22 @@ class PianoRollWindow : public juce::DocumentWindow
 
         void mouseDown(const juce::MouseEvent& e) override
         {
+            if (e.getPosition().x < PianoRollComponent::kRangeBarW)
+            {
+                pianoRoll.startRangeDrag(e.getPosition().y + viewY);
+                return;
+            }
             pianoRoll.previewPitchAtVisibleY(e.getPosition().y, viewY);
+        }
+
+        void mouseDrag(const juce::MouseEvent& e) override
+        {
+            pianoRoll.updateRangeDrag(e.getPosition().y + viewY);
+        }
+
+        void mouseUp(const juce::MouseEvent&) override
+        {
+            pianoRoll.stopRangeDrag();
         }
 
         void mouseMove(const juce::MouseEvent& e) override
@@ -2188,6 +2346,7 @@ class PianoRollWindow : public juce::DocumentWindow
         juce::ComboBox     snapBox;
         juce::TextButton   recBtn        { "REC" };
         juce::TextButton   selectBtn     { "Sel" };
+        juce::Label        kbRangeLabel;
         juce::TextButton   quantizeBtn   { "Q" };
         juce::ComboBox     quantizeBox;
         juce::ComboBox     keyRootBox;
@@ -2216,7 +2375,6 @@ class PianoRollWindow : public juce::DocumentWindow
         std::function<void(int)> onBasslineApplied;
 
         bool blinkState = false;
-        bool clampingHorizontalScroll = false;
         PianoRollComponent::ChordVoicing chordVoicing = PianoRollComponent::ChordVoicing::Close;
         float chordStrumBeats = 0.0f;
         PianoRollComponent::BasslinePattern basslinePattern = PianoRollComponent::BasslinePattern::RootNotes;
@@ -2230,17 +2388,6 @@ class PianoRollWindow : public juce::DocumentWindow
             addAndMakeVisible(keyboardOverlay);
             viewport.onVisibleAreaChanged = [this](const juce::Rectangle<int>& area)
             {
-                if (clampingHorizontalScroll)
-                    return;
-
-                if (area.getX() < pianoRoll.getKeyboardWidth())
-                {
-                    clampingHorizontalScroll = true;
-                    viewport.setViewPosition(pianoRoll.getKeyboardWidth(), area.getY());
-                    clampingHorizontalScroll = false;
-                    return;
-                }
-
                 keyboardOverlay.setViewY(area.getY());
             };
 
@@ -2288,7 +2435,40 @@ class PianoRollWindow : public juce::DocumentWindow
                 pianoRoll.setSelectToolEnabled(selectBtn.getToggleState());
                 pianoRoll.grabKeyboardFocus();
             };
+            // Sync button when B/V keys change the tool mode
+            pianoRoll.onToolModeChanged = [this](bool selectMode)
+            {
+                selectBtn.setToggleState(selectMode, juce::dontSendNotification);
+            };
             addAndMakeVisible(selectBtn);
+
+            // KB range label
+            kbRangeLabel.setColour(juce::Label::textColourId,       juce::Colour(0xffff9500));
+            kbRangeLabel.setColour(juce::Label::backgroundColourId, juce::Colour(0xff1a1200));
+            kbRangeLabel.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
+            kbRangeLabel.setJustificationType(juce::Justification::centred);
+            kbRangeLabel.setText("KB: C4", juce::dontSendNotification);
+            addAndMakeVisible(kbRangeLabel);
+            pianoRoll.onKeyboardRangeChanged = [this](int basePitch)
+            {
+                const auto& ks = pianoRoll.getKeySignature();
+                const juce::String noteName = MusicTheory::noteNameForPitch(basePitch, ks)
+                                            + juce::String(basePitch / 12 - 1);
+                kbRangeLabel.setText("KB: " + noteName, juce::dontSendNotification);
+                keyboardOverlay.repaint();
+
+                // Auto-scroll viewport to keep the range bar visible
+                auto [topY, botY] = pianoRoll.getRangeBarContentY();
+                const int viewY   = viewport.getViewPositionY();
+                const int viewH   = viewport.getViewHeight();
+                const int margin  = 24;
+                if (topY < viewY + margin)
+                    viewport.setViewPosition(viewport.getViewPositionX(),
+                                            juce::jmax(0, topY - margin));
+                else if (botY > viewY + viewH - margin)
+                    viewport.setViewPosition(viewport.getViewPositionX(),
+                                            botY - viewH + margin);
+            };
 
             // ---- Trigger toggle (arm-and-wait mode) -------------------------
             triggerBtn.setClickingTogglesState(true);
@@ -2573,25 +2753,33 @@ class PianoRollWindow : public juce::DocumentWindow
             progressionBtn.setBounds(getWidth() - 110, 0, 106, rowH);
             progressionBox.setBounds(444, 0, juce::jmax(120, getWidth() - 444 - 114), rowH);
 
-            // Row 2: session + bass + utility
+            // Row 2: right-side (compute rightX so bass section knows its boundary)
             int rightX = getWidth();
             snapBox    .setBounds(rightX - 84, rowH, 84, rowH); rightX -= 88;
             recBtn     .setBounds(rightX - 44, rowH, 44, rowH); rightX -= 48;
             selectBtn  .setBounds(rightX - 42, rowH, 42, rowH); rightX -= 46;
             clearBtn   .setBounds(rightX - 44, rowH, 44, rowH); rightX -= 48;
             saveMidiBtn.setBounds(rightX - 68, rowH, 68, rowH); rightX -= 72;
-            loadMidiBtn.setBounds(rightX - 68, rowH, 68, rowH);
+            loadMidiBtn.setBounds(rightX - 68, rowH, 68, rowH); rightX -= 72;
 
-            triggerBtn.setBounds(4, rowH, 54, rowH);
-            nudgeLeftBtn.setBounds(62, rowH, 26, rowH);
-            nudgeRightBtn.setBounds(92, rowH, 26, rowH);
-            nudgeUpBtn.setBounds(122, rowH, 26, rowH);
-            nudgeDownBtn.setBounds(152, rowH, 26, rowH);
-            alignBtn.setBounds(182, rowH, 42, rowH);
+            // Row 2: left-side fixed
+            triggerBtn   .setBounds(4,   rowH, 54, rowH);
+            nudgeLeftBtn .setBounds(62,  rowH, 26, rowH);
+            nudgeRightBtn.setBounds(92,  rowH, 26, rowH);
+            nudgeUpBtn   .setBounds(122, rowH, 26, rowH);
+            nudgeDownBtn .setBounds(152, rowH, 26, rowH);
+            alignBtn     .setBounds(182, rowH, 42, rowH);
+            kbRangeLabel .setBounds(232, rowH, 62, rowH);
 
-            bassPatternBox.setBounds(232, rowH, 120, rowH);
-            bassTargetBox.setBounds(356, rowH, 170, rowH);
-            basslineBtn.setBounds(530, rowH, 110, rowH);
+            // Row 2: bass section fills the gap between left and right-side buttons
+            {
+                const int bassLeft  = 298;
+                const int bassRight = rightX - 4;
+                int bx = bassLeft;
+                bassPatternBox.setBounds(bx, rowH, 120, rowH); bx += 124;
+                bassTargetBox .setBounds(bx, rowH, 160, rowH); bx += 164;
+                basslineBtn   .setBounds(bx, rowH, juce::jmax(80, bassRight - bx), rowH);
+            }
 
             const int keyboardW = pianoRoll.getKeyboardWidth();
             keyboardOverlay.setBounds(0, rowH * 2, keyboardW, getHeight() - rowH * 2);
@@ -2832,7 +3020,8 @@ public:
     {
         setContentNonOwned(&content, false);
         setResizable(true, false);
-        setSize(1000, 520);
+        setResizeLimits(1100, 440, 4000, 4000);
+        setSize(1400, 560);
     }
 
     void closeButtonPressed() override { setVisible(false); }

@@ -322,6 +322,7 @@ public:
         p.ddspAuto.amount     = (float)ddspAmountSl.getValue();
         p.ddspAuto.brightness = (float)ddspBrightnessSl.getValue();
         p.ddspAuto.motion     = (float)ddspMotionSl.getValue();
+        p.presetName = getSelectedPresetName();
     }
 
     void paint(juce::Graphics& g) override

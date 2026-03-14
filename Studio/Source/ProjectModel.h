@@ -275,6 +275,7 @@ struct SynthParams
     float lfoDepth  = 0.0f;     // 0.0 – 1.0
     int   lfoTarget = 0;        // 0 = cutoff, 1 = pitch
     DDSPAutoSettings ddspAuto;
+    juce::String presetName;  // tracks last selected preset (not a synthesis param)
 };
 
 // Instrument preset database — factory presets for SynthEditorPanel ComboBox
@@ -380,6 +381,15 @@ struct PlaylistTrack
     juce::Colour colour = juce::Colour(0xff3498db);
 };
 
+struct VariationData
+{
+    static constexpr int kMaxChannels = 16;
+    static constexpr int kMaxSteps    = kMaxPatternSteps;
+
+    bool steps[kMaxChannels][kMaxSteps] {};
+    std::vector<NoteEvent> notes[kMaxChannels];
+};
+
 struct Pattern
 {
     int          id         = 0;
@@ -387,13 +397,11 @@ struct Pattern
     int          lengthBars = 1;
     int          stepCount  = 16;
 
-    static constexpr int kMaxChannels = 16;
-    static constexpr int kMaxSteps    = kMaxPatternSteps;
+    static constexpr int kMaxChannels  = 16;
+    static constexpr int kMaxSteps     = kMaxPatternSteps;
+    static constexpr int kMaxVariations = 4;
 
-    bool steps[kMaxChannels][kMaxSteps] {};
-
-    // M3 — per-channel note lists (for Melodic channels)
-    std::vector<NoteEvent> notes[kMaxChannels];
+    VariationData variations[kMaxVariations];
 
     // per-channel sample paths (each pattern has its own set)
     juce::String samplePaths[kMaxChannels];
@@ -463,11 +471,12 @@ struct AutomationLane
 
 struct PlaylistClip
 {
-    int          id         = 0;
-    int          patternId  = -1;
-    int          trackIndex = 0;
-    float        startBar   = 0.0f;
-    float        lengthBars = 1.0f;
+    int          id           = 0;
+    int          patternId    = -1;
+    int          trackIndex   = 0;
+    float        startBar     = 0.0f;
+    float        lengthBars   = 1.0f;
+    int          variationIdx = 0;
 
     juce::String name;
 };

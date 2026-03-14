@@ -278,6 +278,11 @@ void AudioEngine::setActivePattern(int patternId)
     patternBeatPos  = 0.0;
 }
 
+void AudioEngine::setActiveVariation(int idx)
+{
+    activeVariationIdx_.store(juce::jlimit(0, 3, idx), std::memory_order_relaxed);
+}
+
 void AudioEngine::updatePatternSnapshot()
 {
     const int nextIdx = 1 - activeSnapshotIdx_.load(std::memory_order_relaxed);
@@ -296,10 +301,11 @@ void AudioEngine::updatePatternSnapshot()
     snap.patternId = pat->id;
     snap.stepCount = juce::jlimit(1, PlaybackSnapshot::kSteps, pat->stepCount);
 
+    const int varIdx = activeVariationIdx_.load(std::memory_order_relaxed);
     for (int ch = 0; ch < PlaybackSnapshot::kCh; ++ch)
     {
         for (int s = 0; s < PlaybackSnapshot::kSteps; ++s)
-            snap.steps[ch][s] = pat->steps[ch][s];
+            snap.steps[ch][s] = pat->variations[varIdx].steps[ch][s];
 
         snap.channelTypes[ch]        = pat->channelTypes[ch];
         snap.synthParams[ch]         = pat->synthParams[ch];
@@ -309,7 +315,7 @@ void AudioEngine::updatePatternSnapshot()
         snap.channelMixerRouting[ch] = pat->channelMixerRouting[ch];
 
         auto& slot = snap.noteSlots[ch];
-        const auto& src = pat->notes[ch];
+        const auto& src = pat->variations[varIdx].notes[ch];
         slot.count = (int)juce::jmin((int)src.size(), PlaybackSnapshot::kNotes);
         for (int n = 0; n < slot.count; ++n)
             slot.notes[n] = src[(size_t)n];
@@ -1225,7 +1231,7 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
             for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
             {
                 updateSongMixState(*pattern, ch);
-                if (!pattern->steps[ch][localStep]) continue;
+                if (!pattern->variations[clip.variationIdx].steps[ch][localStep]) continue;
 
                 const bool useSynth = pattern->synthParams[(size_t)ch].enabled;
                 if (useSynth)
@@ -1276,7 +1282,7 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                 if (pat->channelTypes[ch] != ChannelType::Melodic) continue;
                 updateSongMixState(*pat, ch);
 
-                for (const auto& note : pat->notes[ch])
+                for (const auto& note : pat->variations[clip.variationIdx].notes[ch])
                 {
                     const double notePhase = std::fmod((double)note.startBeat, patternBeats);
                     const double relStart  = startBeatSong - clipStartBeat;

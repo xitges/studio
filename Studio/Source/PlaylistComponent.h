@@ -354,12 +354,13 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
                 const int notePreviewBottom = previewY - 2;
                 const int notePreviewH = juce::jmax(0, notePreviewBottom - notePreviewY);
 
+                const int vi = juce::jlimit(0, Pattern::kMaxVariations - 1, clip.variationIdx);
                 int minPitch = 127;
                 int maxPitch = 0;
                 bool hasNotes = false;
                 for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
                 {
-                    for (const auto& note : pat->notes[ch])
+                    for (const auto& note : pat->variations[vi].notes[ch])
                     {
                         minPitch = juce::jmin(minPitch, note.pitch);
                         maxPitch = juce::jmax(maxPitch, note.pitch);
@@ -385,7 +386,7 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
                     const int pitchRange = juce::jmax(1, maxPitch - minPitch);
                     for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
                     {
-                        for (const auto& note : pat->notes[ch])
+                        for (const auto& note : pat->variations[vi].notes[ch])
                         {
                             const float notePhase = std::fmod(note.startBeat, patternBeats);
                             const float relPitch = (float)(note.pitch - minPitch) / (float)pitchRange;
@@ -421,7 +422,7 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
                     {
                         for (int s = 0; s < pat->stepCount; ++s)
                         {
-                            if (!pat->steps[ch][s])
+                            if (!pat->variations[vi].steps[ch][s])
                                 continue;
 
                             const float stepStartBeat = loopBeat + s * 0.25f;
@@ -468,6 +469,15 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
             clipLabel = clip.name.isNotEmpty() ? clip.name + " (Unassigned)" : "Unassigned Clip";
         }
         g.drawText(clipLabel, x + 6, ty + 1, w - 14, 12, juce::Justification::centredLeft);
+
+        // Show variation letter (A/B/C/D) in top-right of clip
+        if (hasPattern && w > 20)
+        {
+            const juce::String varLetter = juce::String::charToString('A' + clip.variationIdx);
+            g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+            g.setColour(juce::Colours::white.withAlpha(0.7f));
+            g.drawText(varLetter, x + w - 14, ty + 2, 12, 10, juce::Justification::right);
+        }
     }
 }
 
@@ -812,6 +822,16 @@ inline void PlaylistComponent::showContextMenu(int clipId)
         menu.addSubMenu("Assign Pattern", patMenu);
     }
 
+    // Variation submenu (A/B/C/D)
+    {
+        juce::PopupMenu varMenu;
+        varMenu.addItem(201, "A", true, clip->variationIdx == 0);
+        varMenu.addItem(202, "B", true, clip->variationIdx == 1);
+        varMenu.addItem(203, "C", true, clip->variationIdx == 2);
+        varMenu.addItem(204, "D", true, clip->variationIdx == 3);
+        menu.addSubMenu("Variation", varMenu);
+    }
+
     menu.addSeparator();
     menu.addItem(3, "Copy Clip");
     menu.addItem(4, "Detach to New Pattern", clip->patternId > 0);
@@ -850,6 +870,14 @@ inline void PlaylistComponent::showContextMenu(int clipId)
             {
                 if (onClipPatternChanged) onClipPatternChanged(clipId, -1);
                 repaint();
+            }
+            else if (result >= 201 && result <= 204)
+            {
+                if (auto* c = findClipById(clipId))
+                {
+                    c->variationIdx = result - 201;
+                    repaint();
+                }
             }
             else if (result >= 100)
             {

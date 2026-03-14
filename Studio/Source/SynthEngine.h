@@ -320,14 +320,16 @@ public:
                     freq *= pitchModSmoothed_;
                 }
 
-                const float cutoffKeyTrack = 1.0f + juce::jlimit(-0.18f, 0.28f, ((float)pitch_ - 60.0f) * 0.0105f);
+                const float cutoffKeyTrack = 1.0f + juce::jlimit(-0.08f, 0.24f, ((float)pitch_ - 60.0f) * 0.0085f);
                 const float envOpen = std::pow(juce::jlimit(0.0f, 1.0f, envLevel_), 0.42f);
-                const float cutoffNorm = std::pow(SynthVoicing::hzToNormalized(params_.cutoff), 0.82f);
-                float modCutoffNorm = cutoffNorm + envOpen * (0.10f + filterEnvDepth_ * 0.52f);
+                const float cutoffNorm = SynthVoicing::hzToNormalized(params_.cutoff);
+                float modCutoffNorm = std::pow(cutoffNorm, 0.92f) + envOpen * (0.10f + filterEnvDepth_ * 0.52f);
                 if (params_.lfoDepth > 0.0f && params_.lfoTarget == 0)
                     modCutoffNorm += lfoSmoothed_ * params_.lfoDepth * 0.085f;
                 modCutoffNorm = juce::jlimit(0.0f, 1.0f, modCutoffNorm);
-                const float cutoffTarget = juce::jlimit(50.0f, 20000.0f,
+                const float noteAwareFloor = juce::jlimit(55.0f, 2600.0f,
+                                                          (float) frequency_ * (1.75f + envOpen * 1.35f));
+                const float cutoffTarget = juce::jlimit(noteAwareFloor, 20000.0f,
                                                         SynthVoicing::normalizedToHz(modCutoffNorm) * cutoffKeyTrack);
                 cutoffSmoothed_ = SynthVoicing::smoothValue(cutoffSmoothed_, cutoffTarget, 0.985f);
 
@@ -360,8 +362,12 @@ public:
                                           + ((params_.waveform == 1 || params_.waveform == 2) ? 0.18f : 0.0f);
                 const float bodyBlend = (params_.waveform == 3) ? 0.52f : 0.58f;
                 const float rawSample = osc * bodyBlend + osc1 * 0.34f + subOsc * subMix;
+                // Perceptual loudness compensation: boost low pitches (Fletcher-Munson)
+                // C4 (60) = neutral; each octave below C4 adds ~2.6 dB of boost (max at A0)
+                const float pitchDelta = juce::jmax(0.0f, juce::jmin(1.0f, (60.0f - (float)pitch_) / 36.0f));
+                const float loudnessComp = std::pow(2.0f, pitchDelta * 0.65f);
                 const float sample = SynthVoicing::softClip(rawSample * harmonicDrive * transientDrive)
-                                   * envLevel_ * velocity_ * 0.28f * transientPunch_ * outputGain_;
+                                   * envLevel_ * velocity_ * 0.28f * transientPunch_ * outputGain_ * loudnessComp;
 
                 // Biquad LP filter (direct-form I)
                 const float filtered = SynthVoicing::softClip((b0 * sample + z1L_)
