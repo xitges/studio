@@ -1759,6 +1759,10 @@ void MainComponent::newProject()
             {
                 if (r == 1)
                 {
+                    audioEngine.stop();
+                    audioEngine.allSynthNotesOff();
+                    audioEngine.clearTransientPlaybackState();
+                    playlist.setPlayheadBar(-1.0);
                     project = Project{};
                     project.bpm = 70.0;
                     project.playMode = PlayMode::Pattern;
@@ -1774,6 +1778,10 @@ void MainComponent::newProject()
         return;
     }
 
+    audioEngine.stop();
+    audioEngine.allSynthNotesOff();
+    audioEngine.clearTransientPlaybackState();
+    playlist.setPlayheadBar(-1.0);
     project = Project{};
     project.bpm = 70.0;
     project.playMode = PlayMode::Pattern;
@@ -2204,6 +2212,7 @@ void MainComponent::timerCallback()
     if (toolbar.getPlayMode() == PlayMode::Song)
     {
         playlist.setPlayheadBar(audioEngine.getSongBeatPosition() / 4.0);
+        followPlaylistPlayhead();
     }
 
     // M3 — update piano roll playhead (wrap to pattern length)
@@ -2218,4 +2227,28 @@ void MainComponent::timerCallback()
         }
         pianoRollWindow->content.pianoRoll.setPlayheadBeat(beatPos);
     }
+}
+
+void MainComponent::followPlaylistPlayhead()
+{
+    const double playheadBar = playlist.getPlayheadBar();
+    if (playheadBar < 0.0)
+        return;
+
+    const int playheadX = playlist.getTrackHeaderWidth() + (int) std::round(playheadBar * playlist.getBarWidth());
+    const auto visible = playlistViewport.getViewArea();
+    const int leftMargin = visible.getWidth() / 4;
+    const int rightMargin = visible.getWidth() / 3;
+
+    int targetX = visible.getX();
+    if (playheadX > visible.getRight() - rightMargin)
+        targetX = juce::jmax(0, playheadX - (visible.getWidth() - rightMargin));
+    else if (playheadX < visible.getX() + leftMargin)
+        targetX = juce::jmax(0, playheadX - leftMargin);
+
+    const int maxX = juce::jmax(0, playlist.getNeededWidth() - visible.getWidth());
+    targetX = juce::jlimit(0, maxX, targetX);
+
+    if (targetX != visible.getX())
+        playlistViewport.setViewPosition(targetX, visible.getY());
 }

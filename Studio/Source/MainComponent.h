@@ -85,6 +85,7 @@ private:
     int      ensureAutoBassChannel();
     void     focusPianoRollChannel(int channel);
     void     switchToPatternModeForEditing();
+    void     followPlaylistPlayhead();
     void     beginPianoRollPatternPlayback();
     void     restorePlayModeAfterPianoRollPlayback();
     void     exportCurrentPianoRollToMidi();

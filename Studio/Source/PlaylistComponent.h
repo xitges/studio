@@ -36,6 +36,8 @@ public:
     {
         if (playheadBar != bar) { playheadBar = bar; repaint(); }
     }
+    double getPlayheadBar() const { return playheadBar; }
+    int getTrackHeaderWidth() const { return trackHeaderWidth; }
 
     void setSnapDivisor(int d) { snapDivisor = d; repaint(); }
 

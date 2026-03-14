@@ -349,6 +349,20 @@ void AudioEngine::allSynthNotesOff()
         fx.reset();
 }
 
+void AudioEngine::clearTransientPlaybackState()
+{
+    scheduledSampleTriggers_.clear();
+    for (auto& pool : sampleVoicePools)
+        pool.reset();
+    for (auto& synth : polySynths)
+        synth.reset();
+    for (auto& fx : fxChains)
+        fx.reset();
+    for (auto& lp : launchpadPlayers)
+        lp.reset();
+    browserPreviewPlayer.reset();
+}
+
 SynthParams AudioEngine::makeNoteSynthParams(const SynthParams& baseParams,
                                              int midiPitch,
                                              float velocity,

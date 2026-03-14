@@ -120,6 +120,7 @@ public:
 
     // Silence all synth voices immediately (called on Stop)
     void allSynthNotesOff();
+    void clearTransientPlaybackState();
 
     // Silence a specific pitch on a specific channel (called when piano roll note is deleted)
     void noteOffChannel(int ch, int midiPitch)
