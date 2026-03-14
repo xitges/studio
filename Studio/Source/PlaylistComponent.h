@@ -66,9 +66,8 @@ public:
         nc.startBar      = clipboardClip.startBar + clipboardClip.lengthBars;
         if (nc.name.isEmpty())
             nc.name = "Clip " + juce::String(newId);
-        list.push_back(nc);
-        repaint();
         if (onClipAdded) onClipAdded(nc);
+        repaint();
     }
 
     // M11 — horizontal zoom (pixels per bar)
@@ -96,6 +95,10 @@ public:
     std::function<void(int id, float oldBar, int oldTrack, float newBar, int newTrack)> onClipMoved;
     std::function<void(int id, float oldLen, float newLen)>                     onClipResized;
     std::function<void(int clipId, int patternId)>                              onClipPatternChanged;
+    std::function<void(int clipId, juce::String oldName, juce::String newName)> onClipRenamed;
+
+    // Double-click on a clip with an assigned pattern → navigate to that pattern
+    std::function<void(int patternId)>                                          onNavigateToPattern;
 
     // M11 — track management callbacks
     std::function<void()>        onTrackAdded;
@@ -576,9 +579,8 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
                         nc.id            = newId;
                         nc.startBar      = pasteBar;
                         nc.trackIndex    = pasteTrack;
-                        list.push_back(nc);
-                        repaint();
                         if (onClipAdded) onClipAdded(nc);
+                        repaint();
                     }
                     else if (r == 10) addAutomationLane("masterVolume", 0.0f, 1.0f, "Master Volume");
                     else if (r == 11) addAutomationLane("bpm",          60.0f, 200.0f, "BPM");
@@ -752,8 +754,11 @@ inline void PlaylistComponent::mouseDoubleClick(const juce::MouseEvent& e)
     PlaylistClip* existing = findClipAt(pos.x, pos.y);
     if (existing != nullptr)
     {
-        // Double-click on existing clip → rename
-        showRenameDialog(existing->id);
+        // Double-click on clip with pattern → navigate to pattern; otherwise rename
+        if (existing->patternId > 0 && onNavigateToPattern)
+            onNavigateToPattern(existing->patternId);
+        else
+            showRenameDialog(existing->id);
         return;
     }
 
@@ -778,9 +783,8 @@ inline void PlaylistComponent::mouseDoubleClick(const juce::MouseEvent& e)
     clip.startBar   = bar;
     clip.lengthBars = 4.0f;
     clip.name       = "Clip " + juce::String(newId);
-    list.push_back(clip);
-    repaint();
     if (onClipAdded) onClipAdded(clip);
+    repaint();
 }
 
 // ---------------------------------------------------------------------------
@@ -834,25 +838,20 @@ inline void PlaylistComponent::showContextMenu(int clipId)
             }
             else if (result == 2)
             {
-                auto& list = clipList();
                 PlaylistClip deleted;
                 bool found = false;
-                for (const auto& c : list) { if (c.id == clipId) { deleted = c; found = true; break; } }
-                list.erase(std::remove_if(list.begin(), list.end(),
-                    [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
-                repaint();
+                for (const auto& c : clipList()) { if (c.id == clipId) { deleted = c; found = true; break; } }
                 if (found && onClipDeleted) onClipDeleted(deleted);
+                repaint();
             }
             else if (result == 90)
             {
-                if (auto* c = findClipById(clipId)) c->patternId = -1;
                 if (onClipPatternChanged) onClipPatternChanged(clipId, -1);
                 repaint();
             }
             else if (result >= 100)
             {
                 const int patId = result - 100;
-                if (auto* c = findClipById(clipId)) c->patternId = patId;
                 if (onClipPatternChanged) onClipPatternChanged(clipId, patId);
                 repaint();
             }
@@ -875,8 +874,18 @@ inline void PlaylistComponent::showRenameDialog(int clipId)
         {
             if (result == 1)
             {
+                const auto newName = dialog->getTextEditorContents("name").trim();
                 if (auto* c = findClipById(clipId))
-                    c->name = dialog->getTextEditorContents("name");
+                {
+                    if (newName.isNotEmpty() && newName != c->name)
+                    {
+                        const auto oldName = c->name;
+                        if (onClipRenamed)
+                            onClipRenamed(clipId, oldName, newName);
+                        else
+                            c->name = newName;
+                    }
+                }
                 repaint();
             }
             delete dialog;

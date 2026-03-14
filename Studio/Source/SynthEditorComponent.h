@@ -184,11 +184,7 @@ public:
         testBtn.onClick = [this]
         {
             if (onPreviewRequested)
-            {
-                auto params = makeCurrentParams();
-                params.enabled = true;
-                onPreviewRequested(params, getSelectedPreviewMidiNote());
-            }
+                onPreviewRequested(makeCurrentParams(), getSelectedPreviewMidiNote());
         };
         addAndMakeVisible(testBtn);
 

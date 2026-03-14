@@ -71,6 +71,7 @@ public:
 
     double getSampleRate()         const { return sampleRate; }
     long   getSongSamplePosition() const { return songSamplePosition.load(std::memory_order_relaxed); }
+    double getSongBeatPosition()   const { return songBeatPosition_.load(std::memory_order_relaxed); }
     double getPatternBeatPos()     const { return patternBeatPos; }   // M3
     double getBPM() const { return bpm.load(std::memory_order_relaxed); }
     // Fired on the message thread when the Song-mode sample cache is ready
@@ -79,6 +80,7 @@ public:
     // Seek song playback to an arbitrary bar position
     void seekSongToBar(double bar)
     {
+        songBeatPosition_.store(bar * 4.0, std::memory_order_relaxed);
         const double samplesPerBar = (sampleRate * 60.0 / bpm.load(std::memory_order_relaxed)) * 4.0;
         songSamplePosition.store((long)(bar * samplesPerBar), std::memory_order_relaxed);
     }
@@ -218,6 +220,10 @@ public:
     // Save plugin state into a MemoryBlock (for project serialisation).
     bool getPluginState(int ch, juce::MemoryBlock& stateOut) const;
 
+    // Snapshot current project state into the runtime double-buffer so the
+    // audio thread sees it lock-free.  Light-weight (no sample cache rebuild).
+    void rebuildRuntimeStateFromProject();
+
 private:
     SynthParams makeNoteSynthParams(const SynthParams& baseParams,
                                     int midiPitch,
@@ -355,6 +361,7 @@ private:
 
     std::atomic<bool> songPlaying { false };
     std::atomic<long> songSamplePosition { 0 };
+    std::atomic<double> songBeatPosition_ { 0.0 };   // beat-accurate song position (BPM-aware)
     std::atomic<double> bpm { 140.0 };
 
     // M3 — beat tracking for NoteEvent playback
@@ -369,7 +376,6 @@ private:
     std::array<std::atomic<bool>, 16>  channelSoloed {};      // user solo state
 
     void applyChannelMuteLogic();      // recompute SamplePlayer mute from muted[]+soloed[]
-    void rebuildRuntimeStateFromProject();
     const RuntimePlaybackState& getRuntimeState() const;
     void updateRuntimeState(const std::function<void(RuntimePlaybackState&)>& updater);
     const ChannelSourceSnapshot& getChannelSourceSnapshot() const;

@@ -568,15 +568,35 @@ namespace SynthPreview
 {
     inline std::vector<float> renderWaveform(const SynthParams& params, int numSamples, double sampleRate = 44100.0)
     {
-        std::vector<float> left((size_t)numSamples, 0.0f);
-        std::vector<float> right((size_t)numSamples, 0.0f);
-
         SynthVoice voice;
         const int previewPitch = 60;
-        const int previewLength = juce::jmax(numSamples / 2, 1);
-        const auto previewParams = DDSPAutoPatch::generate(params, previewPitch, 1.0f, 0.3);
-        voice.noteOn(previewPitch, 1.0f, sampleRate, previewParams, previewLength);
-        voice.renderAdd(left.data(), right.data(), numSamples, sampleRate);
+        const double attackSec = juce::jmax(0.01, params.attack * 0.001);
+        const double decaySec = juce::jmax(0.02, params.decay * 0.001);
+        const double releaseSec = juce::jmax(0.05, params.release * 0.001);
+        const double holdSec = juce::jlimit(0.12, 0.45, attackSec * 0.35 + decaySec * 0.30 + 0.16);
+        const double totalDurationSec = juce::jlimit(0.45, 2.4, holdSec + releaseSec + 0.20);
+        const int renderSamples = juce::jmax(numSamples, (int)std::ceil(totalDurationSec * sampleRate));
+        const int holdSamples = juce::jlimit(1, juce::jmax(1, renderSamples - 1), (int)std::ceil(holdSec * sampleRate));
+
+        std::vector<float> renderLeft((size_t)renderSamples, 0.0f);
+        std::vector<float> renderRight((size_t)renderSamples, 0.0f);
+        const auto previewParams = DDSPAutoPatch::generate(params, previewPitch, 1.0f, holdSec + releaseSec);
+        voice.noteOn(previewPitch, 1.0f, sampleRate, previewParams, renderSamples);
+        voice.renderAdd(renderLeft.data(), renderRight.data(), holdSamples, sampleRate);
+        voice.noteOff();
+        voice.renderAdd(renderLeft.data() + holdSamples, renderRight.data() + holdSamples, renderSamples - holdSamples, sampleRate);
+
+        std::vector<float> left((size_t)numSamples, 0.0f);
+        const double samplesPerPixel = (double) renderSamples / (double) juce::jmax(1, numSamples);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const int start = juce::jlimit(0, renderSamples - 1, (int)std::floor((double)i * samplesPerPixel));
+            const int end = juce::jlimit(start + 1, renderSamples, (int)std::ceil((double)(i + 1) * samplesPerPixel));
+            float peak = 0.0f;
+            for (int s = start; s < end; ++s)
+                peak = juce::jmax(peak, std::abs(renderLeft[(size_t)s]));
+            left[(size_t)i] = peak;
+        }
 
         float peak = 0.0f;
         for (const auto sample : left)

@@ -84,6 +84,7 @@ private:
     void     syncChannelRackToProject();
     int      ensureAutoBassChannel();
     void     focusPianoRollChannel(int channel);
+    void     switchToPatternModeForEditing();
     void     beginPianoRollPatternPlayback();
     void     restorePlayModeAfterPianoRollPlayback();
     void     exportCurrentPianoRollToMidi();

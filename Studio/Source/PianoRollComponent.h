@@ -51,6 +51,7 @@ public:
             return;
         selectToolEnabled = enabled;
         resetInteractionState();
+        if (onToolModeChanged) onToolModeChanged(selectToolEnabled);
         repaint();
     }
     bool isSelectToolEnabled() const { return selectToolEnabled; }
@@ -168,6 +169,7 @@ public:
     std::function<void()> onPlayStopToggle;
 
     std::function<void()> onSelectionChanged;
+    std::function<void(bool selectMode)> onToolModeChanged;
 
     // ---- Smart Record System -----------------------------------------------
     enum class RecState { Idle, Armed, Recording };
@@ -636,6 +638,86 @@ public:
             return true;
         }
 
+        // Cmd+C — copy selected notes
+        if ((mods.isCommandDown() || mods.isCtrlDown()) && (kc == 'c' || kc == 'C'))
+        {
+            if (pattern != nullptr && hasSelectedNotes())
+            {
+                const auto& noteList = pattern->notes[channel];
+                noteClipboard.clear();
+                float earliest = 1e9f;
+                for (int i = 0; i < selectedNoteIndices.size(); ++i)
+                {
+                    const int idx = selectedNoteIndices[i];
+                    if (juce::isPositiveAndBelow(idx, (int)noteList.size()))
+                    {
+                        noteClipboard.push_back(noteList[(size_t)idx]);
+                        earliest = juce::jmin(earliest, noteList[(size_t)idx].startBeat);
+                    }
+                }
+                clipboardBaseBeat = earliest;
+            }
+            return true;
+        }
+
+        // Cmd+V — paste notes at cursor
+        if ((mods.isCommandDown() || mods.isCtrlDown()) && (kc == 'v' || kc == 'V'))
+        {
+            if (pattern != nullptr && !noteClipboard.empty())
+            {
+                auto& noteList = pattern->notes[channel];
+                selectedNoteIndices.clearQuick();
+                for (const auto& src : noteClipboard)
+                {
+                    NoteEvent n = src;
+                    n.startBeat = cursorBeat + (src.startBeat - clipboardBaseBeat);
+                    if (n.startBeat < 0.0f) n.startBeat = 0.0f;
+                    const int newIdx = (int)noteList.size();
+                    noteList.push_back(n);
+                    selectedNoteIndices.add(newIdx);
+                }
+                notifySelectionChanged();
+                if (onNotesChanged) onNotesChanged();
+                repaint();
+            }
+            return true;
+        }
+
+        // Cmd+D — duplicate selected notes (offset by rightmost extent)
+        if ((mods.isCommandDown() || mods.isCtrlDown()) && (kc == 'd' || kc == 'D'))
+        {
+            if (pattern != nullptr && hasSelectedNotes())
+            {
+                auto& noteList = pattern->notes[channel];
+                float earliest = 1e9f, latestEnd = -1e9f;
+                std::vector<NoteEvent> toDup;
+                for (int i = 0; i < selectedNoteIndices.size(); ++i)
+                {
+                    const int idx = selectedNoteIndices[i];
+                    if (juce::isPositiveAndBelow(idx, (int)noteList.size()))
+                    {
+                        const auto& n = noteList[(size_t)idx];
+                        toDup.push_back(n);
+                        earliest  = juce::jmin(earliest, n.startBeat);
+                        latestEnd = juce::jmax(latestEnd, n.startBeat + n.lengthBeats);
+                    }
+                }
+                const float offset = latestEnd - earliest;
+                selectedNoteIndices.clearQuick();
+                for (auto n : toDup)
+                {
+                    n.startBeat += offset;
+                    const int newIdx = (int)noteList.size();
+                    noteList.push_back(n);
+                    selectedNoteIndices.add(newIdx);
+                }
+                notifySelectionChanged();
+                if (onNotesChanged) onNotesChanged();
+                repaint();
+            }
+            return true;
+        }
+
         if (kc == juce::KeyPress::escapeKey)
         {
             clearSelection();
@@ -647,6 +729,21 @@ public:
         {
             if (onPlayStopToggle) onPlayStopToggle();
             return true;
+        }
+
+        // Tool mode shortcuts: B = draw, V = select
+        if (kc == 'b' || kc == 'B')
+        {
+            setSelectToolEnabled(false);
+            return true;
+        }
+        if (kc == 'v' || kc == 'V')
+        {
+            if (!mods.isCommandDown() && !mods.isCtrlDown())
+            {
+                setSelectToolEnabled(true);
+                return true;
+            }
         }
 
         // Octave shift
@@ -968,6 +1065,10 @@ private:
     };
     std::vector<SelectedNoteDragState> selectedNoteDragStates;
 
+    // Clipboard for note copy/paste
+    std::vector<NoteEvent> noteClipboard;
+    float                  clipboardBaseBeat = 0.0f;
+
     // Resize the component to match the current pixelsPerBeat, preserving Viewport fit
     void updateSizeForZoom()
     {
@@ -1203,6 +1304,46 @@ private:
         return juce::jlimit(minPitch, maxPitch, bassPitch);
     }
 
+    int inferChordRootPitch(const std::vector<int>& chordPitches) const
+    {
+        if (chordPitches.empty())
+            return 36;
+
+        int bestPitchClass = ((chordPitches.front() % 12) + 12) % 12;
+        int bestScore = std::numeric_limits<int>::min();
+
+        for (const int candidatePitch : chordPitches)
+        {
+            const int candidatePc = ((candidatePitch % 12) + 12) % 12;
+            int score = 0;
+
+            for (const int pitch : chordPitches)
+            {
+                const int interval = (((pitch % 12) + 12) % 12 - candidatePc + 12) % 12;
+                if (interval == 0) score += 6;
+                else if (interval == 3 || interval == 4) score += 4;
+                else if (interval == 7) score += 5;
+                else if (interval == 10 || interval == 11) score += 2;
+                else if (interval == 2 || interval == 5 || interval == 9) score += 1;
+                else score -= 2;
+            }
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestPitchClass = candidatePc;
+            }
+        }
+
+        const int tonicBase = 36 + keySignature.tonic;
+        int rootPitch = tonicBase + ((bestPitchClass - keySignature.tonic + 12) % 12);
+        while (rootPitch > 43)
+            rootPitch -= 12;
+        while (rootPitch < 31)
+            rootPitch += 12;
+        return juce::jlimit(minPitch, maxPitch, rootPitch);
+    }
+
     std::vector<ChordRegion> extractChordRegions() const
     {
         std::vector<ChordRegion> regions;
@@ -1236,17 +1377,18 @@ private:
         while (i < sorted.size())
         {
             const float groupStart = sorted[i].startBeat;
-            int rootPitch = sorted[i].pitch;
+            std::vector<int> chordPitches;
+            chordPitches.push_back(sorted[i].pitch);
             size_t j = i + 1;
             while (j < sorted.size() && std::abs(sorted[j].startBeat - groupStart) < 0.0001f)
             {
-                rootPitch = juce::jmin(rootPitch, sorted[j].pitch);
+                chordPitches.push_back(sorted[j].pitch);
                 ++j;
             }
 
             const float groupEnd = j < sorted.size() ? sorted[j].startBeat : totalBeats;
             if (groupEnd > groupStart + 0.0001f)
-                regions.push_back({ groupStart, groupEnd, bassRegisterPitch(rootPitch) });
+                regions.push_back({ groupStart, groupEnd, inferChordRootPitch(chordPitches) });
 
             i = j;
         }

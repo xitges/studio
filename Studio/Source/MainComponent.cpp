@@ -554,8 +554,8 @@ MainComponent::MainComponent()
             if (c.id == clipId) { clip = &c; break; }
         if (clip == nullptr) return;
 
-        // Find the source pattern
-        Pattern* src = findPattern(clip->patternId);
+        const int oldPatternId = clip->patternId;
+        Pattern* src = findPattern(oldPatternId);
         if (src == nullptr) return;
 
         // Flush the rack into the source pattern if it's currently active
@@ -563,32 +563,54 @@ MainComponent::MainComponent()
             channelRack.saveToPattern(*src);
 
         // Copy the pattern with a new unique ID
-        const int newId = nextPatternId();
-        Pattern copy    = *src;              // value copy — safe before push_back
-        copy.id         = newId;
+        const int newPatId = nextPatternId();
+        Pattern copy    = *src;
+        copy.id         = newPatId;
         copy.name       = src->name + " (copy)";
-        project.patterns.push_back(copy);   // src may dangle — not used again
 
-        // Reassign this clip to the new pattern copy
-        clip->patternId = newId;
-
-        toolbar.updatePatternList(project.patterns, activePatternId);
-        playlist.repaint();
-        markDirty();
+        undoManager.perform(new LambdaAction(
+            [this, clipId, newPatId, copy]() mutable -> bool {
+                // Add the new pattern if it doesn't already exist
+                if (findPattern(newPatId) == nullptr)
+                    project.patterns.push_back(copy);
+                // Reassign clip
+                for (auto& c : project.playlistClips)
+                    if (c.id == clipId) { c.patternId = newPatId; break; }
+                toolbar.updatePatternList(project.patterns, activePatternId);
+                playlist.repaint(); markDirty(); return true;
+            },
+            [this, clipId, oldPatternId, newPatId]() -> bool {
+                // Restore clip's original pattern
+                for (auto& c : project.playlistClips)
+                    if (c.id == clipId) { c.patternId = oldPatternId; break; }
+                // Remove the detached pattern copy
+                auto& pats = project.patterns;
+                pats.erase(std::remove_if(pats.begin(), pats.end(),
+                    [newPatId](const Pattern& p) { return p.id == newPatId; }), pats.end());
+                toolbar.updatePatternList(project.patterns, activePatternId);
+                playlist.repaint(); markDirty(); return true;
+            }
+        ));
+        audioEngine.refreshSongCacheAsync();
     };
 
     playlist.onClipAdded = [this](PlaylistClip clip)
     {
         markDirty();
         const int clipId = clip.id;
+        auto clipState = std::make_shared<PlaylistClip>(clip);
         undoManager.perform(new LambdaAction(
-            [this, clip]() -> bool {
+            [this, clipState]() -> bool {
                 bool found = false;
-                for (const auto& c : project.playlistClips) if (c.id == clip.id) { found = true; break; }
-                if (!found) project.playlistClips.push_back(clip);
+                for (const auto& c : project.playlistClips)
+                    if (c.id == clipState->id) { found = true; break; }
+                if (!found) project.playlistClips.push_back(*clipState);
                 playlist.repaint(); markDirty(); return true;
             },
-            [this, clipId]() -> bool {
+            [this, clipId, clipState]() -> bool {
+                // Capture latest state before removing so redo restores it
+                for (const auto& c : project.playlistClips)
+                    if (c.id == clipId) { *clipState = c; break; }
                 auto& list = project.playlistClips;
                 list.erase(std::remove_if(list.begin(), list.end(),
                     [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
@@ -602,6 +624,10 @@ MainComponent::MainComponent()
     {
         markDirty();
         const int clipId = clip.id;
+        auto clipState = std::make_shared<PlaylistClip>(clip);
+        // Capture latest state from project (may differ from PlaylistComponent's copy)
+        for (const auto& c : project.playlistClips)
+            if (c.id == clipId) { *clipState = c; break; }
         undoManager.perform(new LambdaAction(
             [this, clipId]() -> bool {
                 auto& list = project.playlistClips;
@@ -609,10 +635,11 @@ MainComponent::MainComponent()
                     [clipId](const PlaylistClip& c){ return c.id == clipId; }), list.end());
                 playlist.repaint(); markDirty(); return true;
             },
-            [this, clip]() -> bool {
-                project.playlistClips.push_back(clip);
+            [this, clipState]() -> bool {
+                project.playlistClips.push_back(*clipState);
                 playlist.repaint(); markDirty(); return true;
             }));
+        audioEngine.refreshSongCacheAsync();
     };
 
     playlist.onClipMoved = [this](int id, float oldBar, int oldTrack, float newBar, int newTrack)
@@ -622,11 +649,13 @@ MainComponent::MainComponent()
             [this, id, newBar, newTrack]() -> bool {
                 for (auto& c : project.playlistClips)
                     if (c.id == id) { c.startBar = newBar; c.trackIndex = newTrack; break; }
+                audioEngine.rebuildRuntimeStateFromProject();
                 playlist.repaint(); markDirty(); return true;
             },
             [this, id, oldBar, oldTrack]() -> bool {
                 for (auto& c : project.playlistClips)
                     if (c.id == id) { c.startBar = oldBar; c.trackIndex = oldTrack; break; }
+                audioEngine.rebuildRuntimeStateFromProject();
                 playlist.repaint(); markDirty(); return true;
             }));
     };
@@ -638,33 +667,74 @@ MainComponent::MainComponent()
             [this, id, newLen]() -> bool {
                 for (auto& c : project.playlistClips)
                     if (c.id == id) { c.lengthBars = newLen; break; }
+                audioEngine.rebuildRuntimeStateFromProject();
                 playlist.repaint(); markDirty(); return true;
             },
             [this, id, oldLen]() -> bool {
                 for (auto& c : project.playlistClips)
                     if (c.id == id) { c.lengthBars = oldLen; break; }
+                audioEngine.rebuildRuntimeStateFromProject();
                 playlist.repaint(); markDirty(); return true;
             }));
     };
 
-    playlist.onClipPatternChanged = [this](int clipId, int patternId)
+    playlist.onClipPatternChanged = [this](int clipId, int newPatternId)
     {
-        for (auto& clip : project.playlistClips)
-        {
-            if (clip.id == clipId)
-            {
-                clip.patternId = patternId;
-                break;
-            }
-        }
-        playlist.repaint();
-        markDirty();
+        int oldPatternId = -1;
+        for (const auto& c : project.playlistClips)
+            if (c.id == clipId) { oldPatternId = c.patternId; break; }
+
+        undoManager.perform(new LambdaAction(
+            [this, clipId, newPatternId]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == clipId) { c.patternId = newPatternId; break; }
+                playlist.repaint(); markDirty(); return true;
+            },
+            [this, clipId, oldPatternId]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == clipId) { c.patternId = oldPatternId; break; }
+                playlist.repaint(); markDirty(); return true;
+            }));
         audioEngine.refreshSongCacheAsync();
+    };
+
+    // Phase 4 — undoable clip rename
+    playlist.onClipRenamed = [this](int clipId, juce::String oldName, juce::String newName)
+    {
+        undoManager.perform(new LambdaAction(
+            [this, clipId, newName]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == clipId) { c.name = newName; break; }
+                playlist.repaint(); markDirty(); return true;
+            },
+            [this, clipId, oldName]() -> bool {
+                for (auto& c : project.playlistClips)
+                    if (c.id == clipId) { c.name = oldName; break; }
+                playlist.repaint(); markDirty(); return true;
+            }
+        ));
+    };
+
+    // Phase 4 — double-click clip → navigate to its pattern
+    playlist.onNavigateToPattern = [this](int patternId)
+    {
+        if (findPattern(patternId) == nullptr) return;
+        // Save current rack to active pattern before switching
+        if (auto* cur = findPattern(activePatternId))
+            channelRack.saveToPattern(*cur);
+        activePatternId = patternId;
+        if (auto* pat = findPattern(activePatternId))
+            channelRack.loadPattern(*pat);
+        toolbar.updatePatternList(project.patterns, activePatternId);
+        if (auto* pat = findPattern(activePatternId))
+            mixer.updateRoutingLabels(pat->channelMixerRouting);
+        audioEngine.rebuildRuntimeStateFromProject();
     };
 
     // ---- M3: Piano Roll
     channelRack.onOpenPianoRoll = [this](int ch)
     {
+        switchToPatternModeForEditing();
         pianoRollChannel = ch;
 
         if (pianoRollWindow == nullptr)
@@ -773,6 +843,7 @@ MainComponent::MainComponent()
     // ---- M13: Synth Editor
     channelRack.onOpenSynthEditor = [this](int ch)
     {
+        switchToPatternModeForEditing();
         synthEditorChannel = ch;
 
         if (synthEditorWindow == nullptr)
@@ -984,6 +1055,35 @@ MainComponent::MainComponent()
         project.channelInstrumentPlugins[(size_t)ch] = {};
         channelRack.setChannelHasPlugin(ch, false);
         markDirty();
+    };
+
+    // Phase 3 — channel mixer routing
+    channelRack.onChannelRoutingChanged = [this](int ch, int newTrack)
+    {
+        auto* pat = findPattern(activePatternId);
+        if (!pat) return;
+        const int oldTrack = pat->channelMixerRouting[ch];
+        if (oldTrack == newTrack) return;
+        undoManager.perform(new LambdaAction(
+            [this, ch, newTrack]() -> bool {
+                if (auto* p = findPattern(activePatternId))
+                {
+                    p->channelMixerRouting[ch] = newTrack;
+                    mixer.updateRoutingLabels(p->channelMixerRouting);
+                }
+                audioEngine.rebuildRuntimeStateFromProject();
+                markDirty(); return true;
+            },
+            [this, ch, oldTrack]() -> bool {
+                if (auto* p = findPattern(activePatternId))
+                {
+                    p->channelMixerRouting[ch] = oldTrack;
+                    mixer.updateRoutingLabels(p->channelMixerRouting);
+                }
+                audioEngine.rebuildRuntimeStateFromProject();
+                markDirty(); return true;
+            }
+        ));
     };
 
     // ---- M5: Mixer
@@ -1813,6 +1913,28 @@ void MainComponent::focusPianoRollChannel(int channelIndex)
     }
 }
 
+void MainComponent::switchToPatternModeForEditing()
+{
+    if (toolbar.getPlayMode() == PlayMode::Pattern)
+        return;
+
+    if (audioEngine.isPlaying())
+    {
+        audioEngine.stop();
+        audioEngine.allSynthNotesOff();
+        channelRack.setPlaybackStep(-1);
+        playlist.setPlayheadBar(-1.0);
+        if (pianoRollWindow != nullptr)
+            pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
+        pianoRollPlaybackOverridesPlayMode = false;
+    }
+
+    project.playMode = PlayMode::Pattern;
+    toolbar.setPlayMode(PlayMode::Pattern);
+    audioEngine.setPlayMode(PlayMode::Pattern);
+    markDirty();
+}
+
 void MainComponent::beginPianoRollPatternPlayback()
 {
     if (toolbar.getPlayMode() == PlayMode::Pattern)
@@ -2087,8 +2209,7 @@ void MainComponent::timerCallback()
 
     if (toolbar.getPlayMode() == PlayMode::Song)
     {
-        const double samplesPerBar = (sr * 60.0 / bpm) * 4.0;
-        playlist.setPlayheadBar(audioEngine.getSongSamplePosition() / samplesPerBar);
+        playlist.setPlayheadBar(audioEngine.getSongBeatPosition() / 4.0);
     }
 
     // M3 — update piano roll playhead (wrap to pattern length)

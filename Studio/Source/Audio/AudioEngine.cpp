@@ -147,6 +147,7 @@ void AudioEngine::play()
         }
 
         songSamplePosition.store(0, std::memory_order_relaxed);
+        songBeatPosition_.store(0.0, std::memory_order_relaxed);
         std::fill_n(songPlayerClipId, 16, -1);
 
         cacheLoader_ = std::make_unique<CacheLoader>(*this);
@@ -1079,16 +1080,16 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     std::array<float, 16> automatedChannelVolumes;
     automatedChannelVolumes.fill(-1.0f);
 
+    // Read beat-based position first — this survives BPM changes correctly
+    const double startBeat = songBeatPosition_.load(std::memory_order_relaxed);
+
     if (!runtime.automationLanes.empty())
     {
-        const double currentSamplesPerBeat = sampleRate * 60.0 / currentBpm;
-        const double currentBeat = (double)songSamplePosition.load(std::memory_order_relaxed) / currentSamplesPerBeat;
-
         for (const auto& lane : runtime.automationLanes)
         {
             if (lane.paramId != "bpm") continue;
 
-            currentBpm = (double)lane.evaluate(currentBeat);
+            currentBpm = (double)lane.evaluate(startBeat);
             bpm.store(currentBpm, std::memory_order_relaxed);
             sequencer.setBPM(currentBpm);
 
@@ -1101,11 +1102,11 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
 
     const double samplesPerBeat = sampleRate * 60.0 / currentBpm;
     const double samplesPerBar  = samplesPerBeat * 4.0;
-    const long startSample = songSamplePosition.load(std::memory_order_relaxed);
-    const long endSample   = startSample + numSamples;
-    const double startBar = (double)startSample / samplesPerBar;
-    const double endBar   = (double)endSample / samplesPerBar;
-    const double automationBeat = ((double)startSample + numSamples * 0.5) / samplesPerBeat;
+    const double beatsThisBlock = numSamples / samplesPerBeat;
+    const double endBeat   = startBeat + beatsThisBlock;
+    const double startBar  = startBeat / 4.0;
+    const double endBar    = endBeat / 4.0;
+    const double automationBeat = startBeat + beatsThisBlock * 0.5;
 
     if (!runtime.automationLanes.empty())
     {
@@ -1144,8 +1145,8 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     for (int stepIndex = startStep; stepIndex <= endStep; ++stepIndex)
     {
         const double stepBarPos  = (double)stepIndex / (double)timelineStepsPerBar;
-        const long   stepSample  = (long)(stepBarPos * samplesPerBar);
-        const int    offsetInBuf = (int)(stepSample - startSample);
+        const double stepBeat    = stepBarPos * 4.0;
+        const int    offsetInBuf = (int)((stepBeat - startBeat) * samplesPerBeat);
 
         if (offsetInBuf < 0 || offsetInBuf >= numSamples)
             continue;
@@ -1198,8 +1199,8 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     }
 
     {
-        const double startBeatSong = (double)startSample / samplesPerBeat;
-        const double endBeatSong   = (double)endSample   / samplesPerBeat;
+        const double startBeatSong = startBeat;
+        const double endBeatSong   = endBeat;
 
         for (const auto& clip : runtime.playlistClips)
         {
@@ -1222,9 +1223,9 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                     const double notePhase = std::fmod((double)note.startBeat, patternBeats);
                     const double relStart  = startBeatSong - clipStartBeat;
                     const double loopIdxD  = (relStart - notePhase) / patternBeats;
-                    const int kStart = (loopIdxD < 0.0) ? 0 : (int)loopIdxD;
+                    const int kStart = (loopIdxD < 0.0) ? 0 : juce::jmax(0, (int)loopIdxD - 1);
 
-                    for (int k = kStart; k <= kStart + 1; ++k)
+                    for (int k = kStart; k <= kStart + 2; ++k)
                     {
                         const double fireBeat = clipStartBeat + k * patternBeats + notePhase;
                         if (fireBeat < clipStartBeat || fireBeat >= clipEndBeat) continue;
@@ -1264,7 +1265,11 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     overrides.masterVolume = effectiveMasterVolume;
     overrides.masterPan = runtime.masterPan;
     mixToOutput(buffer, numSamples, &overrides);
-    songSamplePosition.store(startSample + numSamples, std::memory_order_relaxed);
+
+    // Advance beat position (BPM-aware — survives tempo automation correctly)
+    songBeatPosition_.store(endBeat, std::memory_order_relaxed);
+    // Keep sample position in sync for UI playhead display
+    songSamplePosition.store((long)(endBeat * samplesPerBeat), std::memory_order_relaxed);
 }
 
 // M5 — route channels through mixer tracks and sum to output
@@ -1461,6 +1466,7 @@ bool AudioEngine::renderToFile(const juce::File& outputFile, PlayMode mode, int 
     {
         buildSongSampleCache();
         songSamplePosition.store(0, std::memory_order_relaxed);
+        songBeatPosition_.store(0.0, std::memory_order_relaxed);
         songPlaying.store(true, std::memory_order_release);
     }
 

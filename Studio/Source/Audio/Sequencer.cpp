@@ -81,7 +81,7 @@ void Sequencer::processBlock(int numSamples)
     while (sampleCounter >= samplesPerStep)
     {
         sampleCounter -= samplesPerStep;
-        const int offsetInBuffer = juce::jlimit(0, numSamples - 1, (int)timeToFire);
+        const int offsetInBuffer = juce::jlimit(0, numSamples - 1, (int)std::round(timeToFire));
         advanceStep(offsetInBuffer);
         timeToFire += samplesPerStep;
     }

@@ -203,6 +203,9 @@ void ChannelRackComponent::loadPattern(const Pattern& pat)
         // Restore channel name and type (now per-pattern)
         channels[ch].name = pat.channelNames[ch];
         setChannelType(ch, pat.channelTypes[ch]);
+
+        // Mixer routing
+        channelRouting[ch] = pat.channelMixerRouting[ch];
     }
 
     repaint();
@@ -311,8 +314,14 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
         // Channel name (top half, left area)
         g.setColour(juce::Colours::white);
         g.setFont(juce::Font(juce::FontOptions().withHeight(13.0f)));
-        g.drawText(channels[i].name, 8, y + 2, 86, 18,
+        g.drawText(channels[i].name, 8, y + 2, 68, 18,
                    juce::Justification::centredLeft);
+
+        // Mixer routing badge
+        g.setColour(juce::Colour(0xff888892));
+        g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+        g.drawText(juce::String::fromUTF8("\xe2\x86\x92") + "T" + juce::String(channelRouting[i] + 1),
+                   64, y + 2, 30, 18, juce::Justification::centredLeft);
 
         // Sample name / type badge (bottom half, left area)
         const bool isMelodic  = (i < (int)channelTypes.size() &&
@@ -442,6 +451,15 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
             menu.addItem(6, "Open Plugin Editor");
             menu.addItem(7, "Remove Plugin");
         }
+        menu.addSeparator();
+        {
+            juce::PopupMenu routeMenu;
+            const int curRoute = channelRouting[ch];
+            for (int t = 0; t < 8; ++t)
+                routeMenu.addItem(100 + t, "Track " + juce::String(t + 1),
+                                  true, t == curRoute);
+            menu.addSubMenu("Route to Mixer Track", routeMenu);
+        }
 
         menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
             [this, ch, isMelodic](int result)
@@ -486,6 +504,13 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
                 else if (result == 7)
                 {
                     if (onRemovePlugin) onRemovePlugin(ch);
+                }
+                else if (result >= 100 && result < 108)
+                {
+                    const int newTrack = result - 100;
+                    channelRouting[ch] = newTrack;
+                    if (onChannelRoutingChanged) onChannelRoutingChanged(ch, newTrack);
+                    repaint();
                 }
             });
         return;

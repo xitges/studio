@@ -76,6 +76,9 @@ public:
     std::function<void(int ch)> onOpenPluginEditor;
     std::function<void(int ch)> onRemovePlugin;
 
+    // M-Phase3 — mixer routing
+    std::function<void(int ch, int trackIdx)> onChannelRoutingChanged;
+
     void setChannelHasPlugin(int ch, bool has)
     {
         if (ch >= 0 && ch < 16) { channelHasPlugin[(size_t)ch] = has; repaint(); }
@@ -151,6 +154,7 @@ private:
     std::vector<ChannelRow> channels;
     std::array<ChannelType, 16> channelTypes    = {};   // M3: mirrors project.channelTypes
     bool                        channelHasPlugin[16] = {}; // M8
+    int                         channelRouting[16]   = {}; // mirrors pattern.channelMixerRouting
     juce::TextButton addChannelBtn { "+ Add Channel" };
     juce::TextButton clearStepsBtn { "Clear Steps" };
     juce::Slider     stepCountSlider;
