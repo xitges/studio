@@ -154,6 +154,8 @@ public:
         return juce::String::charToString((juce::juce_wchar)rows[r][c]).toUpperCase();
     }
 
+    static void closeSettings() { getProps().closeFiles(); }
+
 private:
     Project* project   = nullptr;
     int hoveredPad     = -1;
@@ -171,7 +173,7 @@ private:
     juce::Label      statusLabel;
 
     // ---- default pad persistence ----------------------------------------
-    static juce::PropertiesFile* getSettings()
+    static juce::ApplicationProperties& getProps()
     {
         static juce::ApplicationProperties props;
         static bool init = false;
@@ -184,8 +186,10 @@ private:
             props.setStorageParameters(o);
             init = true;
         }
-        return props.getUserSettings();
+        return props;
     }
+
+    static juce::PropertiesFile* getSettings() { return getProps().getUserSettings(); }
 
     void saveDefaultPads()
     {

@@ -69,5 +69,5 @@ private:
 
     static juce::PropertiesFile::Options getPropsOptions();
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginManager)
+    JUCE_DECLARE_NON_COPYABLE(PluginManager)
 };

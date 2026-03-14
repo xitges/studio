@@ -54,6 +54,8 @@ public:
         updateListSize();
     }
 
+    static void closeSettings() { getProps().closeFiles(); }
+
 private:
     // ---- data types -------------------------------------------------------
     struct Item
@@ -225,7 +227,7 @@ private:
     friend struct ListContent;
 
     // ---- bookmark persistence ---------------------------------------------
-    static juce::PropertiesFile* getSettings()
+    static juce::ApplicationProperties& getProps()
     {
         static juce::ApplicationProperties props;
         static bool init = false;
@@ -238,8 +240,10 @@ private:
             props.setStorageParameters(o);
             init = true;
         }
-        return props.getUserSettings();
+        return props;
     }
+
+    static juce::PropertiesFile* getSettings() { return getProps().getUserSettings(); }
 
     void loadBookmarks()
     {

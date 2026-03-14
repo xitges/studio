@@ -1469,6 +1469,24 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    stopTimer();
+
+    // Release static PropertiesFile instances before JUCE's LeakDetector fires.
+    SampleBrowserComponent::closeSettings();
+    LaunchpadPanel::closeSettings();
+
+    // Explicitly destroy all floating windows before engine shutdown.
+    // They may hold lambdas that reference engine/project data; destroying
+    // them first avoids dangling-reference crashes and JUCE leak false-positives.
+    for (auto& w : pluginEditorWindows) w.reset();
+    for (auto& w : dynEQWindows)        w.reset();
+    pluginBrowserWindow.reset();
+    audioDeviceWindow.reset();
+    launchpadWindow.reset();
+    fxEditorWindow.reset();
+    synthEditorWindow.reset();
+    pianoRollWindow.reset();
+
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     audioEngine.shutdown();
 }
