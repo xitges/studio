@@ -875,6 +875,9 @@ MainComponent::MainComponent()
     channelRack.onOpenSynthEditor = [this](int ch)
     {
         switchToPatternModeForEditing();
+        // Kill any voices that survived the mode switch (e.g. we were already
+        // in Pattern mode so switchToPatternModeForEditing() returned early).
+        audioEngine.allSynthNotesOff();
         synthEditorChannel = ch;
 
         if (synthEditorWindow == nullptr)
@@ -2122,16 +2125,18 @@ void MainComponent::switchToPatternModeForEditing()
     if (toolbar.getPlayMode() == PlayMode::Pattern)
         return;
 
-    if (audioEngine.isPlaying())
-    {
-        audioEngine.stop();
-        audioEngine.allSynthNotesOff();
-        channelRack.setPlaybackStep(-1);
-        playlist.setPlayheadBar(-1.0);
-        if (pianoRollWindow != nullptr)
-            pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
-        pianoRollPlaybackOverridesPlayMode = false;
-    }
+    // Always stop and kill voices when switching from Song → Pattern mode,
+    // regardless of whether playback is currently active.  If the engine was
+    // paused mid-song, polySynth voices triggered by the song sequencer may
+    // still be in ADSR decay and would become audible the moment playMode
+    // flips to Pattern (where useSynth becomes true in mixToOutput).
+    audioEngine.stop();
+    audioEngine.allSynthNotesOff();
+    channelRack.setPlaybackStep(-1);
+    playlist.setPlayheadBar(-1.0);
+    if (pianoRollWindow != nullptr)
+        pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
+    pianoRollPlaybackOverridesPlayMode = false;
 
     project.playMode = PlayMode::Pattern;
     toolbar.setPlayMode(PlayMode::Pattern);
@@ -2308,7 +2313,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
             if (doubleSpace)
             {
-                // Double-Space: stop and restart from the very beginning
+                // Double-Space: stop and return to beginning (no auto-play)
                 pausedBarSong = -1.0;
                 audioEngine.stop();
                 audioEngine.allSynthNotesOff();
@@ -2316,9 +2321,6 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
                 playlist.setPlayheadBar(-1.0);
                 if (pianoRollWindow != nullptr)
                     pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
-                syncPatternToEngine();
-                audioEngine.play();
-                lastSpaceResumeTime = juce::Time::currentTimeMillis();
             }
             else if (project.playMode == PlayMode::Song)
             {

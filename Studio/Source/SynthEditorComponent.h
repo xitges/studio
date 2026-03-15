@@ -16,78 +16,193 @@
 // ---------------------------------------------------------------------------
 // Content panel
 // ---------------------------------------------------------------------------
-class SynthEditorPanel : public juce::Component
+class SynthEditorContent : public juce::Component
 {
 public:
     struct WaveformPreview : public juce::Component
     {
         void setWaveformData(SynthPreview::WaveformData d)
         {
-            data = std::move(d);
+            data          = std::move(d);
+            zoomLevel_    = 1.0f;   // reset view on new data
+            scrollOffset_ = 0.0f;
+            pathDirty_    = true;
+            repaint();
+        }
+
+        void resized() override
+        {
+            pathDirty_ = true;  // geometry changed — rebuild paths at new pixel mapping
+        }
+
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (!e.mods.isRightButtonDown())
+            {
+                dragStartX_      = e.x;
+                dragStartScroll_ = scrollOffset_;
+                setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+            }
+        }
+
+        void mouseDrag(const juce::MouseEvent& e) override
+        {
+            if (zoomLevel_ <= 1.0f) return;   // nothing to pan at full view
+            const float delta = (float)(e.x - dragStartX_)
+                                / ((float)juce::jmax(1, getWidth()) * zoomLevel_);
+            // Drag right → waveform shifts right → earlier content visible (offset decreases)
+            scrollOffset_ = juce::jlimit(0.0f, 1.0f - 1.0f / zoomLevel_,
+                                         dragStartScroll_ - delta);
+            pathDirty_    = true;
+            repaint();
+        }
+
+        void mouseUp(const juce::MouseEvent&) override
+        {
+            setMouseCursor(juce::MouseCursor::NormalCursor);
+        }
+
+        void mouseWheelMove(const juce::MouseEvent& e,
+                            const juce::MouseWheelDetails& w) override
+        {
+            // Ctrl/Cmd + scroll = zoom only; plain scroll is handled by drag
+            if (!(e.mods.isCommandDown() || e.mods.isCtrlDown())) return;
+
+            const float oldZoom    = zoomLevel_;
+            zoomLevel_             = juce::jlimit(1.0f, kMaxZoom,
+                                                  zoomLevel_ * std::exp(w.deltaY * 0.35f));
+            const float mouseXFrac = (float)e.x / (float)juce::jmax(1, getWidth());
+            const float anchor     = scrollOffset_ + mouseXFrac / oldZoom;
+            scrollOffset_          = juce::jlimit(0.0f, 1.0f - 1.0f / zoomLevel_,
+                                                  anchor - mouseXFrac / zoomLevel_);
+            pathDirty_             = true;
+            repaint();
+        }
+
+        void mouseDoubleClick(const juce::MouseEvent&) override
+        {
+            zoomLevel_    = 1.0f;
+            scrollOffset_ = 0.0f;
+            pathDirty_    = true;
             repaint();
         }
 
         void paint(juce::Graphics& g) override
         {
+            const float W = (float)getWidth();
+            const float H = (float)getHeight();
+
+            // Background + grid
             g.fillAll(juce::Colour(0xff10182d));
             g.setColour(juce::Colour(0xff203050));
             for (float pct : { 0.25f, 0.5f, 0.75f })
-            {
-                const float y = pct * (float)getHeight();
-                g.drawLine(0.0f, y, (float)getWidth(), y, 0.5f);
-            }
+                g.drawLine(0.0f, pct * H, W, pct * H, 0.5f);
             g.setColour(juce::Colour(0xff3498db).withAlpha(0.20f));
-            g.drawLine(0.0f, getHeight() * 0.5f, (float)getWidth(), getHeight() * 0.5f, 1.0f);
+            g.drawLine(0.0f, H * 0.5f, W, H * 0.5f, 1.0f);
 
             const int n = (int)data.minVals.size();
-            if (n == 0) return;
-
-            const float midY   = getHeight() * 0.5f;
-            const float scaleY = juce::jmax(1.0f, getHeight() * 0.45f);
-            const float w      = (float)getWidth();
-            const float h      = (float)getHeight();
-
-            // ADSR phase colours
-            const juce::Colour colAttack  (0xff44dd88);  // green
-            const juce::Colour colDecay   (0xffddaa33);  // amber
-            const juce::Colour colSustain (0xff3498db);  // blue
-            const juce::Colour colRelease (0xffdd4444);  // red
-
-            for (int i = 0; i < n; ++i)
+            if (n > 0)
             {
-                const float xFrac = (float)i / (float)juce::jmax(1, n - 1);
-                juce::Colour col;
-                if      (xFrac < data.attackFrac)  col = colAttack;
-                else if (xFrac < data.decayFrac)   col = colDecay;
-                else if (xFrac < data.releaseFrac) col = colSustain;
-                else                               col = colRelease;
+                // Visible data range — clamped to prevent out-of-bounds access
+                const int visStart = juce::jlimit(0, n - 1,
+                                                  (int)(scrollOffset_ * (float)n));
+                const int visEnd   = juce::jlimit(visStart + 1, n,
+                                                  (int)((scrollOffset_ + 1.0f / zoomLevel_) * (float)n));
+                const int visCount = visEnd - visStart;
 
-                const float x  = juce::jmap((float)i, 0.0f, (float)juce::jmax(1, n - 1), 0.0f, w);
-                const float y1 = midY - data.maxVals[(size_t)i] * scaleY;
-                const float y2 = midY - data.minVals[(size_t)i] * scaleY;
+                if (visCount > 0)
+                {
+                    if (pathDirty_)
+                        rebuildPaths(visStart, visCount, n, W, H);
 
-                g.setColour(col.withAlpha(0.88f));
-                g.drawVerticalLine((int)x, y1, y2 + 1.0f);
+                    // Draw cached phase paths
+                    const juce::PathStrokeType bar(1.0f);
+                    g.setColour(juce::Colour(0xff44dd88).withAlpha(0.88f)); g.strokePath(attackPath_,  bar);
+                    g.setColour(juce::Colour(0xffddaa33).withAlpha(0.88f)); g.strokePath(decayPath_,   bar);
+                    g.setColour(juce::Colour(0xff3498db).withAlpha(0.88f)); g.strokePath(sustainPath_, bar);
+                    g.setColour(juce::Colour(0xffdd4444).withAlpha(0.88f)); g.strokePath(releasePath_, bar);
+
+                    // Draw cached boundary lines
+                    const juce::PathStrokeType thin(1.0f);
+                    g.setColour(juce::Colour(0xffddaa33).withAlpha(0.55f)); g.strokePath(boundAttack_,  thin);
+                    g.setColour(juce::Colour(0xff3498db).withAlpha(0.55f)); g.strokePath(boundDecay_,   thin);
+                    g.setColour(juce::Colour(0xffdd4444).withAlpha(0.55f)); g.strokePath(boundRelease_, thin);
+                }
+
+                // Zoom level indicator (top-right corner)
+                if (zoomLevel_ > 1.05f)
+                {
+                    g.setColour(juce::Colours::white.withAlpha(0.45f));
+                    g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
+                    g.drawText(juce::String(zoomLevel_, 1) + "x",
+                               (int)W - 34, 4, 30, 12, juce::Justification::centredRight);
+                }
             }
 
-            // Phase boundary lines
-            auto drawBoundary = [&](float frac, juce::Colour c)
-            {
-                if (frac <= 0.0f || frac >= 1.0f) return;
-                const float x = frac * w;
-                g.setColour(c.withAlpha(0.55f));
-                g.drawLine(x, 0.0f, x, h, 1.0f);
-            };
-            drawBoundary(data.attackFrac,  colDecay);
-            drawBoundary(data.decayFrac,   colSustain);
-            drawBoundary(data.releaseFrac, colRelease);
-
+            // Border
             g.setColour(juce::Colour(0xff4aa3df));
             g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 6.0f, 1.0f);
         }
 
     private:
+        // Rebuild all cached paths from the current visible range.
+        // Called only when pathDirty_ is true, then clears the flag.
+        void rebuildPaths(int visStart, int visCount, int n, float W, float H)
+        {
+            attackPath_.clear();  decayPath_.clear();
+            sustainPath_.clear(); releasePath_.clear();
+            boundAttack_.clear(); boundDecay_.clear(); boundRelease_.clear();
+
+            const float midY  = H * 0.5f;
+            const float scale = juce::jmax(1.0f, H * 0.45f);
+            const float denom = (float)juce::jmax(1, visCount - 1);
+
+            for (int i = 0; i < visCount; ++i)
+            {
+                const int   di    = visStart + i;
+                const float xFrac = (float)di / (float)juce::jmax(1, n - 1);
+                const float x     = juce::jmap((float)i, 0.0f, denom, 0.0f, W);
+                const float y1    = midY - data.maxVals[(size_t)di] * scale;
+                const float y2    = midY - data.minVals[(size_t)di] * scale;
+
+                juce::Path& p = (xFrac < data.attackFrac)  ? attackPath_
+                              : (xFrac < data.decayFrac)   ? decayPath_
+                              : (xFrac < data.releaseFrac) ? sustainPath_
+                                                           : releasePath_;
+                p.startNewSubPath(x, y1);
+                p.lineTo(x, y2);
+            }
+
+            // Phase boundary lines — only rendered if within visible scroll range
+            const float visStartFrac = scrollOffset_;
+            const float visEndFrac   = scrollOffset_ + 1.0f / zoomLevel_;
+
+            auto addBoundary = [&](float frac, juce::Path& bp)
+            {
+                if (frac <= 0.0f || frac >= 1.0f) return;
+                if (frac < visStartFrac || frac > visEndFrac) return;
+                const float x = ((frac - visStartFrac) * zoomLevel_) * W;
+                bp.startNewSubPath(x, 0.0f);
+                bp.lineTo(x, H);
+            };
+            addBoundary(data.attackFrac,  boundAttack_);
+            addBoundary(data.decayFrac,   boundDecay_);
+            addBoundary(data.releaseFrac, boundRelease_);
+
+            pathDirty_ = false;
+        }
+
         SynthPreview::WaveformData data;
+        float      zoomLevel_      = 1.0f;
+        float      scrollOffset_   = 0.0f;
+        bool       pathDirty_      = true;
+        int        dragStartX_     = 0;
+        float      dragStartScroll_= 0.0f;
+
+        juce::Path attackPath_, decayPath_, sustainPath_, releasePath_;
+        juce::Path boundAttack_, boundDecay_, boundRelease_;
+
+        static constexpr float kMaxZoom = 16.0f;
     };
 
     std::function<void()> onParamsChanged;
@@ -96,7 +211,7 @@ public:
     std::function<void(const juce::String&)> onRenamePresetRequested;
     std::function<void(const juce::String&)> onDeletePresetRequested;
 
-    SynthEditorPanel()
+    SynthEditorContent()
     {
         auto makeLabel = [this](juce::Label& lbl, const juce::String& text)
         {
@@ -225,6 +340,9 @@ public:
         waveBox.addItem("Saw",      2);
         waveBox.addItem("Square",   3);
         waveBox.addItem("Triangle", 4);
+        waveBox.addItem("Pulse",    5);
+        waveBox.addItem("Noise",    6);
+        waveBox.addItem("Supersaw", 7);
         waveBox.setSelectedId(2, juce::dontSendNotification);
         waveBox.onChange = [this] { notify(); };
         addAndMakeVisible(waveBox);
@@ -269,14 +387,84 @@ public:
         // LFO
         makeSlider(lfoRateSl,  0.1, 20.0, 0.1, 2.0);   lfoRateSl.onValueChange  = [this] { notify(); };
         makeSlider(lfoDepthSl, 0.0, 1.0,  0.01, 0.0);   lfoDepthSl.onValueChange = [this] { notify(); };
-        lfoTargetBox.addItem("Cutoff", 1);
-        lfoTargetBox.addItem("Pitch",  2);
+        lfoTargetBox.addItem("Cutoff",     1);
+        lfoTargetBox.addItem("Pitch",      2);
+        lfoTargetBox.addItem("Amplitude",  3);
+        lfoTargetBox.addItem("PulseWidth", 4);
         lfoTargetBox.setSelectedId(1, juce::dontSendNotification);
         lfoTargetBox.onChange = [this] { notify(); };
         addAndMakeVisible(lfoTargetBox);
         makeLabel(lfoRateLbl,   "LFO Rate (Hz)");
         makeLabel(lfoDepthLbl,  "LFO Depth");
         makeLabel(lfoTargetLbl, "LFO Target");
+
+        // LFO extras
+        lfoWaveformBox.addItem("Sine",      1);
+        lfoWaveformBox.addItem("Triangle",  2);
+        lfoWaveformBox.addItem("Saw",       3);
+        lfoWaveformBox.addItem("Square",    4);
+        lfoWaveformBox.addItem("S&H",       5);
+        lfoWaveformBox.setSelectedId(1, juce::dontSendNotification);
+        lfoWaveformBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff16213e));
+        lfoWaveformBox.setColour(juce::ComboBox::textColourId,       juce::Colour(0xffb0b0d8));
+        lfoWaveformBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xff3498db).withAlpha(0.6f));
+        lfoWaveformBox.onChange = [this] { notify(); };
+        addAndMakeVisible(lfoWaveformBox);
+        makeLabel(lfoWaveformLbl, "LFO Shape");
+
+        lfoFreeRunBtn.setButtonText("Free-Run");
+        lfoFreeRunBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2c2c54));
+        lfoFreeRunBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3498db));
+        lfoFreeRunBtn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+        lfoFreeRunBtn.setClickingTogglesState(true);
+        lfoFreeRunBtn.onClick = [this] { notify(); };
+        addAndMakeVisible(lfoFreeRunBtn);
+
+        makeSlider(lfoFadeInSl, 0.0, 2000.0, 1.0, 0.0); lfoFadeInSl.onValueChange = [this] { notify(); };
+        makeLabel(lfoFadeInLbl, "LFO Fade (ms)");
+
+        // Pulse width
+        makeSlider(pulseWidthSl, 0.05, 0.95, 0.01, 0.5); pulseWidthSl.onValueChange = [this] { notify(); };
+        makeLabel(pulseWidthLbl, "Pulse Width");
+
+        // Filter extras
+        filterTypeBox.addItem("Low-pass",  1);
+        filterTypeBox.addItem("High-pass", 2);
+        filterTypeBox.addItem("Band-pass", 3);
+        filterTypeBox.setSelectedId(1, juce::dontSendNotification);
+        filterTypeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff16213e));
+        filterTypeBox.setColour(juce::ComboBox::textColourId,       juce::Colour(0xffb0b0d8));
+        filterTypeBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xff3498db).withAlpha(0.6f));
+        filterTypeBox.onChange = [this] { notify(); };
+        addAndMakeVisible(filterTypeBox);
+        makeLabel(filterTypeLbl, "Filter Type");
+
+        makeSlider(filterDriveSl, 0.0, 1.0, 0.01, 0.0); filterDriveSl.onValueChange = [this] { notify(); };
+        makeLabel(filterDriveLbl, "Drive");
+
+        makeSlider(filterEnvAmountSl, -1.0, 1.0, 0.01, 0.5); filterEnvAmountSl.onValueChange = [this] { notify(); };
+        makeLabel(filterEnvAmountLbl, "Env Depth");
+
+        // Unison
+        unisonVoicesSl.setRange(1.0, 8.0, 1.0);
+        unisonVoicesSl.setValue(1.0, juce::dontSendNotification);
+        unisonVoicesSl.setSliderStyle(juce::Slider::IncDecButtons);
+        unisonVoicesSl.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 40, 18);
+        unisonVoicesSl.setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
+        unisonVoicesSl.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16213e));
+        unisonVoicesSl.setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff0f3460));
+        unisonVoicesSl.onValueChange = [this] { notify(); };
+        addAndMakeVisible(unisonVoicesSl);
+        makeLabel(unisonVoicesLbl, "Voices");
+
+        makeSlider(unisonDetuneSl, 0.0, 100.0, 0.1, 0.0); unisonDetuneSl.onValueChange = [this] { notify(); };
+        makeLabel(unisonDetuneLbl, "Detune (ct)");
+
+        makeSlider(unisonSpreadSl, 0.0, 1.0, 0.01, 0.5); unisonSpreadSl.onValueChange = [this] { notify(); };
+        makeLabel(unisonSpreadLbl, "Spread");
+
+        makeSlider(driftDepthSl, 0.0, 1.0, 0.01, 0.3); driftDepthSl.onValueChange = [this] { notify(); };
+        makeLabel(driftDepthLbl, "Drift");
 
         setAvailablePresets(SynthPresets::getAll());
         updateWaveformPreview();
@@ -312,15 +500,26 @@ public:
     {
         enableBtn.setToggleState(p.enabled,   juce::dontSendNotification);
         waveBox.setSelectedId(p.waveform + 1, juce::dontSendNotification);
+        pulseWidthSl.setValue(p.pulseWidth,   juce::dontSendNotification);
+        unisonVoicesSl.setValue(p.unisonVoices, juce::dontSendNotification);
+        unisonDetuneSl.setValue(p.unisonDetune, juce::dontSendNotification);
+        unisonSpreadSl.setValue(p.unisonSpread, juce::dontSendNotification);
+        driftDepthSl.setValue(p.driftDepth, juce::dontSendNotification);
         attackSl.setValue (p.attack,    juce::dontSendNotification);
         decaySl.setValue  (p.decay,     juce::dontSendNotification);
         sustainSl.setValue(p.sustain,   juce::dontSendNotification);
         releaseSl.setValue(p.release,   juce::dontSendNotification);
         cutoffSl.setValue   (p.cutoff,    juce::dontSendNotification);
         resonanceSl.setValue(p.resonance, juce::dontSendNotification);
+        filterTypeBox.setSelectedId(p.filterType + 1, juce::dontSendNotification);
+        filterDriveSl.setValue(p.filterDrive, juce::dontSendNotification);
+        filterEnvAmountSl.setValue(p.filterEnvAmount, juce::dontSendNotification);
         lfoRateSl.setValue (p.lfoRate,  juce::dontSendNotification);
         lfoDepthSl.setValue(p.lfoDepth, juce::dontSendNotification);
         lfoTargetBox.setSelectedId(p.lfoTarget + 1, juce::dontSendNotification);
+        lfoWaveformBox.setSelectedId(p.lfoWaveform + 1, juce::dontSendNotification);
+        lfoFreeRunBtn.setToggleState(p.lfoFreeRun, juce::dontSendNotification);
+        lfoFadeInSl.setValue(p.lfoFadeIn, juce::dontSendNotification);
         ddspEnableBtn.setToggleState(p.ddspAuto.enabled, juce::dontSendNotification);
         ddspAmountSl.setValue(p.ddspAuto.amount, juce::dontSendNotification);
         ddspBrightnessSl.setValue(p.ddspAuto.brightness, juce::dontSendNotification);
@@ -330,17 +529,28 @@ public:
 
     void applyToParams(SynthParams& p) const
     {
-        p.enabled   = enableBtn.getToggleState();
-        p.waveform  = waveBox.getSelectedId() - 1;
-        p.attack    = (float)attackSl.getValue();
-        p.decay     = (float)decaySl.getValue();
-        p.sustain   = (float)sustainSl.getValue();
-        p.release   = (float)releaseSl.getValue();
-        p.cutoff    = (float)cutoffSl.getValue();
-        p.resonance = (float)resonanceSl.getValue();
-        p.lfoRate   = (float)lfoRateSl.getValue();
-        p.lfoDepth  = (float)lfoDepthSl.getValue();
-        p.lfoTarget = lfoTargetBox.getSelectedId() - 1;
+        p.enabled      = enableBtn.getToggleState();
+        p.waveform     = waveBox.getSelectedId() - 1;
+        p.pulseWidth   = (float)pulseWidthSl.getValue();
+        p.unisonVoices = (int)unisonVoicesSl.getValue();
+        p.unisonDetune = (float)unisonDetuneSl.getValue();
+        p.unisonSpread = (float)unisonSpreadSl.getValue();
+        p.driftDepth   = (float)driftDepthSl.getValue();
+        p.attack       = (float)attackSl.getValue();
+        p.decay        = (float)decaySl.getValue();
+        p.sustain      = (float)sustainSl.getValue();
+        p.release      = (float)releaseSl.getValue();
+        p.cutoff       = (float)cutoffSl.getValue();
+        p.resonance    = (float)resonanceSl.getValue();
+        p.filterType        = filterTypeBox.getSelectedId() - 1;
+        p.filterDrive       = (float)filterDriveSl.getValue();
+        p.filterEnvAmount   = (float)filterEnvAmountSl.getValue();
+        p.lfoRate      = (float)lfoRateSl.getValue();
+        p.lfoDepth     = (float)lfoDepthSl.getValue();
+        p.lfoTarget    = lfoTargetBox.getSelectedId() - 1;
+        p.lfoWaveform  = lfoWaveformBox.getSelectedId() - 1;
+        p.lfoFreeRun   = lfoFreeRunBtn.getToggleState();
+        p.lfoFadeIn    = (float)lfoFadeInSl.getValue();
         p.ddspAuto.enabled    = ddspEnableBtn.getToggleState();
         p.ddspAuto.amount     = (float)ddspAmountSl.getValue();
         p.ddspAuto.brightness = (float)ddspBrightnessSl.getValue();
@@ -356,69 +566,162 @@ public:
         {
             g.setColour(juce::Colour(0xff3498db));
             g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
-            g.drawText(text, 10, y, 400, 14, juce::Justification::centredLeft);
+            g.drawText(text, 10, y, getWidth() - 20, 14, juce::Justification::centredLeft);
             g.setColour(juce::Colour(0xff3498db).withAlpha(0.4f));
-            g.drawLine(10.0f, (float)(y + 14), 450.0f, (float)(y + 14), 1.0f);
+            g.drawLine(10.0f, (float)(y + 14), (float)(getWidth() - 10), (float)(y + 14), 1.0f);
         };
 
-        sectionHeader("NOTE AUTO PATCH", 244);
-        sectionHeader("ADSR ENVELOPE",   354);
-        sectionHeader("FILTER",          464);
-        sectionHeader("LFO",             524);
+        sectionHeader("NOTE AUTO PATCH", yHeaderAutoPatch_);
+        sectionHeader("UNISON",          yHeaderUnison_);
+        sectionHeader("ADSR ENVELOPE",   yHeaderADSR_);
+        sectionHeader("FILTER",          yHeaderFilter_);
+        sectionHeader("LFO",             yHeaderLFO_);
     }
 
     void resized() override
     {
-        constexpr int lblW = 90, slW = 250, h = 22, pad = 6;
+        constexpr int kRowH  = 24;   // button / combobox rows
+        constexpr int kSlH   = 22;   // slider rows
+        constexpr int kGap   = 4;    // between rows within a group
+        constexpr int kGroup = 10;   // between groups / sections
+        constexpr int kHdrH  = 18;   // section header (text + underline)
+        constexpr int kLblW  = 92;   // label column width
 
-        // Row 0 — Preset selector
-        int y = 10;
-        presetLbl.setBounds(10,  y + 4, 46, 18);
-        presetBox.setBounds(60,  y,     240, 26);
-        savePresetBtn.setBounds(312, y, 118, 26);
-        y += 36;
+        auto area = getLocalBounds().reduced(10, 8);
+        const int slX  = area.getX() + kLblW + 3;   // slider/control left edge
+        const int slW  = area.getWidth() - kLblW - 3;  // slider width to right margin
 
-        renamePresetBtn.setBounds(60, y, 110, 26);
-        deletePresetBtn.setBounds(180, y, 110, 26);
-        y += 36;
+        // Helper: place a label + slider/control row and advance area
+        auto placeSliderRow = [&](juce::Label& lbl, juce::Component& ctrl, int ctrlW)
+        {
+            auto row = area.removeFromTop(kSlH);
+            lbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            ctrl.setBounds(slX, row.getY(), ctrlW, kSlH);
+            area.removeFromTop(kGap);
+        };
 
-        testNoteLbl.setBounds(10, y + 4, 60, 18);
-        testNoteBox.setBounds(74, y, 88, 26);
-        testBtn.setBounds(176, y, 124, 26);
-        y += 36;
+        // ---- Preset section -------------------------------------------------
+        {
+            auto row = area.removeFromTop(kRowH);
+            presetLbl    .setBounds(row.removeFromLeft(48).withTrimmedTop(5));
+            savePresetBtn.setBounds(row.removeFromRight(118));
+            presetBox    .setBounds(row.reduced(3, 0));
+            area.removeFromTop(kGap);
+        }
+        {
+            auto row = area.removeFromTop(kRowH);
+            renamePresetBtn.setBounds(row.removeFromLeft(110));
+            row.removeFromLeft(4);
+            deletePresetBtn.setBounds(row.removeFromLeft(110));
+            area.removeFromTop(kGap);
+        }
+        {
+            auto row = area.removeFromTop(kRowH);
+            testNoteLbl.setBounds(row.removeFromLeft(62).withTrimmedTop(5));
+            testNoteBox.setBounds(row.removeFromLeft(88));
+            row.removeFromLeft(4);
+            testBtn    .setBounds(row.removeFromLeft(124));
+            area.removeFromTop(kGroup);
+        }
 
-        // Row 1 — Enable + Waveform
-        enableBtn.setBounds(10,  y, 120, 26);
-        waveLbl.setBounds  (150, y + 4, 70, 18);
-        waveBox.setBounds  (220, y, 120, 26);
-        y += 36;
+        // ---- Oscillator section ---------------------------------------------
+        {
+            auto row = area.removeFromTop(kRowH);
+            enableBtn.setBounds(row.removeFromLeft(120));
+            row.removeFromLeft(8);
+            waveLbl.setBounds(row.removeFromLeft(72).withTrimmedTop(5));
+            waveBox.setBounds(row.removeFromLeft(120));
+            area.removeFromTop(kGap);
+        }
+        placeSliderRow(pulseWidthLbl, pulseWidthSl, slW);
+        previewLbl     .setBounds(area.removeFromTop(14));
+        area.removeFromTop(2);
+        waveformPreview.setBounds(area.removeFromTop(88));
+        area.removeFromTop(kGroup);
 
-        previewLbl.setBounds(10, y + 4, 80, 18);
-        waveformPreview.setBounds(10, y + 24, 390, 88);
+        // ---- Auto Patch section ---------------------------------------------
+        yHeaderAutoPatch_ = area.getY();
+        area.removeFromTop(kHdrH + kGap);
+        ddspEnableBtn.setBounds(area.removeFromTop(kRowH).removeFromLeft(130));
+        area.removeFromTop(kGap);
+        placeSliderRow(ddspAmountLbl,     ddspAmountSl,     slW);
+        placeSliderRow(ddspBrightnessLbl, ddspBrightnessSl, slW);
+        {
+            auto row = area.removeFromTop(kSlH);
+            ddspMotionLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            ddspMotionSl .setBounds(slX, row.getY(), slW, kSlH);
+            area.removeFromTop(kGroup);
+        }
 
-        y = 262;
-        ddspEnableBtn.setBounds(10, y, 120, 26);
-        y += 34;
-        ddspAmountLbl    .setBounds(10, y, lblW, h); ddspAmountSl    .setBounds(100, y, slW, h); y += h + pad;
-        ddspBrightnessLbl.setBounds(10, y, lblW, h); ddspBrightnessSl.setBounds(100, y, slW, h); y += h + pad;
-        ddspMotionLbl    .setBounds(10, y, lblW, h); ddspMotionSl    .setBounds(100, y, slW, h);
+        // ---- Unison section -------------------------------------------------
+        yHeaderUnison_ = area.getY();
+        area.removeFromTop(kHdrH + kGap);
+        {
+            auto row = area.removeFromTop(kSlH);
+            unisonVoicesLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            unisonVoicesSl .setBounds(slX, row.getY(), 80, kSlH);
+            area.removeFromTop(kGap);
+        }
+        placeSliderRow(unisonDetuneLbl, unisonDetuneSl, slW);
+        placeSliderRow(unisonSpreadLbl, unisonSpreadSl, slW);
+        {
+            auto row = area.removeFromTop(kSlH);
+            driftDepthLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            driftDepthSl .setBounds(slX, row.getY(), slW, kSlH);
+            area.removeFromTop(kGroup);
+        }
 
-        y = 372;
-        attackLbl .setBounds(10, y, lblW, h); attackSl .setBounds(100, y, slW, h); y += h + pad;
-        decayLbl  .setBounds(10, y, lblW, h); decaySl  .setBounds(100, y, slW, h); y += h + pad;
-        sustainLbl.setBounds(10, y, lblW, h); sustainSl.setBounds(100, y, slW, h); y += h + pad;
-        releaseLbl.setBounds(10, y, lblW, h); releaseSl.setBounds(100, y, slW, h);
+        // ---- ADSR section ---------------------------------------------------
+        yHeaderADSR_ = area.getY();
+        area.removeFromTop(kHdrH + kGap);
+        placeSliderRow(attackLbl,  attackSl,  slW);
+        placeSliderRow(decayLbl,   decaySl,   slW);
+        placeSliderRow(sustainLbl, sustainSl, slW);
+        {
+            auto row = area.removeFromTop(kSlH);
+            releaseLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            releaseSl .setBounds(slX, row.getY(), slW, kSlH);
+            area.removeFromTop(kGroup);
+        }
 
-        // Filter
-        y = 482;
-        cutoffLbl   .setBounds(10, y, lblW, h); cutoffSl   .setBounds(100, y, slW, h); y += h + pad;
-        resonanceLbl.setBounds(10, y, lblW, h); resonanceSl.setBounds(100, y, slW, h);
+        // ---- Filter section -------------------------------------------------
+        yHeaderFilter_ = area.getY();
+        area.removeFromTop(kHdrH + kGap);
+        {
+            auto row = area.removeFromTop(kSlH);
+            filterTypeLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            filterTypeBox.setBounds(slX, row.getY(), 110, kSlH);
+            area.removeFromTop(kGap);
+        }
+        placeSliderRow(cutoffLbl,     cutoffSl,     slW);
+        placeSliderRow(resonanceLbl,  resonanceSl,  slW);
+        placeSliderRow(filterDriveLbl,      filterDriveSl,      slW);
+        {
+            auto row = area.removeFromTop(kSlH);
+            filterEnvAmountLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            filterEnvAmountSl .setBounds(slX, row.getY(), slW, kSlH);
+            area.removeFromTop(kGroup);
+        }
 
-        // LFO
-        y = 542;
-        lfoRateLbl  .setBounds(10, y, lblW, h); lfoRateSl  .setBounds(100, y, slW, h); y += h + pad;
-        lfoDepthLbl .setBounds(10, y, lblW, h); lfoDepthSl .setBounds(100, y, slW, h); y += h + pad;
-        lfoTargetLbl.setBounds(10, y, lblW, h); lfoTargetBox.setBounds(100, y, 100, h);
+        // ---- LFO section ----------------------------------------------------
+        yHeaderLFO_ = area.getY();
+        area.removeFromTop(kHdrH + kGap);
+        {
+            // LFO shape + free-run toggle on same row
+            auto row = area.removeFromTop(kSlH);
+            lfoWaveformLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            lfoWaveformBox.setBounds(slX, row.getY(), 95, kSlH);
+            lfoFreeRunBtn .setBounds(slX + 99, row.getY(), 80, kSlH);
+            area.removeFromTop(kGap);
+        }
+        placeSliderRow(lfoFadeInLbl, lfoFadeInSl, slW);
+        placeSliderRow(lfoRateLbl,   lfoRateSl,   slW);
+        placeSliderRow(lfoDepthLbl,  lfoDepthSl,  slW);
+        {
+            auto row = area.removeFromTop(kSlH);
+            lfoTargetLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            lfoTargetBox.setBounds(slX, row.getY(), 110, kSlH);
+        }
     }
 
 private:
@@ -504,8 +807,96 @@ private:
     juce::Slider   lfoRateSl, lfoDepthSl;
     juce::ComboBox lfoTargetBox;
     juce::Label    lfoRateLbl, lfoDepthLbl, lfoTargetLbl;
+
+    // LFO extras
+    juce::ComboBox   lfoWaveformBox;
+    juce::Label      lfoWaveformLbl;
+    juce::TextButton lfoFreeRunBtn;
+    juce::Slider     lfoFadeInSl;
+    juce::Label      lfoFadeInLbl;
+
+    // Oscillator extras
+    juce::Slider   pulseWidthSl;
+    juce::Label    pulseWidthLbl;
+
+    // Filter extras
+    juce::ComboBox filterTypeBox;
+    juce::Label    filterTypeLbl;
+    juce::Slider   filterDriveSl;
+    juce::Label    filterDriveLbl;
+    juce::Slider   filterEnvAmountSl;
+    juce::Label    filterEnvAmountLbl;
+
+    // Unison
+    juce::Slider   unisonVoicesSl, unisonDetuneSl, unisonSpreadSl;
+    juce::Label    unisonVoicesLbl, unisonDetuneLbl, unisonSpreadLbl;
+    juce::Slider   driftDepthSl;
+    juce::Label    driftDepthLbl;
+
     std::vector<SynthPresets::Preset> availablePresets;
     int factoryPresetCount = 0;
+
+    // Section header y positions — set in resized(), read in paint()
+    int yHeaderAutoPatch_ = 0;
+    int yHeaderUnison_    = 0;
+    int yHeaderADSR_      = 0;
+    int yHeaderFilter_    = 0;
+    int yHeaderLFO_       = 0;
+};
+
+// ---------------------------------------------------------------------------
+// SynthEditorPanel — thin Viewport wrapper around SynthEditorContent.
+// Exposes the same public API as before so MainComponent needs no changes.
+// ---------------------------------------------------------------------------
+class SynthEditorPanel : public juce::Component
+{
+public:
+    std::function<void()>                            onParamsChanged;
+    std::function<void(const SynthParams&, int)>     onPreviewRequested;
+    std::function<void(const SynthParams&)>          onSavePresetRequested;
+    std::function<void(const juce::String&)>         onRenamePresetRequested;
+    std::function<void(const juce::String&)>         onDeletePresetRequested;
+
+    SynthEditorPanel()
+    {
+        // Wire content callbacks through to this panel's public lambdas.
+        // Lambdas capture `this` by pointer, so they read the current
+        // std::function value at call time — assigned later by MainComponent.
+        content_.onParamsChanged         = [this] { if (onParamsChanged)         onParamsChanged(); };
+        content_.onPreviewRequested      = [this](const SynthParams& p, int n)   { if (onPreviewRequested)      onPreviewRequested(p, n); };
+        content_.onSavePresetRequested   = [this](const SynthParams& p)          { if (onSavePresetRequested)   onSavePresetRequested(p); };
+        content_.onRenamePresetRequested = [this](const juce::String& s)         { if (onRenamePresetRequested) onRenamePresetRequested(s); };
+        content_.onDeletePresetRequested = [this](const juce::String& s)         { if (onDeletePresetRequested) onDeletePresetRequested(s); };
+
+        viewport_.setViewedComponent(&content_, false);
+        viewport_.setScrollBarsShown(true, false);   // vertical only
+        viewport_.setScrollBarThickness(10);
+        addAndMakeVisible(viewport_);
+    }
+
+    void resized() override
+    {
+        viewport_.setBounds(getLocalBounds());
+        // Content fills the full panel width minus the vertical scrollbar.
+        const int contentW = juce::jmax(1, getWidth() - viewport_.getScrollBarThickness());
+        content_.setSize(contentW, kContentH);
+    }
+
+    // ---- Forwarded API ----
+    void loadParams(const SynthParams& p)         { content_.loadParams(p); }
+    void applyToParams(SynthParams& p)      const { content_.applyToParams(p); }
+    void setAvailablePresets(const std::vector<SynthPresets::Preset>& presets,
+                             const juce::String& selectName = {})
+    {
+        content_.setAvailablePresets(presets, selectName);
+    }
+
+private:
+    static constexpr int kContentH = 1110;   // tall enough for all controls
+    juce::Viewport       viewport_;
+    SynthEditorContent   content_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SynthEditorPanel)
 };
 
 // ---------------------------------------------------------------------------
@@ -522,8 +913,8 @@ public:
                                juce::DocumentWindow::closeButton)
     {
         setContentNonOwned(&panel, false);
-        setResizable(false, false);
-        setSize(470, 690);
+        setResizable(true, false);
+        setSize(470, 750);
     }
 
     void setChannelName(const juce::String& name)

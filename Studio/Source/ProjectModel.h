@@ -263,17 +263,28 @@ struct SynthParams
         float motion     = 0.25f; // 0..1 vibrato / movement bias
     };
 
-    bool  enabled   = false;
-    int   waveform  = 1;        // 0=Sine 1=Saw 2=Square 3=Triangle
-    float attack    = 5.0f;     // ms
-    float decay     = 80.0f;    // ms
-    float sustain   = 0.6f;     // 0.0 – 1.0
-    float release   = 200.0f;   // ms
-    float cutoff    = 4000.0f;  // Hz
-    float resonance = 0.3f;     // 0.0 – 1.0
-    float lfoRate   = 2.0f;     // Hz
-    float lfoDepth  = 0.0f;     // 0.0 – 1.0
-    int   lfoTarget = 0;        // 0 = cutoff, 1 = pitch
+    bool  enabled      = false;
+    int   waveform     = 1;        // 0=Sine 1=Saw 2=Square 3=Triangle 4=Pulse 5=Noise 6=Supersaw
+    float pulseWidth   = 0.5f;    // Pulse duty cycle 0.05–0.95
+    int   unisonVoices = 1;       // 1–8 stacked oscillators
+    float unisonDetune = 0.0f;    // 0–100 cents total spread
+    float unisonSpread = 0.5f;    // 0–1 stereo width
+    float attack       = 5.0f;   // ms
+    float decay        = 80.0f;  // ms
+    float sustain      = 0.6f;   // 0.0 – 1.0
+    float release      = 200.0f; // ms
+    float cutoff       = 4000.0f;// Hz
+    float resonance    = 0.3f;   // 0.0 – 1.0
+    int   filterType      = 0;      // 0=LP 1=HP 2=BP
+    float filterDrive     = 0.0f;   // 0–1 pre-filter saturation
+    float filterEnvAmount = 0.5f;   // -1..+1 filter envelope depth
+    float driftDepth      = 0.3f;   // 0..1 oscillator drift amount
+    float lfoRate      = 2.0f;   // Hz
+    float lfoDepth     = 0.0f;   // 0.0 – 1.0
+    int   lfoTarget    = 0;      // 0=Cutoff 1=Pitch 2=Amplitude 3=PulseWidth
+    int   lfoWaveform  = 0;      // 0=Sine 1=Triangle 2=Saw 3=Square 4=S&H
+    bool  lfoFreeRun   = false;  // don't reset phase on noteOn
+    float lfoFadeIn    = 0.0f;   // 0–2000 ms ramp-up
     DDSPAutoSettings ddspAuto;
     juce::String presetName;  // tracks last selected preset (not a synthesis param)
 };

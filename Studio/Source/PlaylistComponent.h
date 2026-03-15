@@ -73,7 +73,7 @@ public:
     }
 
     // M11 — horizontal zoom (pixels per bar)
-    void setBarWidth(int w) { barWidth = juce::jlimit(20, 256, w); repaint(); }
+    void setBarWidth(int w) { barWidth = juce::jlimit(20, 256, w); clearWaveformCache(); repaint(); }
     int  getBarWidth() const { return barWidth; }
     int getTrackCount()   const
     {
@@ -117,13 +117,134 @@ private:
     std::vector<PlaylistClip> localDemoClips;
 
     static constexpr int headerHeight  = 24;
-    static constexpr int trackHeight   = 40;
+    static constexpr int trackHeight   = 56;
     static constexpr int trackGap      = 4;
     static constexpr int trackHeaderWidth = 80;
     static constexpr int resizeHotspot = 10; // px from right edge = resize handle
     static constexpr int autoLaneHeight = 60; // M9 — height of each automation lane
 
     int barWidth = 64;  // M11 zoom: pixels per bar (variable)
+
+    // ---------------------------------------------------------------------------
+    // Clip waveform cache — built from step/note data, invalidated on zoom change
+    // ---------------------------------------------------------------------------
+    struct WavePoint { float min; float max; };
+    using WaveCache = std::vector<WavePoint>;
+
+    // Key: (patternId, variationIdx, pixelWidth, bpmRounded)
+    mutable std::map<std::tuple<int,int,int,int>, WaveCache> waveformCache_;
+
+    void clearWaveformCache() { waveformCache_.clear(); }
+
+    // Builds a TRUE min/max waveform from pattern data.
+    //
+    // Approach: generate oversampled audio-like samples (envelope × sin oscillation)
+    // for every active step and note, mix all voices into one buffer, then downsample
+    // to pixel width by computing min/max per pixel — exactly how real DAWs render
+    // audio clip previews.
+    static WaveCache buildPatternWave(const Pattern& pat, int vi, int width, float clipBeats)
+    {
+        if (width <= 0) return {};
+        WaveCache out(width, {0.0f, 0.0f});
+
+        // Oversample factor: more samples = smoother min/max edges
+        static constexpr int kOS = 8;
+        const int N = width * kOS;
+        std::vector<float> samples(N, 0.0f);
+
+        const float spb          = (float)N / clipBeats;   // samples per beat
+        const float patternBeats = juce::jmax(0.25f, (float)pat.stepCount * 0.25f);
+        const float twoPi        = juce::MathConstants<float>::twoPi;
+
+        // ---- Drum / step channels -----------------------------------------------
+        // Each active step → decaying sinusoidal burst (visually like a drum hit)
+        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+        {
+            for (float lb = 0.0f; lb < clipBeats; lb += patternBeats)
+            {
+                for (int s = 0; s < pat.stepCount; ++s)
+                {
+                    if (!pat.variations[vi].steps[ch][s]) continue;
+                    const float beat = lb + s * 0.25f;
+                    if (beat >= clipBeats) break;
+
+                    const int sStart = juce::jlimit(0, N - 1, (int)(beat * spb));
+                    // Duration: ~0.18 beats worth of samples, min 16 samples
+                    const int sDur   = juce::jmax(16, (int)(0.18f * spb));
+                    // 5 oscillation cycles spread over the burst
+                    const float freq = twoPi * 5.0f / (float)sDur;
+
+                    for (int i = sStart; i < juce::jmin(N, sStart + sDur); ++i)
+                    {
+                        const float t   = (float)(i - sStart) / (float)sDur;
+                        const float env = (t < 0.05f)
+                            ? t / 0.05f                         // snap attack
+                            : std::exp(-(t - 0.05f) * 7.0f);   // fast decay
+                        samples[i] += env * std::sin(freq * (float)(i - sStart));
+                    }
+                }
+            }
+        }
+
+        // ---- Note (melodic) channels --------------------------------------------
+        // Each note → sustained oscillation shaped by ADSR envelope
+        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+        {
+            for (const auto& note : pat.variations[vi].notes[ch])
+            {
+                const float phase = std::fmod(note.startBeat, patternBeats);
+                for (float lb = 0.0f; lb < clipBeats; lb += patternBeats)
+                {
+                    const float beatStart = lb + phase;
+                    if (beatStart >= clipBeats) break;
+                    const float beatEnd = juce::jmin(clipBeats, beatStart + note.lengthBeats);
+
+                    const int s0  = juce::jlimit(0, N, (int)(beatStart * spb));
+                    const int s1  = juce::jlimit(0, N, (int)(beatEnd   * spb));
+                    const int dur = juce::jmax(1, s1 - s0);
+
+                    // Pitch → visible oscillation cycles (higher pitch = more cycles)
+                    const float pitchRatio = std::pow(2.0f, (note.pitch - 60) * (1.0f / 12.0f));
+                    const float cycles     = juce::jlimit(3.0f, 14.0f, 4.5f * pitchRatio);
+                    const float freq       = twoPi * cycles / (float)dur;
+
+                    for (int i = s0; i < s1; ++i)
+                    {
+                        const float t = (float)(i - s0) / (float)dur;
+                        float env;
+                        if      (t < 0.04f) env = t / 0.04f;
+                        else if (t > 0.90f) env = (1.0f - t) / 0.10f;
+                        else                env = 0.85f;
+                        samples[i] += env * note.velocity * std::sin(freq * (float)(i - s0));
+                    }
+                }
+            }
+        }
+
+        // Peak-normalise (find abs peak, normalise so loudest sample = ±1)
+        float peak = 0.0f;
+        for (float v : samples) peak = std::max(peak, std::abs(v));
+        if (peak > 1e-4f)
+        {
+            const float inv = 1.0f / peak;
+            for (float& v : samples) v *= inv;
+        }
+
+        // Downsample: compute min/max per output pixel
+        for (int px = 0; px < width; ++px)
+        {
+            float mn = 0.0f, mx = 0.0f;
+            const int s0 = px * kOS;
+            const int s1 = juce::jmin(N, s0 + kOS);
+            for (int i = s0; i < s1; ++i)
+            {
+                if (samples[i] < mn) mn = samples[i];
+                if (samples[i] > mx) mx = samples[i];
+            }
+            out[px] = { mn, mx };
+        }
+        return out;
+    }
 
     // Snap
     int snapDivisor = 1;    // 1=1bar, 2=½bar, 4=¼bar, 0=free
@@ -342,99 +463,88 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
 
             if (pat != nullptr && pat->stepCount > 0)
             {
-                const int   previewX = x + 4;
-                const int   previewW = w - 8;
-                const int   previewY = ty + h - 13;
-                const float patternBeats = juce::jmax(0.25f, pat->stepCount * 0.25f);
+                const int   previewX  = x + 4;
+                const int   previewW  = w - 8;
                 const float clipBeats = juce::jmax(0.25f, clip.lengthBars * 4.0f);
-                const float previewPixelsPerBeat = (float)previewW / clipBeats;
+                const int   vi        = juce::jlimit(0, Pattern::kMaxVariations - 1, clip.variationIdx);
 
-                const int titleH = 12;
-                const int notePreviewY = ty + titleH + 3;
-                const int notePreviewBottom = previewY - 2;
-                const int notePreviewH = juce::jmax(0, notePreviewBottom - notePreviewY);
-
-                const int vi = juce::jlimit(0, Pattern::kMaxVariations - 1, clip.variationIdx);
-                int minPitch = 127;
-                int maxPitch = 0;
-                bool hasNotes = false;
-                for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+                // ---- Unified waveform — full clip body below title --------------
+                // All voices (steps + notes, all channels) are additively combined
+                // into a single normalised min/max waveform.
                 {
-                    for (const auto& note : pat->variations[vi].notes[ch])
+                    const auto cacheKey = std::make_tuple(clip.patternId, vi, previewW);
+                    auto it = waveformCache_.find(cacheKey);
+                    if (it == waveformCache_.end())
                     {
-                        minPitch = juce::jmin(minPitch, note.pitch);
-                        maxPitch = juce::jmax(maxPitch, note.pitch);
-                        hasNotes = true;
+                        waveformCache_[cacheKey] = buildPatternWave(*pat, vi, previewW, clipBeats);
+                        it = waveformCache_.find(cacheKey);
                     }
-                }
+                    const auto& wave = it->second;
 
-                if (hasNotes && notePreviewH >= 4)
-                {
-                    g.setColour(juce::Colours::white.withAlpha(0.05f));
-                    g.drawRect(previewX, notePreviewY, previewW, notePreviewH, 1);
+                    // Waveform area: full clip body, below the title row
+                    static constexpr int kTitleH = 14;  // height reserved for clip name
+                    const int   waveY    = ty + kTitleH + 2;
+                    const int   waveBot  = ty + h - 3;
+                    const int   waveH    = juce::jmax(4, waveBot - waveY);
+                    const float centerY  = (float)waveY + (float)waveH * 0.5f;
+                    const float halfH    = (float)waveH * 0.5f - 1.0f;
 
-                    if (clipBeats > patternBeats)
+                    // === Centre line (midline) ===
+                    // Visible axis: always drawn, indicates ±0 baseline
+                    g.setColour(fill.brighter(0.5f).withAlpha(0.40f));
+                    g.drawHorizontalLine((int)std::round(centerY),
+                                        (float)previewX, (float)(previewX + previewW));
+
+                    // === Waveform — true min/max per-pixel rendering ===
+                    // wave[px].min is negative (below centre), .max is positive (above centre).
+                    // y1 maps .max above centerY, y2 maps .min below centerY.
+                    for (int px = 0; px < previewW && px < (int)wave.size(); ++px)
                     {
-                        g.setColour(juce::Colours::white.withAlpha(0.06f));
-                        for (float loopBeat = patternBeats; loopBeat < clipBeats; loopBeat += patternBeats)
+                        const float wMax = wave[px].max;  // 0..+1
+                        const float wMin = wave[px].min;  // -1..0
+
+                        // Peak-to-peak half-amplitude for brightness decisions
+                        const float amp = (wMax - wMin) * 0.5f;  // 0..1
+                        if (amp < 0.012f) continue;
+
+                        // Map to pixel space: positive values go UP, negative DOWN
+                        const float y1 = centerY - wMax * halfH;   // top of line
+                        const float y2 = centerY - wMin * halfH;   // bottom of line
+                        const float fx = (float)(previewX + px);
+
+                        // Layer 1 — outer glow (strong transients only)
+                        if (amp > 0.38f)
                         {
-                            const int loopX = previewX + (int)std::round(loopBeat * previewPixelsPerBeat);
-                            g.drawVerticalLine(loopX, (float)notePreviewY, (float)(notePreviewY + notePreviewH));
+                            const float ga = (amp - 0.38f) / 0.62f * 0.20f;
+                            g.setColour(fill.brighter(2.6f).withAlpha(ga));
+                            g.fillRect(fx - 0.5f, y1 - 1.0f, 2.0f, (y2 - y1) + 2.0f);
                         }
-                    }
 
-                    const int pitchRange = juce::jmax(1, maxPitch - minPitch);
-                    for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
-                    {
-                        for (const auto& note : pat->variations[vi].notes[ch])
+                        // Layer 2 — mid halo body
+                        if (amp > 0.16f)
                         {
-                            const float notePhase = std::fmod(note.startBeat, patternBeats);
-                            const float relPitch = (float)(note.pitch - minPitch) / (float)pitchRange;
-                            const int ny = notePreviewY
-                                         + (int)std::round((1.0f - relPitch) * (float)juce::jmax(0, notePreviewH - 3));
-
-                            for (float loopBeat = 0.0f; loopBeat < clipBeats; loopBeat += patternBeats)
-                            {
-                                const float noteStartBeat = loopBeat + notePhase;
-                                const float noteEndBeat = noteStartBeat + note.lengthBeats;
-                                if (noteStartBeat >= clipBeats)
-                                    break;
-
-                                const float visibleStartBeat = juce::jmax(0.0f, noteStartBeat);
-                                const float visibleEndBeat = juce::jmin(clipBeats, noteEndBeat);
-                                if (visibleEndBeat <= visibleStartBeat)
-                                    continue;
-
-                                const int nx = previewX + (int)std::floor(visibleStartBeat * previewPixelsPerBeat);
-                                const int nw = juce::jmax(2, (int)std::ceil((visibleEndBeat - visibleStartBeat) * previewPixelsPerBeat));
-
-                                g.setColour(fill.brighter(0.95f).withAlpha(0.45f + 0.35f * note.velocity));
-                                g.fillRoundedRectangle((float)nx, (float)ny, (float)nw, 3.0f, 1.5f);
-                            }
+                            const float ha = juce::jmap(amp, 0.16f, 1.0f, 0.09f, 0.26f);
+                            g.setColour(fill.brighter(1.9f).withAlpha(ha));
+                            g.fillRect(fx - 0.5f, y1, 2.0f, y2 - y1);
                         }
+
+                        // Layer 3 — core line: brightness & opacity scale with amplitude
+                        const float coreAlpha  = 0.55f + amp * 0.45f;
+                        const float brightness = 0.55f + amp * 1.30f;
+                        g.setColour(fill.brighter(brightness).withAlpha(coreAlpha));
+                        g.drawVerticalLine(previewX + px, y1, y2);
                     }
-                }
 
-                for (int ch = 0; ch < juce::jmin(3, Pattern::kMaxChannels); ++ch)
-                {
-                    const int rowY = previewY + ch * 4;
-                    for (float loopBeat = 0.0f; loopBeat < clipBeats; loopBeat += patternBeats)
+                    // Loop repeat markers (subtle vertical guides when clip > pattern length)
+                    const float patternBeats = juce::jmax(0.25f, (float)pat->stepCount * 0.25f);
+                    if (clipBeats > patternBeats + 0.01f)
                     {
-                        for (int s = 0; s < pat->stepCount; ++s)
+                        g.setColour(juce::Colours::white.withAlpha(0.08f));
+                        const float pxPerBeat = (float)previewW / clipBeats;
+                        for (float lb = patternBeats; lb < clipBeats; lb += patternBeats)
                         {
-                            if (!pat->variations[vi].steps[ch][s])
-                                continue;
-
-                            const float stepStartBeat = loopBeat + s * 0.25f;
-                            if (stepStartBeat >= clipBeats)
-                                break;
-
-                            const float stepEndBeat = juce::jmin(clipBeats, stepStartBeat + 0.25f);
-                            const int stepX = previewX + (int)std::floor(stepStartBeat * previewPixelsPerBeat);
-                            const int stepWidth = juce::jmax(1, (int)std::ceil((stepEndBeat - stepStartBeat) * previewPixelsPerBeat) - 1);
-
-                            g.setColour(fill.brighter(0.8f).withAlpha(0.85f));
-                            g.fillRect(stepX, rowY, stepWidth, 3);
+                            const int lx = previewX + (int)std::round(lb * pxPerBeat);
+                            g.drawVerticalLine(lx, (float)waveY, (float)waveBot);
                         }
                     }
                 }
