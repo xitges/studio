@@ -155,6 +155,7 @@ MainComponent::MainComponent()
 
     toolbar.onPlay = [this]
     {
+        pausedBarSong = -1.0;   // toolbar play = always from beginning
         syncPatternToEngine();
         markDirty();
         project.bpm = toolbar.getBPM();
@@ -165,6 +166,7 @@ MainComponent::MainComponent()
 
     toolbar.onStop = [this]
     {
+        pausedBarSong = -1.0;   // toolbar stop = reset to beginning
         audioEngine.stop();
         audioEngine.allSynthNotesOff();
         channelRack.setPlaybackStep(-1);
@@ -373,6 +375,7 @@ MainComponent::MainComponent()
     playlist.setProject(&project);
     playlist.onSeekToBar = [this](double bar)
     {
+        pausedBarSong = bar;    // remember this as the next resume point
         audioEngine.seekSongToBar(bar);
     };
 
@@ -2289,20 +2292,51 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    // Space — play / stop
+    // Space — pause / resume (song mode keeps position; pattern mode restarts)
     if (key == juce::KeyPress(juce::KeyPress::spaceKey))
     {
         if (audioEngine.isPlaying())
         {
-            // Commit held notes first (playheadBeat still valid), then stop engine
+            // PAUSE — check for double-Space (Space resume → Space again within 800ms = restart)
+            const juce::int64 now = juce::Time::currentTimeMillis();
+            const bool doubleSpace = lastSpaceResumeTime > 0 &&
+                                     (now - lastSpaceResumeTime) < 600;
+            lastSpaceResumeTime = 0;    // reset regardless
+
             if (pianoRollWindow != nullptr)
                 pianoRollWindow->content.pianoRoll.setRecording(false);
-            audioEngine.stop();
-            audioEngine.allSynthNotesOff();
-            channelRack.setPlaybackStep(-1);
-            playlist.setPlayheadBar(-1.0);
-            if (pianoRollWindow != nullptr)
-                pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
+
+            if (doubleSpace)
+            {
+                // Double-Space: stop and restart from the very beginning
+                pausedBarSong = -1.0;
+                audioEngine.stop();
+                audioEngine.allSynthNotesOff();
+                channelRack.setPlaybackStep(-1);
+                playlist.setPlayheadBar(-1.0);
+                if (pianoRollWindow != nullptr)
+                    pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
+                syncPatternToEngine();
+                audioEngine.play();
+                lastSpaceResumeTime = juce::Time::currentTimeMillis();
+            }
+            else if (project.playMode == PlayMode::Song)
+            {
+                // Normal pause — save position, keep playhead visible
+                pausedBarSong = audioEngine.getSongBeatPosition() / 4.0;
+                audioEngine.stop();
+                audioEngine.allSynthNotesOff();
+                playlist.setPlayheadBar(pausedBarSong);
+            }
+            else
+            {
+                pausedBarSong = -1.0;
+                audioEngine.stop();
+                audioEngine.allSynthNotesOff();
+                channelRack.setPlaybackStep(-1);
+                if (pianoRollWindow != nullptr)
+                    pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
+            }
         }
         else if (pianoRollWindow != nullptr && pianoRollWindow->isVisible())
         {
@@ -2322,12 +2356,20 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
             {
                 syncPatternToEngine();
                 audioEngine.play();
+                // Note: piano roll path is pattern-mode only, no lastSpaceResumeTime needed
             }
         }
         else
         {
+            // RESUME from paused/seeked position
             syncPatternToEngine();
             audioEngine.play();
+
+            // Song mode: seek to paused/clicked position (play() resets to 0, override it)
+            if (project.playMode == PlayMode::Song && pausedBarSong > 0.0)
+                audioEngine.seekSongToBar(pausedBarSong);
+
+            lastSpaceResumeTime = juce::Time::currentTimeMillis();  // arm double-Space detection
         }
         return true;
     }

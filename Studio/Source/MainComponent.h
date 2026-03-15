@@ -77,6 +77,12 @@ private:
     // M2 — pattern management state
     int activePatternId = 1;
 
+    // Pause/resume — saved bar position when Space-paused in Song mode (< 0 = no pause state)
+    double pausedBarSong = -1.0;
+
+    // Double-Space detection: timestamp when Space last resumed playback
+    juce::int64 lastSpaceResumeTime = 0;
+
     Pattern* findPattern(int id);
     int      nextPatternId() const;
     void     selectPattern(int id);
