@@ -138,28 +138,41 @@ private:
 
     // Builds a TRUE min/max waveform from pattern data.
     //
-    // Approach: generate oversampled audio-like samples (envelope × sin oscillation)
-    // for every active step and note, mix all voices into one buffer, then downsample
-    // to pixel width by computing min/max per pixel — exactly how real DAWs render
-    // audio clip previews.
-    static WaveCache buildPatternWave(const Pattern& pat, int vi, int width, float clipBeats)
+    // Each voice is synthesised as (ADSR envelope × sin oscillation) using the
+    // channel's actual SynthParams ADSR values so that attack, decay, sustain, and
+    // release are all visually reflected.  Notes extend into a release tail after
+    // note-off.  All voices are additively mixed, peak-normalised, then downsampled
+    // to pixel width via min/max — the same technique real DAWs use for audio clips.
+    static WaveCache buildPatternWave(const Pattern& pat, int vi, int width,
+                                      float clipBeats, double bpm = 120.0)
     {
         if (width <= 0) return {};
         WaveCache out(width, {0.0f, 0.0f});
 
-        // Oversample factor: more samples = smoother min/max edges
         static constexpr int kOS = 8;
         const int N = width * kOS;
         std::vector<float> samples(N, 0.0f);
 
-        const float spb          = (float)N / clipBeats;   // samples per beat
+        const float spb          = (float)N / clipBeats;   // oversampled-buffer samples per beat
         const float patternBeats = juce::jmax(0.25f, (float)pat.stepCount * 0.25f);
         const float twoPi        = juce::MathConstants<float>::twoPi;
 
-        // ---- Drum / step channels -----------------------------------------------
-        // Each active step → decaying sinusoidal burst (visually like a drum hit)
+        // ms → oversampled-buffer samples
+        // spb beats/s * (bpm/60 beats/s)^-1 => 1 beat = spb*(60/bpm) buf-samples
+        // 1 ms = spb * (bpm/60) / 1000 buf-samples
+        const float spm = spb * (float)(bpm / 60.0) / 1000.0f;
+
         for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
         {
+            // Use the channel's SynthParams ADSR.  Fall back to musical defaults
+            // when synth is not enabled (drums still have a characteristic shape).
+            const SynthParams& sp = pat.synthParams[(size_t)ch];
+            const float atkS = juce::jmax(1.0f, sp.attack  * spm);
+            const float decS = juce::jmax(1.0f, sp.decay   * spm);
+            const float sus  = juce::jlimit(0.0f, 1.0f, sp.sustain);
+            const float relS = juce::jmax(1.0f, sp.release * spm);
+
+            // ---- Step triggers (drum / rhythmic channels) -----------------------
             for (float lb = 0.0f; lb < clipBeats; lb += patternBeats)
             {
                 for (int s = 0; s < pat.stepCount; ++s)
@@ -168,60 +181,96 @@ private:
                     const float beat = lb + s * 0.25f;
                     if (beat >= clipBeats) break;
 
-                    const int sStart = juce::jlimit(0, N - 1, (int)(beat * spb));
-                    // Duration: ~0.18 beats worth of samples, min 16 samples
-                    const int sDur   = juce::jmax(16, (int)(0.18f * spb));
-                    // 5 oscillation cycles spread over the burst
-                    const float freq = twoPi * 5.0f / (float)sDur;
+                    const int sStart  = juce::jlimit(0, N - 1, (int)(beat * spb));
+                    // Hold for one 16th-note, then release
+                    const int holdEnd = juce::jmin(N, sStart + (int)(0.25f * spb));
+                    const int fullEnd = juce::jmin(N, holdEnd + (int)relS);
 
-                    for (int i = sStart; i < juce::jmin(N, sStart + sDur); ++i)
+                    // Oscillation: 5 cycles over attack+decay (percussive thump look)
+                    const float burstLen = juce::jmax(1.0f, atkS + decS);
+                    const float freq = twoPi * 5.0f / burstLen;
+
+                    for (int i = sStart; i < fullEnd; ++i)
                     {
-                        const float t   = (float)(i - sStart) / (float)sDur;
-                        const float env = (t < 0.05f)
-                            ? t / 0.05f                         // snap attack
-                            : std::exp(-(t - 0.05f) * 7.0f);   // fast decay
-                        samples[i] += env * std::sin(freq * (float)(i - sStart));
+                        const float ti = (float)(i - sStart);
+                        float env;
+                        if (ti < atkS)
+                        {
+                            env = ti / atkS;                            // attack
+                        }
+                        else if (ti < atkS + decS)
+                        {
+                            const float td = (ti - atkS) / decS;
+                            env = 1.0f - td * (1.0f - sus);            // decay → sustain
+                        }
+                        else if (i < holdEnd)
+                        {
+                            env = sus;                                  // sustain (held)
+                        }
+                        else
+                        {
+                            // Release after note-off: smooth exponential tail
+                            const float tr = (float)(i - holdEnd) / relS;
+                            env = sus * std::exp(-tr * 4.5f);
+                        }
+                        samples[i] += env * std::sin(freq * ti);
                     }
                 }
             }
-        }
 
-        // ---- Note (melodic) channels --------------------------------------------
-        // Each note → sustained oscillation shaped by ADSR envelope
-        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
-        {
+            // ---- Note triggers (melodic channels) --------------------------------
             for (const auto& note : pat.variations[vi].notes[ch])
             {
                 const float phase = std::fmod(note.startBeat, patternBeats);
+
+                // Pitch → oscillation cycles (more cycles = higher pitch feel)
+                const float pitchRatio = std::pow(2.0f, (note.pitch - 60) * (1.0f / 12.0f));
+                const float cycles     = juce::jlimit(3.0f, 14.0f, 4.5f * pitchRatio);
+
                 for (float lb = 0.0f; lb < clipBeats; lb += patternBeats)
                 {
                     const float beatStart = lb + phase;
                     if (beatStart >= clipBeats) break;
-                    const float beatEnd = juce::jmin(clipBeats, beatStart + note.lengthBeats);
 
-                    const int s0  = juce::jlimit(0, N, (int)(beatStart * spb));
-                    const int s1  = juce::jlimit(0, N, (int)(beatEnd   * spb));
-                    const int dur = juce::jmax(1, s1 - s0);
+                    const int s0      = juce::jlimit(0, N, (int)(beatStart * spb));
+                    const float noteEndBeat = beatStart + note.lengthBeats;
+                    const int noteEnd = juce::jlimit(0, N, (int)(noteEndBeat * spb));
+                    // Release tail extends beyond note-off
+                    const int fullEnd = juce::jmin(N, noteEnd + (int)relS);
 
-                    // Pitch → visible oscillation cycles (higher pitch = more cycles)
-                    const float pitchRatio = std::pow(2.0f, (note.pitch - 60) * (1.0f / 12.0f));
-                    const float cycles     = juce::jlimit(3.0f, 14.0f, 4.5f * pitchRatio);
-                    const float freq       = twoPi * cycles / (float)dur;
+                    const float noteDur = (float)juce::jmax(1, noteEnd - s0);
+                    const float freq    = twoPi * cycles / noteDur;
 
-                    for (int i = s0; i < s1; ++i)
+                    for (int i = s0; i < fullEnd; ++i)
                     {
-                        const float t = (float)(i - s0) / (float)dur;
+                        const float ti = (float)(i - s0);
                         float env;
-                        if      (t < 0.04f) env = t / 0.04f;
-                        else if (t > 0.90f) env = (1.0f - t) / 0.10f;
-                        else                env = 0.85f;
-                        samples[i] += env * note.velocity * std::sin(freq * (float)(i - s0));
+                        if (ti < atkS)
+                        {
+                            env = ti / atkS;                            // attack
+                        }
+                        else if (ti < atkS + decS)
+                        {
+                            const float td = (ti - atkS) / decS;
+                            env = 1.0f - td * (1.0f - sus);            // decay → sustain
+                        }
+                        else if (i < noteEnd)
+                        {
+                            env = sus;                                  // sustain
+                        }
+                        else
+                        {
+                            // Release after note-off
+                            const float tr = (float)(i - noteEnd) / relS;
+                            env = sus * std::exp(-tr * 4.5f);
+                        }
+                        samples[i] += env * note.velocity * std::sin(freq * ti);
                     }
                 }
             }
         }
 
-        // Peak-normalise (find abs peak, normalise so loudest sample = ±1)
+        // Peak-normalise so the loudest sample = ±1
         float peak = 0.0f;
         for (float v : samples) peak = std::max(peak, std::abs(v));
         if (peak > 1e-4f)
@@ -230,7 +279,7 @@ private:
             for (float& v : samples) v *= inv;
         }
 
-        // Downsample: compute min/max per output pixel
+        // Downsample: per-pixel min/max
         for (int px = 0; px < width; ++px)
         {
             float mn = 0.0f, mx = 0.0f;
@@ -472,11 +521,13 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
                 // All voices (steps + notes, all channels) are additively combined
                 // into a single normalised min/max waveform.
                 {
-                    const auto cacheKey = std::make_tuple(clip.patternId, vi, previewW);
+                    const double bpm = (project != nullptr) ? project->bpm : 120.0;
+                    const int bpmRounded = (int)std::round(bpm);
+                    const auto cacheKey = std::make_tuple(clip.patternId, vi, previewW, bpmRounded);
                     auto it = waveformCache_.find(cacheKey);
                     if (it == waveformCache_.end())
                     {
-                        waveformCache_[cacheKey] = buildPatternWave(*pat, vi, previewW, clipBeats);
+                        waveformCache_[cacheKey] = buildPatternWave(*pat, vi, previewW, clipBeats, bpm);
                         it = waveformCache_.find(cacheKey);
                     }
                     const auto& wave = it->second;
