@@ -275,7 +275,8 @@ struct SynthParams
     float release      = 200.0f; // ms
     float cutoff       = 4000.0f;// Hz
     float resonance    = 0.3f;   // 0.0 – 1.0
-    int   filterType      = 0;      // 0=LP 1=HP 2=BP
+    int   filterType      = 0;      // 0=LP 1=HP 2=BP 3=Notch (for SVF)
+    int   filterMode      = 0;      // 0=Ladder 1=SVF
     float filterDrive     = 0.0f;   // 0–1 pre-filter saturation
     float filterEnvAmount = 0.5f;   // -1..+1 filter envelope depth
     float driftDepth      = 0.3f;   // 0..1 oscillator drift amount
@@ -294,40 +295,167 @@ namespace SynthPresets
 {
     struct Preset { juce::String name; SynthParams params; };
 
-    // Helper: build a SynthParams inline
-    inline SynthParams make (bool en, int wv,
-                             float atk, float dec, float sus, float rel,
-                             float co,  float res,
-                             float lfoR, float lfoD, int lfoT = 0)
+    // ---------------------------------------------------------------------------
+    // Fluent builder — lets each preset set only the fields it cares about.
+    // Unset fields keep their SynthParams defaults.
+    // ---------------------------------------------------------------------------
+    struct B
     {
-        SynthParams p;
-        p.enabled   = en;   p.waveform  = wv;
-        p.attack    = atk;  p.decay     = dec;
-        p.sustain   = sus;  p.release   = rel;
-        p.cutoff    = co;   p.resonance = res;
-        p.lfoRate   = lfoR; p.lfoDepth  = lfoD;
-        p.lfoTarget = lfoT;
-        return p;
-    }
+        SynthParams v;
+        B() { v.enabled = true; }
 
-    // Waveform codes: 0=Sine 1=Saw 2=Square 3=Triangle
+        // Oscillator
+        B& wv   (int x)                         { v.waveform      = x;              return *this; }
+        B& pw   (float x)                        { v.pulseWidth    = x;              return *this; }
+
+        // ADSR (all in ms, except sustain 0-1)
+        B& adsr (float a,float d,float s,float r){ v.attack=a; v.decay=d; v.sustain=s; v.release=r; return *this; }
+
+        // Filter  mode: 0=Ladder 1=SVF   type: 0=LP 1=HP 2=BP 3=Notch
+        B& filt (float co, float res,
+                 int mode=0, int type=0,
+                 float drive=0.0f, float env=0.5f)
+        {
+            v.cutoff=co; v.resonance=res;
+            v.filterMode=mode; v.filterType=type;
+            v.filterDrive=drive; v.filterEnvAmount=env;
+            return *this;
+        }
+
+        // LFO  wf: 0=Sine 1=Tri 2=Saw 3=Square 4=S&H   target: 0=Cutoff 1=Pitch 2=Amp 3=PW
+        B& lfo  (float rate, float depth,
+                 int target=0, int wf=0, float fadeIn=0.0f)
+        {
+            v.lfoRate=rate; v.lfoDepth=depth;
+            v.lfoTarget=target; v.lfoWaveform=wf; v.lfoFadeIn=fadeIn;
+            return *this;
+        }
+
+        // Unison
+        B& uni  (int voices, float detune=0.0f, float spread=0.5f)
+        { v.unisonVoices=voices; v.unisonDetune=detune; v.unisonSpread=spread; return *this; }
+
+        // Oscillator drift (0-1)
+        B& drift(float d) { v.driftDepth = d; return *this; }
+
+        operator SynthParams() const { return v; }
+    };
+
+    // ---------------------------------------------------------------------------
+    // Factory presets
+    //
+    // Waveform:   0=Sine  1=Saw  2=Square  3=Triangle  4=Pulse  5=Noise  6=Supersaw
+    // FilterMode: 0=Ladder (warm, non-linear)   1=SVF (clean, multimode)
+    // FilterType: 0=LP  1=HP  2=BP  3=Notch(SVF only)
+    // LFO target: 0=Cutoff  1=Pitch  2=Amplitude  3=PulseWidth
+    // ---------------------------------------------------------------------------
     inline std::vector<Preset> getAll()
     {
         return {
-            //  name              en    wv  atk    dec    sus    rel    cut    res   lfoR  lfoD  lfoT
-            { "Studio Piano",   make(true, 3,   2, 280, 0.12f,  420, 4800, 0.14f, 0.00f, 0.00f) },
-            { "Soft EP",        make(true, 0,   3, 360, 0.22f,  780, 5200, 0.08f, 0.00f, 0.00f) },
-            { "Plucked Pulse",  make(true, 2,   2, 150, 0.18f,  220, 3100, 0.28f, 5.10f, 0.02f, 1) },
-            { "Fat Bass",       make(true, 2,   2, 120, 0.76f,  260,  430, 0.46f, 0.00f, 0.00f) },
-            { "Deep Sub",       make(true, 0,   6, 180, 0.88f,  360,  260, 0.10f, 0.00f, 0.00f) },
-            { "Bright Lead",    make(true, 1,   5, 100, 0.72f,  280, 5600, 0.24f, 5.00f, 0.05f, 1) },
-            { "Mono Brass",     make(true, 2,  10, 170, 0.62f,  320, 1700, 0.40f, 4.80f, 0.02f, 0) },
-            { "Glass Bell",     make(true, 0,   1, 420, 0.00f, 1400, 7200, 0.06f, 0.00f, 0.00f) },
-            { "Bowed Pad",      make(true, 3, 220, 620, 0.84f, 2400, 2600, 0.16f, 4.40f, 0.03f, 1) },
-            { "Warm Pad",       make(true, 3, 320, 760, 0.86f, 3400, 2100, 0.10f, 0.28f, 0.08f) },
-            { "Air Pad",        make(true, 3, 520, 880, 0.90f, 4200, 3400, 0.08f, 0.24f, 0.10f) },
-            { "Chiptune Pulse", make(true, 2,   1,  40, 0.00f,   90, 9600, 0.05f, 0.00f, 0.00f) },
-        };
+
+        // ── Keys ──────────────────────────────────────────────────────────────
+        { "Studio Piano",
+          B().wv(3)                                      // Triangle — clean harmonic stack
+             .adsr(3, 300, 0.08f, 500)
+             .filt(6000, 0.10f, 1, 0, 0.0f, -0.28f)    // SVF LP, filter closes with env
+             .drift(0.22f)
+        },
+
+        { "Soft EP",
+          B().wv(0)                                      // Sine — fundamental-heavy EP tone
+             .adsr(4, 380, 0.20f, 900)
+             .filt(5500, 0.06f, 1, 0, 0.0f, -0.30f)    // SVF LP, slight filter closure
+             .lfo(5.5f, 0.015f, 2, 0, 180.0f)           // subtle amplitude tremolo fade-in
+             .drift(0.20f)
+        },
+
+        // ── Bass ──────────────────────────────────────────────────────────────
+        { "Fat Bass",
+          B().wv(2)                                      // Square — odd harmonics = fat
+             .adsr(2, 140, 0.72f, 280)
+             .filt(500, 0.58f, 0, 0, 0.30f, 0.65f)     // Ladder LP, drive + strong env sweep
+             .uni(2, 8.0f, 0.25f)                       // slight unison for width
+             .drift(0.40f)
+        },
+
+        { "Deep Sub",
+          B().wv(0)                                      // Sine — pure sub fundamental
+             .adsr(8, 200, 0.90f, 400)
+             .filt(240, 0.05f, 0, 0, 0.08f, 0.10f)     // Ladder LP, very low cutoff
+             .drift(0.15f)
+        },
+
+        // ── Lead ──────────────────────────────────────────────────────────────
+        { "Bright Lead",
+          B().wv(1)                                      // Saw — rich overtone stack
+             .adsr(4, 120, 0.68f, 300)
+             .filt(5800, 0.32f, 0, 0, 0.15f, 0.42f)    // Ladder LP, filter env adds bite
+             .lfo(5.2f, 0.05f, 1, 0, 300.0f)            // pitch vibrato with 300ms fade-in
+             .drift(0.30f)
+        },
+
+        { "Plucked Pulse",
+          B().wv(4).pw(0.28f)                           // Pulse — narrow width = bright pluck
+             .adsr(1, 120, 0.05f, 180)
+             .filt(3500, 0.38f, 0, 0, 0.10f, 0.68f)    // Ladder LP, fast filter sweep = pluck
+             .lfo(5.1f, 0.02f, 1)                        // micro pitch wobble
+             .drift(0.35f)
+        },
+
+        // ── Brass / Wind ──────────────────────────────────────────────────────
+        { "Mono Brass",
+          B().wv(2)                                      // Square — hollow brass resonance
+             .adsr(12, 180, 0.60f, 340)
+             .filt(1900, 0.48f, 0, 0, 0.22f, 0.58f)    // Ladder LP, envelope opens filter
+             .lfo(4.8f, 0.02f, 0)                        // subtle cutoff vibrato
+             .drift(0.25f)
+        },
+
+        // ── Bells / Mallet ────────────────────────────────────────────────────
+        { "Glass Bell",
+          B().wv(0)                                      // Sine — pure inharmonic shimmer
+             .adsr(1, 450, 0.00f, 1800)
+             .filt(8500, 0.04f, 1, 0, 0.0f, -0.08f)    // SVF LP, wide open, slight closure
+             .drift(0.15f)
+        },
+
+        // ── Pads ──────────────────────────────────────────────────────────────
+        { "Bowed Pad",
+          B().wv(3)                                      // Triangle — soft bowed texture
+             .adsr(250, 640, 0.82f, 2600)
+             .filt(2800, 0.18f, 1, 0, 0.0f, 0.22f)     // SVF LP, gentle env opening
+             .lfo(4.4f, 0.03f, 1, 0, 400.0f)            // slow pitch vibrato after fade-in
+             .uni(2, 4.0f, 0.50f)                       // gentle stereo widening
+             .drift(0.35f)
+        },
+
+        { "Warm Pad",
+          B().wv(6)                                      // Supersaw — dense detuned wall
+             .adsr(350, 780, 0.85f, 3800)
+             .filt(2400, 0.12f, 1, 0, 0.0f, 0.18f)     // SVF LP, slow filter bloom
+             .lfo(0.30f, 0.09f, 0)                       // very slow cutoff drift
+             .uni(4, 15.0f, 0.80f)                      // wide 4-voice unison
+             .drift(0.50f)
+        },
+
+        { "Air Pad",
+          B().wv(6)                                      // Supersaw — lush high-voice shimmer
+             .adsr(580, 900, 0.88f, 4500)
+             .filt(3800, 0.07f, 1, 0, 0.0f, 0.12f)     // SVF LP, very open
+             .lfo(0.25f, 0.10f, 2)                       // slow amplitude swell = breathing
+             .uni(6, 18.0f, 0.90f)                      // 6-voice wide unison
+             .drift(0.55f)
+        },
+
+        // ── Digital / Retro ───────────────────────────────────────────────────
+        { "Chiptune Pulse",
+          B().wv(4).pw(0.25f)                           // Pulse narrow = classic 8-bit tone
+             .adsr(1, 20, 0.90f, 60)
+             .filt(18000, 0.02f, 1, 0, 0.0f, 0.0f)     // SVF LP fully open = bypass
+             .drift(0.05f)                               // very stable, chip-accurate
+        },
+
+        }; // end preset list
     }
 
     inline std::vector<Preset> mergeFactoryAndCustom(const std::vector<Preset>& customPresets)

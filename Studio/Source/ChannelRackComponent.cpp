@@ -24,9 +24,15 @@ ChannelRackComponent::ChannelRackComponent()
     addChannelBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     addChannelBtn.onClick = [this]
     {
-        addChannel("Channel " + juce::String(channels.size() + 1));
-        resized();
-        repaint();
+        const juce::String name = "Channel " + juce::String(channels.size() + 1);
+        if (onAddChannel)
+            onAddChannel(name);   // MainComponent updates project.channelCount + all patterns
+        else
+        {
+            addChannel(name);     // fallback if no callback wired
+            resized();
+            repaint();
+        }
     };
 
     addAndMakeVisible(clearStepsBtn);

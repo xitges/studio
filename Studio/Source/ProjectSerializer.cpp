@@ -64,6 +64,7 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             chEl->setAttribute("spUnisonVoices",(int)sp.unisonVoices);
             chEl->setAttribute("spUnisonDetune",(double)sp.unisonDetune);
             chEl->setAttribute("spUnisonSpread",(double)sp.unisonSpread);
+            chEl->setAttribute("spFilterMode",       sp.filterMode);
             chEl->setAttribute("spFilterType",      sp.filterType);
             chEl->setAttribute("spFilterDrive",     (double)sp.filterDrive);
             chEl->setAttribute("spFilterEnvAmount", (double)sp.filterEnvAmount);
@@ -243,6 +244,7 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         pEl->setAttribute("unisonVoices", preset.params.unisonVoices);
         pEl->setAttribute("unisonDetune", (double)preset.params.unisonDetune);
         pEl->setAttribute("unisonSpread", (double)preset.params.unisonSpread);
+        pEl->setAttribute("filterMode",       preset.params.filterMode);
         pEl->setAttribute("filterType",      preset.params.filterType);
         pEl->setAttribute("filterDrive",     (double)preset.params.filterDrive);
         pEl->setAttribute("filterEnvAmount", (double)preset.params.filterEnvAmount);
@@ -323,6 +325,7 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 sp.unisonVoices= chEl->getIntAttribute("spUnisonVoices", 1);
                 sp.unisonDetune= (float)chEl->getDoubleAttribute("spUnisonDetune", 0.0);
                 sp.unisonSpread= (float)chEl->getDoubleAttribute("spUnisonSpread", 0.5);
+                sp.filterMode        = chEl->getIntAttribute("spFilterMode",  0);
                 sp.filterType        = chEl->getIntAttribute("spFilterType",  0);
                 sp.filterDrive       = (float)chEl->getDoubleAttribute("spFilterDrive", 0.0);
                 sp.filterEnvAmount   = (float)chEl->getDoubleAttribute("spFilterEnvAmount", 0.5);
@@ -655,6 +658,7 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
             preset.params.unisonVoices = pEl->getIntAttribute("unisonVoices", 1);
             preset.params.unisonDetune = (float)pEl->getDoubleAttribute("unisonDetune", 0.0);
             preset.params.unisonSpread = (float)pEl->getDoubleAttribute("unisonSpread", 0.5);
+            preset.params.filterMode      = pEl->getIntAttribute("filterMode",      0);
             preset.params.filterType      = pEl->getIntAttribute("filterType",      0);
             preset.params.filterDrive     = (float)pEl->getDoubleAttribute("filterDrive",     0.0);
             preset.params.filterEnvAmount = (float)pEl->getDoubleAttribute("filterEnvAmount", 0.5);

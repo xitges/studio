@@ -388,6 +388,10 @@ MainComponent::MainComponent()
     {
         audioEngine.previewBrowserFile(f);
     };
+    sampleBrowser.onStopPreview = [this]
+    {
+        audioEngine.stopBrowserPreview();
+    };
     browserViewport.setViewedComponent(&sampleBrowser, false);
     browserViewport.setScrollBarsShown(true, false);
     browserViewport.setScrollBarThickness(6);
@@ -1291,6 +1295,46 @@ MainComponent::MainComponent()
                 markDirty(); return true;
             }
         ));
+    };
+
+    channelRack.onAddChannel = [this](const juce::String& name)
+    {
+        if (project.channelCount >= Pattern::kMaxChannels) return;
+
+        // Save current rack state before expanding
+        if (auto* pat = findPattern(activePatternId))
+            channelRack.saveToPattern(*pat);
+
+        const int newCh = project.channelCount;
+        project.channelCount++;
+
+        // Initialise the new slot in every pattern
+        for (auto& pat : project.patterns)
+        {
+            pat.channelNames[newCh]        = name;
+            pat.channelTypes[newCh]        = ChannelType::Drum;
+            pat.samplePaths[newCh]         = {};
+            pat.synthParams[newCh]         = SynthParams{};
+            pat.channelMixerRouting[newCh] = newCh % 8;
+            pat.channelVolume[newCh]       = 0.8f;
+            pat.channelPan[newCh]          = 0.0f;
+            pat.channelPitch[newCh]        = 0.0f;
+            for (int v = 0; v < Pattern::kMaxVariations; ++v)
+            {
+                for (int st = 0; st < Pattern::kMaxSteps; ++st)
+                    pat.variations[v].steps[newCh][st] = false;
+                pat.variations[v].notes[newCh].clear();
+            }
+        }
+
+        // Rebuild rack UI and refresh snapshot
+        if (auto* activePat = findPattern(activePatternId))
+        {
+            channelRack.resetToChannelCount(project.channelCount, activePat->channelNames);
+            channelRack.loadPattern(*activePat);
+        }
+        audioEngine.updatePatternSnapshot();
+        markDirty();
     };
 
     channelRack.onDeleteChannel = [this](int ch)

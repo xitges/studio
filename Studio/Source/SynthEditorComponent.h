@@ -428,6 +428,31 @@ public:
         makeLabel(pulseWidthLbl, "Pulse Width");
 
         // Filter extras
+        // Filter mode selector (Ladder / SVF)
+        filterModeBox.addItem("Ladder", 1);
+        filterModeBox.addItem("SVF",    2);
+        filterModeBox.setSelectedId(1, juce::dontSendNotification);
+        filterModeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff16213e));
+        filterModeBox.setColour(juce::ComboBox::textColourId,       juce::Colour(0xffb0b0d8));
+        filterModeBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xff3498db).withAlpha(0.6f));
+        filterModeBox.onChange = [this]
+        {
+            // SVF exposes Notch; Ladder does not
+            const bool isSVF = (filterModeBox.getSelectedId() == 2);
+            filterTypeBox.clear(juce::dontSendNotification);
+            filterTypeBox.addItem("Low-pass",  1);
+            filterTypeBox.addItem("High-pass", 2);
+            filterTypeBox.addItem("Band-pass", 3);
+            if (isSVF) filterTypeBox.addItem("Notch", 4);
+            // Clamp selection if Notch was active and mode switched back to Ladder
+            if (!isSVF && filterTypeBox.getSelectedId() == 0)
+                filterTypeBox.setSelectedId(1, juce::dontSendNotification);
+            notify();
+        };
+        addAndMakeVisible(filterModeBox);
+        makeLabel(filterModeLbl, "Engine");
+
+        // Filter topology selector (LP / HP / BP / Notch)
         filterTypeBox.addItem("Low-pass",  1);
         filterTypeBox.addItem("High-pass", 2);
         filterTypeBox.addItem("Band-pass", 3);
@@ -437,7 +462,7 @@ public:
         filterTypeBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xff3498db).withAlpha(0.6f));
         filterTypeBox.onChange = [this] { notify(); };
         addAndMakeVisible(filterTypeBox);
-        makeLabel(filterTypeLbl, "Filter Type");
+        makeLabel(filterTypeLbl, "Topology");
 
         makeSlider(filterDriveSl, 0.0, 1.0, 0.01, 0.0); filterDriveSl.onValueChange = [this] { notify(); };
         makeLabel(filterDriveLbl, "Drive");
@@ -511,6 +536,16 @@ public:
         releaseSl.setValue(p.release,   juce::dontSendNotification);
         cutoffSl.setValue   (p.cutoff,    juce::dontSendNotification);
         resonanceSl.setValue(p.resonance, juce::dontSendNotification);
+        // Load filter mode first so the filterTypeBox item list is correct
+        filterModeBox.setSelectedId(p.filterMode + 1, juce::dontSendNotification);
+        {
+            const bool isSVF = (p.filterMode == 1);
+            filterTypeBox.clear(juce::dontSendNotification);
+            filterTypeBox.addItem("Low-pass",  1);
+            filterTypeBox.addItem("High-pass", 2);
+            filterTypeBox.addItem("Band-pass", 3);
+            if (isSVF) filterTypeBox.addItem("Notch", 4);
+        }
         filterTypeBox.setSelectedId(p.filterType + 1, juce::dontSendNotification);
         filterDriveSl.setValue(p.filterDrive, juce::dontSendNotification);
         filterEnvAmountSl.setValue(p.filterEnvAmount, juce::dontSendNotification);
@@ -542,6 +577,7 @@ public:
         p.release      = (float)releaseSl.getValue();
         p.cutoff       = (float)cutoffSl.getValue();
         p.resonance    = (float)resonanceSl.getValue();
+        p.filterMode        = filterModeBox.getSelectedId() - 1;
         p.filterType        = filterTypeBox.getSelectedId() - 1;
         p.filterDrive       = (float)filterDriveSl.getValue();
         p.filterEnvAmount   = (float)filterEnvAmountSl.getValue();
@@ -689,8 +725,10 @@ public:
         area.removeFromTop(kHdrH + kGap);
         {
             auto row = area.removeFromTop(kSlH);
-            filterTypeLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
-            filterTypeBox.setBounds(slX, row.getY(), 110, kSlH);
+            filterModeLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
+            filterModeBox.setBounds(slX, row.getY(), 84, kSlH);
+            filterTypeLbl.setBounds(slX + 90, row.getY() + (kSlH - 14) / 2, 56, 14);
+            filterTypeBox.setBounds(slX + 150, row.getY(), 110, kSlH);
             area.removeFromTop(kGap);
         }
         placeSliderRow(cutoffLbl,     cutoffSl,     slW);
@@ -820,6 +858,8 @@ private:
     juce::Label    pulseWidthLbl;
 
     // Filter extras
+    juce::ComboBox filterModeBox;
+    juce::Label    filterModeLbl;
     juce::ComboBox filterTypeBox;
     juce::Label    filterTypeLbl;
     juce::Slider   filterDriveSl;

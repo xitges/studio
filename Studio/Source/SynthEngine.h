@@ -187,6 +187,10 @@ public:
     virtual float process(float input)      = 0;
     virtual void setCutoff(float cutoffHz)  = 0;
     virtual void setResonance(float res)    = 0;
+
+    // Optional topology selector — only meaningful for SVF.
+    // 0=LP 1=HP 2=BP 3=Notch  (matches SynthParams::filterType)
+    virtual void setMode(int /*mode*/) {}
 };
 
 // ---------------------------------------------------------------------------
@@ -262,6 +266,114 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// SVF output topology selector
+// ---------------------------------------------------------------------------
+enum class SVFMode { LowPass = 0, HighPass = 1, BandPass = 2, Notch = 3 };
+
+// ---------------------------------------------------------------------------
+// Zero-Delay Feedback State Variable Filter (ZDF SVF)
+//
+// Based on Zavalishin "The Art of VA Filter Design" (2018), Ch. 4.
+// Computes LP, HP, BP and Notch outputs simultaneously from two integrator
+// states (ic1eq, ic2eq).  All four outputs are available every sample;
+// the active one is selected by SVFMode.
+//
+// Characteristics:
+//  - Linear phase, clean transient response (unlike the Ladder)
+//  - Resonance via damping coefficient k = 1/Q
+//  - Q = 0.5 + resonance * 10  →  k [2.0 … 0.095]
+//  - Unconditionally stable under ZDF formulation
+//  - No saturation — intentionally clean; drive the input externally
+// ---------------------------------------------------------------------------
+class SVFFilter final : public IFilter
+{
+public:
+    // --- IFilter interface --------------------------------------------------
+
+    void setMode(int mode) override
+    {
+        mode_ = static_cast<SVFMode>(juce::jlimit(0, 3, mode));
+    }
+
+    void prepare(double sr) override
+    {
+        sampleRate_ = sr;
+        // Recompute g with new sample rate using last known cutoff
+        const float fc = juce::jlimit(20.0f, (float)(sampleRate_ * 0.499), lastCutoff_);
+        g_ = std::tan(juce::MathConstants<float>::pi * fc / (float)sampleRate_);
+    }
+
+    void reset() override
+    {
+        ic1eq_ = ic2eq_ = 0.0f;
+    }
+
+    void setCutoff(float hz) override
+    {
+        // g = tan(pi * fc / sr)  — prewarped angular frequency
+        lastCutoff_ = hz;
+        const float fc = juce::jlimit(20.0f, (float)(sampleRate_ * 0.499), hz);
+        g_ = std::tan(juce::MathConstants<float>::pi * fc / (float)sampleRate_);
+    }
+
+    void setResonance(float res) override
+    {
+        // Map normalised resonance [0..1] to Q [0.5 .. 10.5] → k = 1/Q
+        // k = 2 (fully damped) .. k ≈ 0.095 (near self-oscillation)
+        const float Q = 0.5f + juce::jlimit(0.0f, 1.0f, res) * 10.0f;
+        k_ = 1.0f / Q;
+    }
+
+    float process(float x) override
+    {
+        // ZDF SVF core — Zavalishin "The Art of VA Filter Design" (2018) §4.4
+        //
+        //   v1 = (g*(x - ic2eq) + ic1eq) / (1 + g*(g+k))
+        //   v2 = ic2eq + g*v1
+        //   ic1eq = 2*v1 - ic1eq
+        //   ic2eq = 2*v2 - ic2eq
+        //
+        // LP=v2, BP=v1, HP=x-k*v1-v2, Notch=LP+HP
+
+        const float denom = 1.0f + g_ * (g_ + k_);
+
+        // Guard against degenerate denominator (should never happen with ZDF
+        // but prevents NaN if sample rate or cutoff are temporarily invalid)
+        if (denom < 1.0e-10f) return x;
+
+        const float v1 = (g_ * (x - ic2eq_) + ic1eq_) / denom;
+        const float v2 = ic2eq_ + g_ * v1;
+
+        // Update integrator states (trapezoidal rule)
+        ic1eq_ = 2.0f * v1 - ic1eq_;
+        ic2eq_ = 2.0f * v2 - ic2eq_;
+
+        // Flush denormals — sustained silence would otherwise accumulate FP work
+        ic1eq_ += 1.0e-20f;
+        ic2eq_ += 1.0e-20f;
+
+        // Route to selected output
+        switch (mode_)
+        {
+            case SVFMode::LowPass:  return v2;
+            case SVFMode::HighPass: return x - k_ * v1 - v2;
+            case SVFMode::BandPass: return v1;
+            case SVFMode::Notch:    return v2 + (x - k_ * v1 - v2);  // LP + HP
+        }
+        return v2; // default LP
+    }
+
+private:
+    double  sampleRate_ = 44100.0;
+    float   g_          = 0.0f;              // tan(pi*fc/sr)
+    float   k_          = 1.0f;              // damping = 1/Q
+    float   lastCutoff_ = 1000.0f;           // cached for prepare() recompute
+    float   ic1eq_      = 0.0f;              // integrator state 1
+    float   ic2eq_      = 0.0f;              // integrator state 2
+    SVFMode mode_       = SVFMode::LowPass;
+};
+
+// ---------------------------------------------------------------------------
 // Filter factory — returns a new instance for the given mode.
 // Falls back to Ladder if mode is not yet implemented.
 // ---------------------------------------------------------------------------
@@ -270,7 +382,7 @@ inline std::unique_ptr<IFilter> createFilter(FilterMode mode)
     switch (mode)
     {
         case FilterMode::Ladder:  return std::make_unique<LadderFilter>();
-        case FilterMode::SVF:     return std::make_unique<LadderFilter>(); // placeholder
+        case FilterMode::SVF:     return std::make_unique<SVFFilter>();
         case FilterMode::Diode:   return std::make_unique<LadderFilter>(); // placeholder
     }
     return std::make_unique<LadderFilter>();
@@ -382,20 +494,24 @@ public:
         noteLenRemaining_ = noteLenSamples;
 
         // Create or reset filter instances
-        // (allocation happens on note-on, not in the audio loop)
-        if (filterL_ == nullptr || filterR_ == nullptr)
+        // (allocation on note-on, never in the audio loop)
+        const FilterMode wantedMode = (params_.filterMode == 1) ? FilterMode::SVF
+                                                                 : FilterMode::Ladder;
+        // Recreate if mode changed (e.g. user switched Ladder ↔ SVF between notes)
+        const bool wrongType = (filterL_ == nullptr)
+            || (wantedMode == FilterMode::SVF   && dynamic_cast<SVFFilter*>   (filterL_.get()) == nullptr)
+            || (wantedMode == FilterMode::Ladder && dynamic_cast<LadderFilter*>(filterL_.get()) == nullptr);
+
+        if (wrongType)
         {
-            filterL_ = createFilter(FilterMode::Ladder);
-            filterR_ = createFilter(FilterMode::Ladder);
-            filterL_->prepare(sr);
-            filterR_->prepare(sr);
+            filterL_ = createFilter(wantedMode);
+            filterR_ = createFilter(wantedMode);
         }
-        else
-        {
-            // Re-prepare in case sample rate changed
-            filterL_->prepare(sr);
-            filterR_->prepare(sr);
-        }
+        filterL_->prepare(sr);
+        filterR_->prepare(sr);
+        // Topology (LP/HP/BP/Notch) — meaningful for SVF, no-op for Ladder
+        filterL_->setMode(params_.filterType);
+        filterR_->setMode(params_.filterType);
         filterL_->setCutoff(params_.cutoff);
         filterL_->setResonance(params_.resonance);
         filterR_->setCutoff(params_.cutoff);
@@ -437,10 +553,11 @@ public:
     {
         if (envState_ == Env::Idle && residualFadeRemaining_ <= 0) return;
 
-        // Biquad coefficients — only used for HP/BP (filterType 1,2).
-        // LP (filterType 0) is handled by the Ladder filter.
+        // Biquad coefficients — only used when Ladder mode + HP/BP (filterType 1,2).
+        // SVF handles all topologies internally; Ladder is LP-only.
         float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
-        if (params_.filterType != 0)
+        const bool useBiquad = (params_.filterMode == 0 && params_.filterType != 0);
+        if (useBiquad)
             computeFilter(params_.cutoff, params_.resonance, params_.filterType, sr, b0, b1, b2, a1, a2);
 
         const double lfoInc = params_.lfoRate / sr;
@@ -566,15 +683,18 @@ public:
                                                          * (0.92f + (1.0f - envOpen) * 0.08f));
                 resonanceSmoothed_ = SynthVoicing::smoothValue(resonanceSmoothed_, resonanceTarget, 0.989f);
 
-                // LP → Ladder (audio-rate cutoff/resonance update); HP/BP → biquad
-                if (params_.filterType == 0 && filterL_ != nullptr)
+                // Update IFilter (Ladder LP or SVF all-topologies)
+                const bool useIFilter = (filterL_ != nullptr)
+                    && (params_.filterMode == 1 || params_.filterType == 0);
+
+                if (useIFilter)
                 {
                     filterL_->setCutoff(cutoffSmoothed_);
                     filterL_->setResonance(resonanceSmoothed_);
                     filterR_->setCutoff(cutoffSmoothed_);
                     filterR_->setResonance(resonanceSmoothed_);
                 }
-                else if (params_.filterType != 0)
+                else if (useBiquad)
                 {
                     computeFilter(cutoffSmoothed_, resonanceSmoothed_, params_.filterType, sr, b0, b1, b2, a1, a2);
                 }
@@ -642,17 +762,18 @@ public:
                 const float sampleL = SynthVoicing::softClip(rawSampleL * harmonicDrive * transientDrive * driveGain) * envVelGain;
                 const float sampleR = SynthVoicing::softClip(rawSampleR * harmonicDrive * transientDrive * driveGain) * envVelGain;
 
-                // --- Filter: Ladder (LP) or biquad (HP/BP) ---
+                // --- Filter routing ---
+                // IFilter path: Moog Ladder (LP) or SVF (LP/HP/BP/Notch)
+                // Biquad path:  Ladder mode + HP/BP only (legacy, will be removed when SVF is used)
                 float filteredL, filteredR;
-                if (params_.filterType == 0 && filterL_ != nullptr)
+                if (useIFilter)
                 {
-                    // Moog ZDF Ladder — non-linear 4-pole LP, no extra resonance boost needed
                     filteredL = filterL_->process(sampleL);
                     filteredR = filterR_->process(sampleR);
                 }
                 else
                 {
-                    // RBJ biquad for HP/BP
+                    // RBJ biquad — Ladder mode HP/BP only
                     const float resonanceBoost = 1.0f + resonanceSmoothed_ * 0.30f;
                     filteredL = SynthVoicing::softClip((b0 * sampleL + z1L_) * resonanceBoost);
                     z1L_ = b1 * sampleL - a1 * filteredL + z2L_;

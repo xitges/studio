@@ -220,6 +220,7 @@ public:
 
     // M15 — preview a file from the sample browser (dedicated player, no channel affected)
     void previewBrowserFile(const juce::File& f);
+    void stopBrowserPreview();   // immediately stops the browser preview player
 
     // M10 — Offline render to WAV file
     // Temporarily removes the real-time audio callback to avoid thread conflicts.

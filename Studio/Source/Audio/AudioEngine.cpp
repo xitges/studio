@@ -620,6 +620,11 @@ void AudioEngine::previewBrowserFile(const juce::File& f)
     browserPreviewPlayer.trigger();
 }
 
+void AudioEngine::stopBrowserPreview()
+{
+    browserPreviewPlayer.reset();
+}
+
 void AudioEngine::previewSynthNote(int ch, int midiPitch, const SynthParams& p)
 {
     if (ch < 0 || ch >= 16) return;
@@ -812,8 +817,12 @@ void AudioEngine::triggerChannel(int channelIndex, int offsetInBuffer)
                                                    : sampleChannelVolume_[(size_t)channelIndex].load(std::memory_order_relaxed);
     const float pan = (trigSnap.patternId >= 0) ? trigSnap.channelPan[(size_t)channelIndex]
                                                 : sampleChannelPan_[(size_t)channelIndex].load(std::memory_order_relaxed);
-    const float pitch = channelBasePitch[(size_t)channelIndex].load(std::memory_order_relaxed)
-                      + ((trigSnap.patternId >= 0) ? trigSnap.channelPitch[(size_t)channelIndex] : 0.0f);
+    // channelBasePitch is the realtime pitch-slider value (semitones).
+    // trigSnap.channelPitch is the same value snapshotted into the pattern.
+    // Use the snapshot when a pattern is active to avoid doubling.
+    const float pitch = (trigSnap.patternId >= 0)
+                          ? trigSnap.channelPitch[(size_t)channelIndex]
+                          : channelBasePitch[(size_t)channelIndex].load(std::memory_order_relaxed);
     const int mixerTrack = (trigSnap.patternId >= 0) ? juce::jlimit(0, 7, trigSnap.channelMixerRouting[(size_t)channelIndex]) : 0;
     auto sourceBuffer = getChannelSourceBufferShared(channelIndex);
     scheduleSampleTrigger(channelIndex, offsetInBuffer, mixerTrack, sourceBuffer.get(), sourceBuffer,
@@ -1534,7 +1543,7 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                 if (useSynth)
                 {
                     const int midiPitch = juce::jlimit(0, 127,
-                        60 + (int)std::round(channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + pattern->channelPitch[ch]));
+                        60 + (int)std::round(pattern->channelPitch[ch]));
                     const int noteLenSamples = juce::jmax(1, (int)(0.25 * samplesPerBeat));
                     const auto noteParams = makeNoteSynthParams(pattern->synthParams[(size_t)ch],
                                                                 midiPitch, 0.8f, noteLenSamples);
@@ -1552,7 +1561,7 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                     scheduleSampleTrigger(ch, offsetInBuf, juce::jlimit(0, 7, pattern->channelMixerRouting[ch]), songBuffer.get(), songBuffer,
                                           songChannelVolume_[(size_t)ch] * stepFadeGain,
                                           songChannelPan_[(size_t)ch],
-                                          channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + pattern->channelPitch[ch],
+                                          pattern->channelPitch[ch],
                                           (float)(currentBpm / juce::jmax(1.0, runtime.projectBpm)));
                 }
             }
@@ -1669,10 +1678,14 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
         stagingBuf.clear();
 
         const bool usePlugin = (instrumentPlugins[(size_t)ch] != nullptr);
-        const bool useSynth  = (playMode != PlayMode::Song)
-                            && (polySynths[(size_t)ch].isAnyActive()
-                                || ((mixSnap.patternId >= 0)
-                                    && mixSnap.synthParams[(size_t)ch].enabled));
+        // Render synth voices whenever active (song mode triggers noteOn in
+        // processSongMode, so isAnyActive() is the correct gate there).
+        // In pattern mode also render when the synth is marked enabled so
+        // the channel produces audio even before the first note is triggered.
+        const bool useSynth = polySynths[(size_t)ch].isAnyActive()
+                           || (playMode != PlayMode::Song
+                               && mixSnap.patternId >= 0
+                               && mixSnap.synthParams[(size_t)ch].enabled);
 
         if (usePlugin)
         {

@@ -70,6 +70,7 @@ public:
     std::function<void(int ch, ChannelType)>  onChannelTypeChanged; // M3
     std::function<void(int ch)>               onOpenSynthEditor;    // M13
     std::function<void(int ch)>               onDeleteChannel;      // delete channel
+    std::function<void(const juce::String&)>  onAddChannel;         // add new channel
     std::function<int()>                      getCurrentStep;
 
     // M8 — VST/AU plugin actions
