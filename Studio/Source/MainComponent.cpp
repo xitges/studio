@@ -1068,14 +1068,56 @@ MainComponent::MainComponent()
             auto* pat = findPattern(activePatternId);
             refreshSynthEditorPresetList(pat != nullptr ? pat->synthParams[(size_t)ch].presetName : juce::String{});
             if (pat != nullptr)
+            {
+                // One-time migration: if this Sampler channel still carries the
+                // generic synth defaults, upgrade to neutral sampler params so the
+                // sample plays cleanly and the snapshot reflects the correction.
+                if (pat->channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler
+                    && looksLikeUntouchedSynthDefaults(pat->synthParams[(size_t)ch]))
+                {
+                    pat->synthParams[(size_t)ch] = samplerNeutralSynthParams();
+                    audioEngine.updatePatternSnapshot();
+                    markDirty();
+                }
+
                 synthEditorWindow->panel.loadParams(pat->synthParams[(size_t)ch]);
+                synthEditorWindow->panel.loadSamplerData(pat->channelSourceTypes[(size_t)ch],
+                                                        pat->samplerParams[(size_t)ch]);
+                // Provide the sample buffer so the editor can render a waveform preview.
+                if (pat->channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler)
+                    synthEditorWindow->panel.setSamplerPreviewBuffer(
+                        audioEngine.getSamplerSourceBuffer(ch));
+                else
+                    synthEditorWindow->panel.setSamplerPreviewBuffer(nullptr);
+            }
         }
 
         synthEditorWindow->panel.onParamsChanged = [this, ch]
         {
             if (auto* pat = findPattern(activePatternId))
+            {
                 synthEditorWindow->panel.applyToParams(pat->synthParams[(size_t)ch]);
-            audioEngine.updatePatternSnapshot();  // keep snapshot in sync for real-time modulation
+                pat->channelSourceTypes[(size_t)ch] = synthEditorWindow->panel.getSourceType();
+                pat->samplerParams     [(size_t)ch] = synthEditorWindow->panel.getSamplerParams();
+
+                // If source type is Sampler and a path is set, load the buffer
+                if (pat->channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler)
+                {
+                    const juce::String path = pat->samplerParams[(size_t)ch].samplePath;
+                    if (path.isNotEmpty())
+                    {
+                        audioEngine.loadSamplerSource(ch, juce::File(path));
+                        // Feed the loaded buffer to the editor so it can render a live preview.
+                        synthEditorWindow->panel.setSamplerPreviewBuffer(
+                            audioEngine.getSamplerSourceBuffer(ch));
+                    }
+                    else
+                    {
+                        synthEditorWindow->panel.setSamplerPreviewBuffer(nullptr);
+                    }
+                }
+            }
+            audioEngine.updatePatternSnapshot();
             markDirty();
         };
         synthEditorWindow->panel.onPreviewRequested = [this, ch](const SynthParams& params, int midiPitch)
@@ -1315,6 +1357,8 @@ MainComponent::MainComponent()
             pat.channelTypes[newCh]        = ChannelType::Drum;
             pat.samplePaths[newCh]         = {};
             pat.synthParams[newCh]         = SynthParams{};
+            pat.channelSourceTypes[newCh]  = ChannelSourceType::Synth;
+            pat.samplerParams[newCh]       = SamplerParams{};
             pat.channelMixerRouting[newCh] = newCh % 8;
             pat.channelVolume[newCh]       = 0.8f;
             pat.channelPan[newCh]          = 0.0f;
@@ -1349,24 +1393,28 @@ MainComponent::MainComponent()
         struct ChSnap
         {
             struct VarData { bool steps[Pattern::kMaxSteps] = {}; std::vector<NoteEvent> notes; };
-            juce::String name;
-            ChannelType  type       = ChannelType::Drum;
-            juce::String samplePath;
-            SynthParams  synthParams;
-            int          mixerRoute = 0;
-            float        volume = 0.8f, pan = 0.0f, pitch = 0.0f;
-            VarData      varData[Pattern::kMaxVariations];
+            juce::String      name;
+            ChannelType       type             = ChannelType::Drum;
+            juce::String      samplePath;
+            SynthParams       synthParams;
+            ChannelSourceType sourceType       = ChannelSourceType::Synth;
+            SamplerParams     samplerParams;
+            int               mixerRoute       = 0;
+            float             volume = 0.8f, pan = 0.0f, pitch = 0.0f;
+            VarData           varData[Pattern::kMaxVariations];
         };
 
         auto snap = std::make_shared<std::vector<ChSnap>>();
         for (auto& pat : project.patterns)
         {
             ChSnap s;
-            s.name        = pat.channelNames[ch];
-            s.type        = pat.channelTypes[ch];
-            s.samplePath  = pat.samplePaths[ch];
-            s.synthParams = pat.synthParams[ch];
-            s.mixerRoute  = pat.channelMixerRouting[ch];
+            s.name          = pat.channelNames[ch];
+            s.type          = pat.channelTypes[ch];
+            s.samplePath    = pat.samplePaths[ch];
+            s.synthParams   = pat.synthParams[ch];
+            s.sourceType    = pat.channelSourceTypes[ch];
+            s.samplerParams = pat.samplerParams[ch];
+            s.mixerRoute    = pat.channelMixerRouting[ch];
             s.volume      = pat.channelVolume[ch];
             s.pan         = pat.channelPan[ch];
             s.pitch       = pat.channelPitch[ch];
@@ -1390,6 +1438,8 @@ MainComponent::MainComponent()
                     pat.channelTypes[i]        = pat.channelTypes[i + 1];
                     pat.samplePaths[i]         = pat.samplePaths[i + 1];
                     pat.synthParams[i]         = pat.synthParams[i + 1];
+                    pat.channelSourceTypes[i]  = pat.channelSourceTypes[i + 1];
+                    pat.samplerParams[i]       = pat.samplerParams[i + 1];
                     pat.channelMixerRouting[i] = pat.channelMixerRouting[i + 1];
                     pat.channelVolume[i]       = pat.channelVolume[i + 1];
                     pat.channelPan[i]          = pat.channelPan[i + 1];
@@ -1406,6 +1456,8 @@ MainComponent::MainComponent()
                 pat.channelTypes[last]        = ChannelType::Drum;
                 pat.samplePaths[last]         = {};
                 pat.synthParams[last]         = SynthParams{};
+                pat.channelSourceTypes[last]  = ChannelSourceType::Synth;
+                pat.samplerParams[last]       = SamplerParams{};
                 pat.channelMixerRouting[last] = last % 8;
                 pat.channelVolume[last]       = 0.8f;
                 pat.channelPan[last]          = 0.0f;
@@ -1438,6 +1490,8 @@ MainComponent::MainComponent()
                     pat.channelTypes[i]        = pat.channelTypes[i - 1];
                     pat.samplePaths[i]         = pat.samplePaths[i - 1];
                     pat.synthParams[i]         = pat.synthParams[i - 1];
+                    pat.channelSourceTypes[i]  = pat.channelSourceTypes[i - 1];
+                    pat.samplerParams[i]       = pat.samplerParams[i - 1];
                     pat.channelMixerRouting[i] = pat.channelMixerRouting[i - 1];
                     pat.channelVolume[i]       = pat.channelVolume[i - 1];
                     pat.channelPan[i]          = pat.channelPan[i - 1];
@@ -1454,6 +1508,8 @@ MainComponent::MainComponent()
                 pat.channelTypes[ch]        = s.type;
                 pat.samplePaths[ch]         = s.samplePath;
                 pat.synthParams[ch]         = s.synthParams;
+                pat.channelSourceTypes[ch]  = s.sourceType;
+                pat.samplerParams[ch]       = s.samplerParams;
                 pat.channelMixerRouting[ch] = s.mixerRoute;
                 pat.channelVolume[ch]       = s.volume;
                 pat.channelPan[ch]          = s.pan;
@@ -1762,6 +1818,11 @@ void MainComponent::selectPattern(int id)
                 audioEngine.loadSample(ch, juce::File(newPat->samplePaths[ch]));
             else
                 audioEngine.unloadSample(ch);
+
+            // Reload sampler source buffer for Sampler channels.
+            // loadSamplerSource clears the slot if samplePath is empty.
+            if (newPat->channelSourceTypes[ch] == ChannelSourceType::Sampler)
+                audioEngine.loadSamplerSource(ch, juce::File(newPat->samplerParams[ch].samplePath));
         }
 
         // Sync step pattern to engine so it plays correctly immediately
@@ -2055,9 +2116,24 @@ void MainComponent::reloadProjectIntoUI()
         channelRack.resetToChannelCount(project.channelCount, names);
     }
 
-    // Load active pattern into channel rack and restore its samples
+    // Load active pattern into channel rack and restore its samples.
+    // Also migrate any Sampler channels that still carry untouched synth defaults.
     if (auto* activePat = findPattern(activePatternId))
     {
+        // One-time migration pass across all patterns: upgrade any Sampler channel
+        // that still has the generic synth defaults to neutral sampler params.
+        for (auto& pat : project.patterns)
+        {
+            for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+            {
+                if (pat.channelSourceTypes[ch] == ChannelSourceType::Sampler
+                    && looksLikeUntouchedSynthDefaults(pat.synthParams[ch]))
+                {
+                    pat.synthParams[ch] = samplerNeutralSynthParams();
+                }
+            }
+        }
+
         channelRack.loadPattern(*activePat);
         for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
         {
@@ -2065,6 +2141,13 @@ void MainComponent::reloadProjectIntoUI()
                 audioEngine.loadSample(ch, juce::File(activePat->samplePaths[ch]));
             else
                 audioEngine.unloadSample(ch);
+
+            // Load sampler source buffer if this channel is in Sampler mode
+            if (activePat->channelSourceTypes[ch] == ChannelSourceType::Sampler
+                && activePat->samplerParams[ch].samplePath.isNotEmpty())
+            {
+                audioEngine.loadSamplerSource(ch, juce::File(activePat->samplerParams[ch].samplePath));
+            }
         }
     }
 
@@ -2164,7 +2247,17 @@ void MainComponent::reloadProjectIntoUI()
     if (synthEditorWindow != nullptr && synthEditorWindow->isVisible() && synthEditorChannel >= 0)
     {
         if (auto* pat = findPattern(activePatternId))
-            synthEditorWindow->panel.loadParams(pat->synthParams[(size_t)synthEditorChannel]);
+        {
+            const int ch = synthEditorChannel;
+            synthEditorWindow->panel.loadParams(pat->synthParams[(size_t)ch]);
+            synthEditorWindow->panel.loadSamplerData(pat->channelSourceTypes[(size_t)ch],
+                                                    pat->samplerParams[(size_t)ch]);
+            if (pat->channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler)
+                synthEditorWindow->panel.setSamplerPreviewBuffer(
+                    audioEngine.getSamplerSourceBuffer(ch));
+            else
+                synthEditorWindow->panel.setSamplerPreviewBuffer(nullptr);
+        }
     }
 
     projectDirty = false;

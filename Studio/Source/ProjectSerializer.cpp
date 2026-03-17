@@ -76,6 +76,19 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             chEl->setAttribute("spDdspMotion",     (double)sp.ddspAuto.motion);
             chEl->setAttribute("mixRoute",    pat.channelMixerRouting[ch]);
 
+            // Sampler Synth source type + params
+            chEl->setAttribute("channelSourceType", (int)pat.channelSourceTypes[ch]);
+            const auto& samp = pat.samplerParams[ch];
+            chEl->setAttribute("samplerPath",        samp.samplePath);
+            chEl->setAttribute("samplerRootNote",    samp.rootNote);
+            chEl->setAttribute("samplerFineTune",    (double)samp.fineTuneCents);
+            chEl->setAttribute("samplerGain",        (double)samp.gain);
+            chEl->setAttribute("samplerLoop",        samp.loopEnabled        ? 1 : 0);
+            chEl->setAttribute("samplerLoopStart",   samp.loopStartSamples);
+            chEl->setAttribute("samplerLoopEnd",     samp.loopEndSamples);
+            chEl->setAttribute("samplerOneShot",     samp.oneShot            ? 1 : 0);
+            chEl->setAttribute("samplerStartOffset", samp.startOffsetSamples);
+
             // Save all 4 variations (steps + notes)
             for (int vi = 0; vi < Pattern::kMaxVariations; ++vi)
             {
@@ -335,6 +348,19 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 sp.ddspAuto.amount     = (float)chEl->getDoubleAttribute("spDdspAmount", 0.0);
                 sp.ddspAuto.brightness = (float)chEl->getDoubleAttribute("spDdspBrightness", 0.5);
                 sp.ddspAuto.motion     = (float)chEl->getDoubleAttribute("spDdspMotion", 0.25);
+
+                // Sampler Synth source type + params (default Synth for backward compat)
+                pat.channelSourceTypes[ch] = (ChannelSourceType)chEl->getIntAttribute("channelSourceType", 0);
+                auto& samp = pat.samplerParams[ch];
+                samp.samplePath         = chEl->getStringAttribute("samplerPath",   {});
+                samp.rootNote           = chEl->getIntAttribute   ("samplerRootNote", 60);
+                samp.fineTuneCents      = (float)chEl->getDoubleAttribute("samplerFineTune",   0.0);
+                samp.gain               = (float)chEl->getDoubleAttribute("samplerGain",       1.0);
+                samp.loopEnabled        = chEl->getIntAttribute("samplerLoop",       0) != 0;
+                samp.loopStartSamples   = chEl->getIntAttribute("samplerLoopStart",  0);
+                samp.loopEndSamples     = chEl->getIntAttribute("samplerLoopEnd",    0);
+                samp.oneShot            = chEl->getIntAttribute("samplerOneShot",    0) != 0;
+                samp.startOffsetSamples = chEl->getIntAttribute("samplerStartOffset",0);
 
                 // Legacy: if the Ch element has a "steps" attribute (old single-variation format),
                 // load it into variation 0.

@@ -390,6 +390,110 @@ inline std::unique_ptr<IFilter> createFilter(FilterMode mode)
 
 // =============================================================================
 
+// ---------------------------------------------------------------------------
+// SamplerSource — reads a sample buffer at pitched playback rate.
+// Used as the oscillator source inside SynthVoice when ChannelSourceType::Sampler.
+// Owns a shared reference to keep the immutable buffer alive for the voice lifetime.
+// All state is audio-thread-only; no locks or allocations during playback.
+// ---------------------------------------------------------------------------
+struct SamplerSource
+{
+    // Buffer reference (set on noteOn — never during render)
+    std::shared_ptr<const juce::AudioBuffer<float>> buffer;
+
+    double playPos        = 0.0;   // fractional sample read position
+    double pitchRatio     = 1.0;   // samples-per-output-sample advance (base, no LFO mod)
+    double basePitchRatio = 1.0;   // stored so pitch LFO can modulate relative to this
+
+    // Loop region (in source samples; 0 = not set / use file end)
+    int  loopStartSamples = 0;
+    int  loopEndSamples   = 0;
+    bool loopEnabled      = false;
+
+    // One-shot: ignore noteOff; voice plays to end of sample (drum mode)
+    bool oneShot          = false;
+
+    bool active           = false; // false once sample has run past its end
+
+    // Prepare for a new note — called from noteOnSampler (audio-thread-safe: no alloc).
+    void prepare(std::shared_ptr<const juce::AudioBuffer<float>> bufOwner,
+                 int midiPitch, const SamplerParams& sp) noexcept
+    {
+        buffer       = std::move(bufOwner);
+        playPos      = (double)juce::jmax(0, sp.startOffsetSamples);
+        loopEnabled  = sp.loopEnabled;
+        loopStartSamples = sp.loopStartSamples;
+        loopEndSamples   = (sp.loopEndSamples > 0 && buffer)
+                           ? juce::jmin(sp.loopEndSamples, buffer->getNumSamples())
+                           : (buffer ? buffer->getNumSamples() : 0);
+        oneShot      = sp.oneShot;
+        active       = (buffer != nullptr && buffer->getNumSamples() > 0);
+
+        // Pitch: semitone distance from rootNote to played pitch + fine tune
+        const float semitones = (float)(midiPitch - sp.rootNote)
+                                + sp.fineTuneCents / 100.0f;
+        basePitchRatio = std::pow(2.0, (double)semitones / 12.0);
+        pitchRatio     = basePitchRatio;
+    }
+
+    // Read one stereo sample pair and advance the playhead.
+    // outL / outR receive the interpolated sample values (±1 normalised range).
+    // Returns false when the sample has played to its end (and is not looping).
+    bool getSamples(float& outL, float& outR) noexcept
+    {
+        if (!active || buffer == nullptr) { outL = outR = 0.0f; return false; }
+
+        const int numSrc = buffer->getNumSamples();
+        const int numCh  = buffer->getNumChannels();
+        if (numSrc <= 0) { outL = outR = 0.0f; active = false; return false; }
+
+        const int effectiveEnd = (loopEnabled && loopEndSamples > 0)
+                                 ? loopEndSamples : numSrc;
+
+        // Loop wrap
+        if (loopEnabled && loopEndSamples > loopStartSamples && playPos >= (double)loopEndSamples)
+        {
+            const double span = (double)(loopEndSamples - loopStartSamples);
+            playPos = (double)loopStartSamples
+                      + std::fmod(playPos - (double)loopStartSamples, span);
+        }
+        else if (playPos >= (double)effectiveEnd)
+        {
+            outL = outR = 0.0f;
+            active = false;
+            return false;
+        }
+
+        // 4-point Hermite (Catmull-Rom) interpolation
+        const int   pos0 = (int)playPos;
+        const float frac = (float)(playPos - (double)pos0);
+        const auto clamp = [&](int p) noexcept { return juce::jlimit(0, numSrc - 1, p); };
+        const int pm1 = clamp(pos0 - 1), pp1 = clamp(pos0 + 1), pp2 = clamp(pos0 + 2);
+
+        auto interpolate = [&](int ch) noexcept -> float
+        {
+            const int c = juce::jmin(ch, numCh - 1);
+            const float y0 = buffer->getSample(c, pm1);
+            const float y1 = buffer->getSample(c, pos0);
+            const float y2 = buffer->getSample(c, pp1);
+            const float y3 = buffer->getSample(c, pp2);
+            const float c1 = 0.5f * (y2 - y0);
+            const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+            const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+            return ((c3 * frac + c2) * frac + c1) * frac + y1;
+        };
+
+        outL = interpolate(0);
+        outR = (numCh > 1) ? interpolate(1) : outL;
+        playPos += pitchRatio;
+        return true;
+    }
+
+    void reset() noexcept { buffer.reset(); active = false; playPos = 0.0; }
+};
+
+// ---------------------------------------------------------------------------
+
 class SynthVoice
 {
 public:
@@ -397,6 +501,8 @@ public:
     void noteOn(int midiPitch, float velocity, double sr, const SynthParams& p, int noteLenSamples,
                 int voiceSlot = 0, float outputGain = 1.0f, float outputPan = 0.0f, int mixerTrack = 0)
     {
+        useSamplerSource_ = false;  // reset to waveform mode; noteOnSampler re-enables
+        samplerSrc_.reset();
         beginResidualFade();
         noteOnFadeRemaining_ = kNoteOnFadeSamples;
         pitch_      = midiPitch;
@@ -525,8 +631,37 @@ public:
 
     void noteOff()
     {
+        // One-shot sampler voices ignore noteOff — they play to end of sample
+        if (useSamplerSource_ && samplerSrc_.oneShot) return;
         if (envState_ != Env::Idle)
-            envState_ = Env::Release;   // release decays naturally from current envLevel_
+            envState_ = Env::Release;
+    }
+
+    // -----------------------------------------------------------------------
+    // Sampler noteOn — configure voice to use a sample buffer as source.
+    // Shares ADSR / Filter / LFO setup with the synth noteOn; only the
+    // oscillator section is replaced with SamplerSource playback.
+    // bufOwner: shared_ptr that keeps the decoded buffer alive for the voice
+    //           duration (shared with other voices reading the same file).
+    // -----------------------------------------------------------------------
+    void noteOnSampler(int midiPitch, float velocity, double sr,
+                       const SynthParams& p, const SamplerParams& sp,
+                       std::shared_ptr<const juce::AudioBuffer<float>> bufOwner,
+                       int noteLenSamples,
+                       int voiceSlot = 0, float outputGain = 1.0f,
+                       float outputPan = 0.0f, int mixerTrack = 0)
+    {
+        // Reuse the full synth noteOn for ADSR / filter / LFO / drift setup.
+        // Pass a non-zero noteLenSamples only if !oneShot; for one-shot
+        // voices the sample end itself terminates the voice.
+        noteOn(midiPitch, velocity, sr, p,
+               sp.oneShot ? 0 : noteLenSamples,
+               voiceSlot, outputGain, outputPan, mixerTrack);
+
+        // Switch to sampler source mode
+        useSamplerSource_ = true;
+        samplerGain_      = juce::jlimit(0.0f, 2.0f, sp.gain);
+        samplerSrc_.prepare(std::move(bufOwner), midiPitch, sp);
     }
 
     void kill()
@@ -705,6 +840,63 @@ public:
                     ampMod = juce::jlimit(0.0f, 1.0f,
                                          1.0f - (lfoSmoothed_ * 0.5f + 0.5f) * params_.lfoDepth);
 
+                // ============================================================
+                // SOURCE SELECTION — sampler vs waveform oscillator
+                // ============================================================
+                if (useSamplerSource_)
+                {
+                    // Apply pitch-LFO modulation to the sampler pitch ratio
+                    if (params_.lfoDepth > 0.0f && params_.lfoTarget == 1)
+                        samplerSrc_.pitchRatio = samplerSrc_.basePitchRatio
+                                                 * (double)pitchModSmoothed_;
+                    else
+                        samplerSrc_.pitchRatio = samplerSrc_.basePitchRatio;
+
+                    // Read sample (Catmull-Rom interpolation inside getSamples)
+                    float rawL = 0.0f, rawR = 0.0f;
+                    const bool stillPlaying = samplerSrc_.getSamples(rawL, rawR);
+
+                    // Terminate voice when sample reaches end
+                    if (!stillPlaying && envState_ != Env::Idle && envState_ != Env::Release)
+                    {
+                        if (samplerSrc_.oneShot)
+                            kill();   // one-shot: immediate stop, no tail
+                        else
+                            noteOff(); // sustain mode: let release envelope fade out
+                    }
+
+                    // Gain: envelope × velocity × user gain × amplitude-LFO mod
+                    const float envGain = envLevel_ * velocity_ * outputGain_ * samplerGain_ * ampMod;
+                    float sampleL = rawL * envGain;
+                    float sampleR = rawR * envGain;
+
+                    // Filter — same IFilter/biquad chain as the synth path
+                    float filteredL, filteredR;
+                    if (useIFilter)
+                    {
+                        filteredL = filterL_->process(sampleL);
+                        filteredR = filterR_->process(sampleR);
+                    }
+                    else
+                    {
+                        const float resonanceBoost = 1.0f + resonanceSmoothed_ * 0.30f;
+                        filteredL = SynthVoicing::softClip((b0 * sampleL + z1L_) * resonanceBoost);
+                        z1L_ = b1 * sampleL - a1 * filteredL + z2L_;
+                        z2L_ = b2 * sampleL - a2 * filteredL;
+                        filteredR = SynthVoicing::softClip((b0 * sampleR + z1R_) * resonanceBoost);
+                        z1R_ = b1 * sampleR - a1 * filteredR + z2R_;
+                        z2R_ = b2 * sampleR - a2 * filteredR;
+                    }
+
+                    // Pan (voice slot balance)
+                    const float finalPan = juce::jlimit(-1.0f, 1.0f, voicePan_ + outputPan_ * 0.85f);
+                    const float balL = (finalPan < 0.0f) ? 1.0f : 1.0f - finalPan;
+                    const float balR = (finalPan > 0.0f) ? 1.0f : 1.0f + finalPan;
+                    synthOutL = filteredL * balL;
+                    synthOutR = filteredR * balR;
+                }
+                else
+                {
                 // --- Slow oscillator drift — triangle LFO per voice ---
                 // Advance phase; value is -1..+1 triangle wave scaled by driftDepth
                 slowDriftPhase_ += slowDriftRate_ / (float)sr;
@@ -796,6 +988,7 @@ public:
                 const float balR = (finalPan > 0.0f) ? 1.0f : 1.0f + finalPan;
                 synthOutL = outL * balL;
                 synthOutR = outR * balR;
+                } // end waveform oscillator branch
             }
 
             if (noteOnFadeRemaining_ > 0)
@@ -884,6 +1077,11 @@ private:
     int    noteOnFadeRemaining_ = 0;
     static constexpr int kResidualFadeSamples = 64;
     static constexpr int kNoteOnFadeSamples = 96;
+
+    // Sampler source (active when useSamplerSource_ == true)
+    SamplerSource samplerSrc_;
+    bool  useSamplerSource_ = false;
+    float samplerGain_      = 1.0f;
 
     void beginResidualFade()
     {
@@ -1051,6 +1249,42 @@ public:
         }
 
         voices_[voiceIdx].noteOn(pitch, velocity, sr, p, noteLenSamples, voiceIdx, outputGain, outputPan, mixerTrack);
+    }
+
+    void noteOnSampler(int pitch, float velocity, double sr,
+                       const SynthParams& p, const SamplerParams& sp,
+                       std::shared_ptr<const juce::AudioBuffer<float>> bufOwner,
+                       int noteLenSamples,
+                       float outputGain = 1.0f, float outputPan = 0.0f, int mixerTrack = 0)
+    {
+        // No p.enabled guard here — callers (dispatchVoiceNote / direct routes) are
+        // already authoritative about whether a Sampler channel should fire.
+        int voiceIdx = -1;
+        for (int i = 0; i < kNumVoices; ++i)
+            if (!voices_[i].isRenderable()) { voiceIdx = i; break; }
+
+        if (voiceIdx < 0)
+        {
+            float lowestPriority = std::numeric_limits<float>::max();
+            for (int i = 0; i < kNumVoices; ++i)
+            {
+                const float priority = voices_[i].getStealPriority();
+                if (priority < lowestPriority)
+                {
+                    lowestPriority = priority;
+                    voiceIdx = i;
+                }
+            }
+            if (voiceIdx < 0)
+            {
+                voiceIdx = stealIdx_;
+                stealIdx_ = (stealIdx_ + 1) % kNumVoices;
+            }
+        }
+
+        voices_[voiceIdx].noteOnSampler(pitch, velocity, sr, p, sp,
+                                        std::move(bufOwner), noteLenSamples,
+                                        voiceIdx, outputGain, outputPan, mixerTrack);
     }
 
     void noteOff(int pitch)
@@ -1301,6 +1535,96 @@ namespace SynthPreview
         }
 
         // Phase boundary fractions [0..1]
+        data.attackFrac  = (float)attackEnd   / (float)renderSamples;
+        data.decayFrac   = (float)decayEnd    / (float)renderSamples;
+        data.releaseFrac = (float)holdSamples / (float)renderSamples;
+
+        return data;
+    }
+
+    // ------------------------------------------------------------------
+    // Sampler-aware waveform data — runs the sample through ADSR/filter/LFO
+    // using the same offline render path as renderWaveformData.
+    // Falls back to synth preview if no buffer is available.
+    // ------------------------------------------------------------------
+    inline WaveformData renderWaveformDataFromSampler(
+        const SynthParams& synthParams,
+        const SamplerParams& samplerParams,
+        std::shared_ptr<const juce::AudioBuffer<float>> buf,
+        int numPixels,
+        double sampleRate = 44100.0)
+    {
+        if (!buf)
+            return renderWaveformData(synthParams, numPixels, sampleRate);
+
+        const float  aNorm = juce::jlimit(0.0f, 1.0f, (synthParams.attack  -  1.0f) / 1999.0f);
+        const float  dNorm = juce::jlimit(0.0f, 1.0f, (synthParams.decay   - 10.0f) / 2190.0f);
+        const float  rNorm = juce::jlimit(0.0f, 1.0f, (synthParams.release - 20.0f) / 3980.0f);
+        const double attackSec  = envTimeMs(aNorm, 0.5f,  5000.0f) * 0.001;
+        const double decaySec   = envTimeMs(dNorm, 1.0f,  8000.0f) * 0.001;
+        const double releaseSec = envTimeMs(rNorm, 5.0f, 15000.0f) * 0.001;
+        const double holdSec    = juce::jlimit(0.12, 0.45, attackSec * 0.35 + decaySec * 0.30 + 0.16);
+        const double totalSec   = juce::jlimit(0.45, 2.4,  holdSec + releaseSec + 0.20);
+
+        const int renderSamples = juce::jmax(numPixels, (int)std::ceil(totalSec * sampleRate));
+        const int holdSamples   = juce::jlimit(1, renderSamples - 1,
+                                               (int)std::ceil(holdSec * sampleRate));
+
+        const int attackSamples = (int)std::ceil(attackSec * sampleRate);
+        const int decaySamples  = (int)std::ceil(decaySec  * sampleRate);
+        const int attackEnd     = juce::jmin(attackSamples, holdSamples);
+        const int decayEnd      = juce::jmin(attackSamples + decaySamples, holdSamples);
+
+        // Play at root note (pitch ratio = 1.0) for a neutral preview.
+        SynthVoice voice;
+        voice.noteOnSampler(samplerParams.rootNote, 1.0f, sampleRate,
+                            synthParams, samplerParams, buf, holdSamples);
+
+        std::vector<float> renderLeft ((size_t)renderSamples, 0.0f);
+        std::vector<float> renderRight((size_t)renderSamples, 0.0f);
+        voice.renderAdd(renderLeft.data(), renderRight.data(), holdSamples, sampleRate);
+        voice.noteOff();
+        voice.renderAdd(renderLeft.data() + holdSamples, renderRight.data() + holdSamples,
+                        renderSamples - holdSamples, sampleRate);
+
+        WaveformData data;
+        data.minVals.resize((size_t)numPixels, 0.0f);
+        data.maxVals.resize((size_t)numPixels, 0.0f);
+
+        const double samplesPerPixel = (double)renderSamples / (double)juce::jmax(1, numPixels);
+        for (int i = 0; i < numPixels; ++i)
+        {
+            const int start = juce::jlimit(0, renderSamples - 1,
+                                           (int)std::floor((double)i * samplesPerPixel));
+            const int end   = juce::jlimit(start + 1, renderSamples,
+                                           (int)std::ceil((double)(i + 1) * samplesPerPixel));
+            float lo = 0.0f, hi = 0.0f;
+            for (int s = start; s < end; ++s)
+            {
+                const float v = renderLeft[(size_t)s];
+                lo = juce::jmin(lo, v);
+                hi = juce::jmax(hi, v);
+            }
+            data.minVals[(size_t)i] = lo;
+            data.maxVals[(size_t)i] = hi;
+        }
+
+        float peak = 0.0f;
+        for (int i = 0; i < numPixels; ++i)
+        {
+            peak = juce::jmax(peak, std::abs(data.minVals[(size_t)i]));
+            peak = juce::jmax(peak, std::abs(data.maxVals[(size_t)i]));
+        }
+        if (peak > 0.0001f)
+        {
+            const float gain = 1.0f / peak;
+            for (int i = 0; i < numPixels; ++i)
+            {
+                data.minVals[(size_t)i] *= gain;
+                data.maxVals[(size_t)i] *= gain;
+            }
+        }
+
         data.attackFrac  = (float)attackEnd   / (float)renderSamples;
         data.decayFrac   = (float)decayEnd    / (float)renderSamples;
         data.releaseFrac = (float)holdSamples / (float)renderSamples;

@@ -252,6 +252,40 @@ struct NoteEvent
     float velocity    = 0.8f;  // 0.0 – 1.0
 };
 
+// ---------------------------------------------------------------------------
+// Sampler instrument source — used when channelSourceType == Sampler
+// The sample is pitched chromatically around rootNote.
+// ADSR / Filter / LFO from SynthParams still apply.
+// ---------------------------------------------------------------------------
+struct SamplerParams
+{
+    juce::String samplePath;          // absolute path to the loaded sample file
+
+    int   rootNote      = 60;         // MIDI note at which the sample plays at original pitch
+    float fineTuneCents = 0.0f;       // ±100 cents fine-tune on top of rootNote mapping
+    float gain          = 1.0f;       // 0..2 sample pre-gain (before envelope)
+
+    // Loop — sustained playback for pad / string / brass sounds
+    bool  loopEnabled   = false;
+    int   loopStartSamples = 0;       // loop region start  (0 = file start)
+    int   loopEndSamples   = 0;       // loop region end    (0 = file end)
+
+    // One-shot flag: if true, note-off has no effect; voice plays to end of sample.
+    // Useful for drum instruments loaded in Melodic mode for chromatic kit playback.
+    bool  oneShot       = false;
+
+    // Start offset — skip N samples at the front (trim transient / skip silence)
+    int   startOffsetSamples = 0;
+};
+
+// Which oscillator/source a Melodic channel uses for voice rendering.
+// Drum channels are unaffected — they always use one-shot sample triggers.
+enum class ChannelSourceType
+{
+    Synth   = 0,   // classic waveform oscillator (existing behaviour)
+    Sampler = 1,   // sample buffer read at pitched playback rate
+};
+
 // M13 — synthesizer parameters per channel
 struct SynthParams
 {
@@ -289,6 +323,49 @@ struct SynthParams
     DDSPAutoSettings ddspAuto;
     juce::String presetName;  // tracks last selected preset (not a synthesis param)
 };
+
+// ---------------------------------------------------------------------------
+// Sampler-neutral SynthParams — transparent processing profile for Sampler
+// source channels.  Preserves the loaded sample's original timbre by default;
+// the user can shape it further through the editor if desired.
+//
+// Key differences from the synth defaults:
+//   filterEnvAmount  0.5 → 0.0   no filter sweep on attack/decay (main offender)
+//   cutoff        4000  → 20000  fully open low-pass, no frequency coloring
+//   resonance        0.3 → 0.0   no resonant peak at cutoff frequency
+//   sustain          0.6 → 1.0   full amplitude during sustain — no volume dip
+//   decay            80  → 1.0   near-zero decay, reaches full sustain immediately
+//   release         200  → 50    short natural fade, not a dramatic synth tail
+//   driftDepth       0.3 → 0.0   no pitch-drift artifacts on sample playback
+// ---------------------------------------------------------------------------
+inline SynthParams samplerNeutralSynthParams()
+{
+    SynthParams p;
+    p.enabled         = true;      // sampler channels are always active
+    p.cutoff          = 20000.0f;  // fully open — no timbral coloring
+    p.resonance       = 0.0f;      // no resonance peak
+    p.filterEnvAmount = 0.0f;      // no filter sweep (was 0.5 — the main offender)
+    p.filterDrive     = 0.0f;      // no drive saturation
+    p.attack          = 5.0f;      // fast — lets natural transients through
+    p.decay           = 1.0f;      // near-zero — reach full sustain immediately
+    p.sustain         = 1.0f;      // full amplitude throughout the note
+    p.release         = 50.0f;     // short, clean fade-out
+    p.lfoDepth        = 0.0f;      // no modulation unless user enables it
+    p.driftDepth      = 0.0f;      // no oscillator-drift artifacts
+    return p;
+}
+
+// Returns true if the given SynthParams still carry the out-of-the-box synth
+// defaults that were never intentionally edited for sampler use.
+// Used for one-time migration: when a saved Sampler channel still has these
+// values, apply samplerNeutralSynthParams() so it sounds correct on first open.
+inline bool looksLikeUntouchedSynthDefaults(const SynthParams& p)
+{
+    return p.filterEnvAmount > 0.45f && p.filterEnvAmount < 0.55f
+        && p.cutoff          > 3900.0f && p.cutoff        < 4100.0f
+        && p.resonance       > 0.25f   && p.resonance     < 0.35f
+        && p.sustain         > 0.55f   && p.sustain       < 0.65f;
+}
 
 // Instrument preset database — factory presets for SynthEditorPanel ComboBox
 namespace SynthPresets
@@ -551,9 +628,13 @@ struct Pattern
     float channelPitch [kMaxChannels];
 
     // per-pattern channel identity & instrument settings
-    ChannelType  channelTypes  [kMaxChannels] = {};     // all Drum by default
-    juce::String channelNames  [kMaxChannels];
-    SynthParams  synthParams   [kMaxChannels] = {};
+    ChannelType       channelTypes      [kMaxChannels] = {};   // all Drum by default
+    juce::String      channelNames      [kMaxChannels];
+    SynthParams       synthParams       [kMaxChannels] = {};
+
+    // Sampler instrument: independent from synthParams; source type selects which to use
+    ChannelSourceType channelSourceTypes[kMaxChannels] = {};   // all Synth by default
+    SamplerParams     samplerParams     [kMaxChannels] = {};
 
     // per-pattern mixer routing: channel → mixer track (0-7)
     int channelMixerRouting[kMaxChannels] = {};

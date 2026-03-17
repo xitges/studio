@@ -493,6 +493,105 @@ public:
 
         setAvailablePresets(SynthPresets::getAll());
         updateWaveformPreview();
+
+        // ---- Source type toggle (Synth / Sampler) ----------------------------
+        synthSourceBtn .setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3498db));
+        samplerSourceBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c3e50));
+        synthSourceBtn.onClick = [this]
+        {
+            currentSourceType_ = ChannelSourceType::Synth;
+            updateSourceVisibility();
+            notify();
+        };
+        samplerSourceBtn.onClick = [this]
+        {
+            currentSourceType_ = ChannelSourceType::Sampler;
+            // Reset to sampler-neutral processing so the loaded sample is heard
+            // without synth-oriented defaults (filter sweep, resonance, etc.).
+            // The user can shape ADSR/filter/LFO intentionally from this clean start.
+            loadParams(samplerNeutralSynthParams());
+            updateSourceVisibility();
+            notify();
+        };
+        addAndMakeVisible(synthSourceBtn);
+        addAndMakeVisible(samplerSourceBtn);
+
+        // ---- Sampler-specific controls ----------------------------------------
+        auto makeSamplerLabel = [this](juce::Label& lbl, const juce::String& text)
+        {
+            lbl.setText(text, juce::dontSendNotification);
+            lbl.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+            lbl.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+            addAndMakeVisible(lbl);
+        };
+        auto makeSamplerSlider = [this](juce::Slider& s, double lo, double hi, double step, double val)
+        {
+            s.setRange(lo, hi, step);
+            s.setValue(val, juce::dontSendNotification);
+            s.setSliderStyle(juce::Slider::LinearHorizontal);
+            s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 52, 18);
+            s.setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
+            s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16213e));
+            s.setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff0f3460));
+            s.setColour(juce::Slider::thumbColourId,             juce::Colour(0xff3498db));
+            s.setColour(juce::Slider::trackColourId,             juce::Colour(0xff3498db));
+            s.onValueChange = [this] { notify(); };
+            addAndMakeVisible(s);
+        };
+
+        makeSamplerLabel(samplerFileLbl, "Sample File");
+        samplerFileNameLbl.setText("(none)", juce::dontSendNotification);
+        samplerFileNameLbl.setColour(juce::Label::textColourId, juce::Colour(0xff8888aa));
+        samplerFileNameLbl.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+        addAndMakeVisible(samplerFileNameLbl);
+
+        samplerBrowseBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c3e50));
+        samplerBrowseBtn.onClick = [this]
+        {
+            chooser_ = std::make_unique<juce::FileChooser>("Select sample...",
+                juce::File::getSpecialLocation(juce::File::userHomeDirectory),
+                "*.wav;*.aiff;*.aif;*.flac;*.mp3");
+            chooser_->launchAsync(juce::FileBrowserComponent::openMode
+                                  | juce::FileBrowserComponent::canSelectFiles,
+                [this](const juce::FileChooser& fc)
+                {
+                    auto results = fc.getResults();
+                    if (results.isEmpty()) return;
+                    currentSamplerParams_.samplePath = results[0].getFullPathName();
+                    samplerFileNameLbl.setText(results[0].getFileName(), juce::dontSendNotification);
+                    notify();
+                });
+        };
+        addAndMakeVisible(samplerBrowseBtn);
+
+        samplerRootNoteSl.textFromValueFunction = [](double v)
+        {
+            static const char* kNames[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+            const int midi = juce::jlimit(0, 127, (int)v);
+            return juce::String(kNames[midi % 12]) + juce::String(midi / 12 - 1);
+        };
+        makeSamplerSlider(samplerRootNoteSl, 0,    127,  1,    60.0);
+        makeSamplerLabel (samplerRootNoteLbl, "Root Note");
+
+        makeSamplerSlider(samplerFineTuneSl, -100, 100,  0.1,  0.0);
+        makeSamplerLabel (samplerFineTuneLbl, "Fine Tune (ct)");
+
+        makeSamplerSlider(samplerGainSl,     0.0,  2.0,  0.01, 1.0);
+        makeSamplerLabel (samplerGainLbl,    "Gain");
+
+        samplerLoopBtn.setClickingTogglesState(true);
+        samplerLoopBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2c3e50));
+        samplerLoopBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3498db));
+        samplerLoopBtn.onClick = [this] { notify(); };
+        addAndMakeVisible(samplerLoopBtn);
+
+        samplerOneShotBtn.setClickingTogglesState(true);
+        samplerOneShotBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2c3e50));
+        samplerOneShotBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff3498db));
+        samplerOneShotBtn.onClick = [this] { notify(); };
+        addAndMakeVisible(samplerOneShotBtn);
+
+        updateSourceVisibility();
     }
 
     void setAvailablePresets(const std::vector<SynthPresets::Preset>& presets,
@@ -594,6 +693,44 @@ public:
         p.presetName = getSelectedPresetName();
     }
 
+    void loadSamplerData(ChannelSourceType srcType, const SamplerParams& sp)
+    {
+        currentSourceType_   = srcType;
+        currentSamplerParams_= sp;
+
+        samplerRootNoteSl .setValue(sp.rootNote,       juce::dontSendNotification);
+        samplerFineTuneSl .setValue(sp.fineTuneCents,  juce::dontSendNotification);
+        samplerGainSl     .setValue(sp.gain,           juce::dontSendNotification);
+        samplerLoopBtn    .setToggleState(sp.loopEnabled, juce::dontSendNotification);
+        samplerOneShotBtn .setToggleState(sp.oneShot,     juce::dontSendNotification);
+        samplerFileNameLbl.setText(sp.samplePath.isEmpty()
+            ? "(none)" : juce::File(sp.samplePath).getFileName(),
+            juce::dontSendNotification);
+        updateSourceVisibility();
+        updateWaveformPreview();
+    }
+
+    // Called by MainComponent after loading/changing the sample file.
+    // The buffer is used to render a live waveform preview in sampler mode.
+    void setSamplerPreviewBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buf)
+    {
+        samplerPreviewBuffer_ = std::move(buf);
+        updateWaveformPreview();
+    }
+
+    SamplerParams getSamplerParams() const
+    {
+        SamplerParams sp   = currentSamplerParams_;  // preserves samplePath
+        sp.rootNote        = (int)samplerRootNoteSl.getValue();
+        sp.fineTuneCents   = (float)samplerFineTuneSl.getValue();
+        sp.gain            = (float)samplerGainSl.getValue();
+        sp.loopEnabled     = samplerLoopBtn.getToggleState();
+        sp.oneShot         = samplerOneShotBtn.getToggleState();
+        return sp;
+    }
+
+    ChannelSourceType getSourceType() const { return currentSourceType_; }
+
     void paint(juce::Graphics& g) override
     {
         g.fillAll(juce::Colour(0xff1a1a2e));
@@ -660,20 +797,67 @@ public:
             area.removeFromTop(kGroup);
         }
 
-        // ---- Oscillator section ---------------------------------------------
+        // ---- Source type row -------------------------------------------------
         {
             auto row = area.removeFromTop(kRowH);
-            enableBtn.setBounds(row.removeFromLeft(120));
-            row.removeFromLeft(8);
-            waveLbl.setBounds(row.removeFromLeft(72).withTrimmedTop(5));
-            waveBox.setBounds(row.removeFromLeft(120));
+            synthSourceBtn  .setBounds(row.removeFromLeft(68));
+            row.removeFromLeft(4);
+            samplerSourceBtn.setBounds(row.removeFromLeft(75));
             area.removeFromTop(kGap);
         }
-        placeSliderRow(pulseWidthLbl, pulseWidthSl, slW);
-        previewLbl     .setBounds(area.removeFromTop(14));
-        area.removeFromTop(2);
-        waveformPreview.setBounds(area.removeFromTop(88));
+
+        // ---- Oscillator / Sampler controls (shared region, 264px) ----------
+        // Section is tall enough for sampler controls (rows ending at y=158)
+        // plus the waveform preview (label at y=160, panel at y=176+88=264).
+        // In synth mode, the preview sits at y=54; updateSourceVisibility()
+        // moves it after the section is laid out.
+        {
+            const auto sec = area.removeFromTop(264);
+            const int sx = sec.getX();
+            const int sy = sec.getY();
+            const int sw = sec.getWidth();
+            oscillatorSectionY_ = sy;  // stored so updateSourceVisibility() can reposition preview
+
+            // Row 1 (y=0): Enable button (always visible)
+            enableBtn.setBounds(sx, sy, 120, kRowH);
+
+            // Synth mode extras on row 1: waveform selector
+            waveLbl.setBounds(sx + 128, sy + (kRowH - 14) / 2, 72, 14);
+            waveBox.setBounds(sx + 200, sy, 120, kRowH);
+
+            // Synth row 2 (y=28): Pulse Width slider
+            pulseWidthLbl.setBounds(sx, sy + 28 + (kSlH - 14) / 2, kLblW, 14);
+            pulseWidthSl .setBounds(slX, sy + 28, slW, kSlH);
+
+            // Preview panel — default position (sampler mode: y=160/176).
+            // updateSourceVisibility() repositions to y=54/70 in synth mode.
+            previewLbl     .setBounds(sx, sy + 160, sw, 14);
+            waveformPreview.setBounds(sx, sy + 176, sw, 88);
+
+            // Sampler row 2 (y=28): file row
+            samplerFileLbl    .setBounds(sx,  sy + 28 + (kRowH - 14) / 2, kLblW, 14);
+            samplerFileNameLbl.setBounds(slX, sy + 28 + (kRowH - 14) / 2, slW - 76, 14);
+            samplerBrowseBtn  .setBounds(slX + slW - 72, sy + 28, 72, kRowH);
+
+            // Sampler row 3 (y=56): root note
+            samplerRootNoteLbl.setBounds(sx,  sy + 56 + (kSlH - 14) / 2, kLblW, 14);
+            samplerRootNoteSl .setBounds(slX, sy + 56, slW, kSlH);
+
+            // Sampler row 4 (y=82): fine tune
+            samplerFineTuneLbl.setBounds(sx,  sy + 82 + (kSlH - 14) / 2, kLblW, 14);
+            samplerFineTuneSl .setBounds(slX, sy + 82, slW, kSlH);
+
+            // Sampler row 5 (y=108): gain
+            samplerGainLbl.setBounds(sx,  sy + 108 + (kSlH - 14) / 2, kLblW, 14);
+            samplerGainSl .setBounds(slX, sy + 108, slW, kSlH);
+
+            // Sampler row 6 (y=134): loop / one-shot toggles
+            samplerLoopBtn   .setBounds(sx,      sy + 134, 70, kRowH);
+            samplerOneShotBtn.setBounds(sx + 74, sy + 134, 80, kRowH);
+        }
         area.removeFromTop(kGroup);
+
+        updateSourceVisibility();
 
         // ---- Auto Patch section ---------------------------------------------
         yHeaderAutoPatch_ = area.getY();
@@ -773,7 +957,68 @@ private:
     void updateWaveformPreview()
     {
         const int w = juce::jmax(64, waveformPreview.getWidth());
-        waveformPreview.setWaveformData(SynthPreview::renderWaveformData(makeCurrentParams(), w));
+        if (currentSourceType_ == ChannelSourceType::Sampler && samplerPreviewBuffer_)
+        {
+            waveformPreview.setWaveformData(
+                SynthPreview::renderWaveformDataFromSampler(
+                    makeCurrentParams(), getSamplerParams(),
+                    samplerPreviewBuffer_, w));
+        }
+        else
+        {
+            waveformPreview.setWaveformData(
+                SynthPreview::renderWaveformData(makeCurrentParams(), w));
+        }
+    }
+
+    void updateSourceVisibility()
+    {
+        const bool isSynth   = (currentSourceType_ == ChannelSourceType::Synth);
+        const bool isSampler = !isSynth;
+
+        // Synth-only controls
+        waveLbl        .setVisible(isSynth);
+        waveBox        .setVisible(isSynth);
+        pulseWidthLbl  .setVisible(isSynth);
+        pulseWidthSl   .setVisible(isSynth);
+
+        // Sampler-only controls
+        samplerFileLbl    .setVisible(isSampler);
+        samplerFileNameLbl.setVisible(isSampler);
+        samplerBrowseBtn  .setVisible(isSampler);
+        samplerRootNoteLbl.setVisible(isSampler);
+        samplerRootNoteSl .setVisible(isSampler);
+        samplerFineTuneLbl.setVisible(isSampler);
+        samplerFineTuneSl .setVisible(isSampler);
+        samplerGainLbl    .setVisible(isSampler);
+        samplerGainSl     .setVisible(isSampler);
+        samplerLoopBtn    .setVisible(isSampler);
+        samplerOneShotBtn .setVisible(isSampler);
+
+        // Waveform preview — always visible; repositioned based on mode.
+        previewLbl     .setVisible(true);
+        waveformPreview.setVisible(true);
+        previewLbl.setText(isSampler ? "Sample Preview" : "Wave Preview",
+                           juce::dontSendNotification);
+
+        // Reposition preview panel.
+        // In synth mode: after pulse-width row (y=54).
+        // In sampler mode: after sampler controls (y=160).
+        const auto contentBounds = getLocalBounds().reduced(10, 8);
+        const int sx = contentBounds.getX();
+        const int sw = contentBounds.getWidth();
+        const int sy = oscillatorSectionY_;
+        const int previewLblY    = isSynth ? sy + 54  : sy + 160;
+        const int previewPanelY  = isSynth ? sy + 70  : sy + 176;
+        previewLbl     .setBounds(sx, previewLblY,   sw, 14);
+        waveformPreview.setBounds(sx, previewPanelY, sw, 88);
+
+        // Toggle button highlight
+        synthSourceBtn  .setColour(juce::TextButton::buttonColourId,
+            isSynth   ? juce::Colour(0xff3498db) : juce::Colour(0xff2c3e50));
+        samplerSourceBtn.setColour(juce::TextButton::buttonColourId,
+            isSampler ? juce::Colour(0xff3498db) : juce::Colour(0xff2c3e50));
+        repaint();
     }
 
     void notify()
@@ -873,6 +1118,36 @@ private:
     juce::Slider   driftDepthSl;
     juce::Label    driftDepthLbl;
 
+    // Sampler Synth controls
+    juce::TextButton synthSourceBtn   { "Synth" };
+    juce::TextButton samplerSourceBtn { "Sampler" };
+
+    juce::Label      samplerFileLbl;
+    juce::Label      samplerFileNameLbl;
+    juce::TextButton samplerBrowseBtn  { "Browse..." };
+
+    juce::Label  samplerRootNoteLbl;
+    juce::Slider samplerRootNoteSl;
+    juce::Label  samplerFineTuneLbl;
+    juce::Slider samplerFineTuneSl;
+    juce::Label  samplerGainLbl;
+    juce::Slider samplerGainSl;
+
+    juce::TextButton samplerLoopBtn    { "Loop" };
+    juce::TextButton samplerOneShotBtn { "One-shot" };
+
+    ChannelSourceType currentSourceType_    = ChannelSourceType::Synth;
+    SamplerParams     currentSamplerParams_ = {};
+
+    // Sampler waveform preview — set by MainComponent after loading the sample buffer.
+    std::shared_ptr<const juce::AudioBuffer<float>> samplerPreviewBuffer_;
+
+    // Y-coordinate of the oscillator/sampler section top — set in resized(),
+    // used by updateSourceVisibility() to reposition the preview panel.
+    int oscillatorSectionY_ = 0;
+
+    std::unique_ptr<juce::FileChooser> chooser_;
+
     std::vector<SynthPresets::Preset> availablePresets;
     int factoryPresetCount = 0;
 
@@ -925,6 +1200,12 @@ public:
     // ---- Forwarded API ----
     void loadParams(const SynthParams& p)         { content_.loadParams(p); }
     void applyToParams(SynthParams& p)      const { content_.applyToParams(p); }
+    void loadSamplerData(ChannelSourceType srcType, const SamplerParams& sp)
+                                                  { content_.loadSamplerData(srcType, sp); }
+    void setSamplerPreviewBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buf)
+                                                  { content_.setSamplerPreviewBuffer(std::move(buf)); }
+    SamplerParams     getSamplerParams() const     { return content_.getSamplerParams(); }
+    ChannelSourceType getSourceType()    const     { return content_.getSourceType(); }
     void setAvailablePresets(const std::vector<SynthPresets::Preset>& presets,
                              const juce::String& selectName = {})
     {
@@ -932,7 +1213,7 @@ public:
     }
 
 private:
-    static constexpr int kContentH = 1110;   // tall enough for all controls
+    static constexpr int kContentH = 1244;   // +106px for sampler waveform preview row
     juce::Viewport       viewport_;
     SynthEditorContent   content_;
 

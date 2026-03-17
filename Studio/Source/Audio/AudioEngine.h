@@ -34,12 +34,14 @@ struct PlaybackSnapshot
     struct NoteSlot { NoteEvent notes[kNotes]; int count = 0; };
     NoteSlot noteSlots[kCh];
 
-    ChannelType channelTypes[kCh]        = {};
-    SynthParams synthParams[kCh]         = {};
-    float       channelVolume[kCh]       = {};
-    float       channelPan[kCh]          = {};
-    float       channelPitch[kCh]        = {};
-    int         channelMixerRouting[kCh] = {};
+    ChannelType       channelTypes      [kCh] = {};
+    SynthParams       synthParams       [kCh] = {};
+    ChannelSourceType channelSourceTypes[kCh] = {};
+    SamplerParams     samplerParams     [kCh] = {};
+    float             channelVolume     [kCh] = {};
+    float             channelPan        [kCh] = {};
+    float             channelPitch      [kCh] = {};
+    int               channelMixerRouting[kCh]= {};
 };
 
 class AudioEngine : public juce::AudioIODeviceCallback,
@@ -63,9 +65,17 @@ public:
     void setProject(Project* projectPtr);
 
     // Sample management
-    void loadSample   (int channelIndex, const juce::File& file);
-    void unloadSample (int channelIndex);   // clear player so channel plays nothing
-    void triggerChannel(int channelIndex, int offsetInBuffer = 0);
+    void loadSample        (int channelIndex, const juce::File& file);
+    void unloadSample      (int channelIndex);   // clear player so channel plays nothing
+    void triggerChannel    (int channelIndex, int offsetInBuffer = 0);
+
+    // Sampler Synth — load the oscillator-source buffer for a Sampler channel.
+    // Call from the message thread when the user assigns a sample to a Sampler channel.
+    void loadSamplerSource (int channelIndex, const juce::File& file);
+
+    // Returns the current sampler source buffer for the given channel (message thread).
+    // Used by the Synth Editor to render a waveform preview of the loaded sample.
+    std::shared_ptr<const juce::AudioBuffer<float>> getSamplerSourceBuffer(int ch) const;
 
     // Step pattern
     void setStepPattern(int channelIndex, int stepIndex, bool active);
@@ -499,6 +509,13 @@ private:
     std::atomic<int> activeChannelSourceSnapshotIdx_{0};
     SongSampleCacheMap songSampleCaches_[2];
     std::atomic<int> activeSongCacheIdx_{0};
+
+    // Sampler Synth — per-channel oscillator-source buffers (pattern mode + fallback)
+    mutable juce::SpinLock samplerBufLock_;
+    std::array<std::shared_ptr<juce::AudioBuffer<float>>, 16> samplerSourceBuffers_ {};
+    // Per-pattern sampler source cache for song mode (same structure as songSampleCaches_)
+    SongSampleCacheMap songSamplerCaches_[2];
+    std::atomic<int>   activeSongSamplerCacheIdx_ {0};
     int songPlayerClipId[16] = {};
     std::array<float, 16> songChannelVolume_ = {};
     std::array<float, 16> songChannelPan_ = {};
@@ -529,6 +546,16 @@ private:
 
     void buildSongSampleCache();   // may run on background thread
     void resetMixProcessingState();
+
+    // Sampler Synth helpers
+    const SongSampleCacheMap& getSongSamplerCache() const;
+
+    // Unified voice dispatch — routes to noteOnSampler or noteOn based on source type.
+    // Sampler channels play regardless of synthParams.enabled; Synth channels require it.
+    // noteLenSamples == 0 → use 1/16th note at current BPM.
+    void dispatchVoiceNote(int ch, int midiPitch, float velocity, int noteLenSamples,
+                           float outputGain, float outputPan, int mixerTrack,
+                           const PlaybackSnapshot& snap);
     
     double sampleRate = 44100.0;
     int    bufferSize = 512;
