@@ -287,6 +287,9 @@ private:
         bool  hasMasterOverride = false;
         float masterVolume = 1.0f;
         float masterPan    = 0.0f;
+        // Per-mixer-track volume multiplier (automation: "mixVol0"–"mixVol7").
+        // Default 1.0 = no override.  Applied on top of runtime mixer track volume.
+        std::array<float, 8> mixerVolMul {{ 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f }};
     };
 
     struct ScheduledSampleTrigger

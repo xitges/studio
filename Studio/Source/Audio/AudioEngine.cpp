@@ -1336,6 +1336,8 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     float effectiveMasterVolume = runtime.masterVolume;
     std::array<float, 16> automatedChannelVolumes;
     automatedChannelVolumes.fill(-1.0f);
+    std::array<float, 8> automatedMixerVolMul;
+    automatedMixerVolMul.fill(1.0f); // 1.0 = no automation (pass-through)
 
     // Read beat-based position first — this survives BPM changes correctly
     const double startBeat = songBeatPosition_.load(std::memory_order_relaxed);
@@ -1379,6 +1381,12 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                 const int ch = lane.paramId.substring(2, lane.paramId.length() - 3).getIntValue();
                 if (ch >= 0 && ch < 16)
                     automatedChannelVolumes[(size_t)ch] = v;
+            }
+            else if (lane.paramId.startsWith("mixVol"))
+            {
+                const int t = lane.paramId.substring(6).getIntValue();
+                if (t >= 0 && t < 8)
+                    automatedMixerVolMul[(size_t)t] = v;
             }
         }
     }
@@ -1626,7 +1634,8 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
     dispatchScheduledSampleTriggers();
     MixRuntimeOverrides overrides;
     overrides.hasMasterOverride = true;
-    overrides.masterVolume = effectiveMasterVolume;
+    overrides.masterVolume  = effectiveMasterVolume;
+    overrides.mixerVolMul   = automatedMixerVolMul;
     overrides.masterPan = runtime.masterPan;
     mixToOutput(buffer, numSamples, &overrides);
 
@@ -1767,9 +1776,10 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
         if (mt.muted || (anySoloed && !mt.soloed))
             continue;
 
+        const float autoMul = (overrides != nullptr) ? overrides->mixerVolMul[(size_t)t] : 1.0f;
         const float ang = (mt.pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-        const float trackL = mt.volume * std::cos(ang);
-        const float trackR = mt.volume * std::sin(ang);
+        const float trackL = mt.volume * autoMul * std::cos(ang);
+        const float trackR = mt.volume * autoMul * std::sin(ang);
 
         for (int s = 0; s < safe; ++s)
         {
@@ -1864,9 +1874,10 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
         if (mt.muted || (anySoloed && !mt.soloed))
             continue;
 
+        const float autoMul2 = (overrides != nullptr) ? overrides->mixerVolMul[(size_t)t] : 1.0f;
         const float ang = (mt.pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-        const float L   = mt.volume * std::cos(ang);
-        const float R   = mt.volume * std::sin(ang);
+        const float L   = mt.volume * autoMul2 * std::cos(ang);
+        const float R   = mt.volume * autoMul2 * std::sin(ang);
 
         for (int s = 0; s < safe; ++s)
         {

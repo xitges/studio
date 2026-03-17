@@ -168,6 +168,116 @@ inline float envCoeff(float timeMs, float sampleRate)
 // ---------------------------------------------------------------------------
 // One polyphonic voice
 // ---------------------------------------------------------------------------
+// =============================================================================
+// Filter architecture — IFilter interface + LadderFilter implementation
+// =============================================================================
+
+enum class FilterMode { Ladder, SVF, Diode };
+
+// ---------------------------------------------------------------------------
+// Abstract filter interface — all filter types must conform to this
+// ---------------------------------------------------------------------------
+class IFilter
+{
+public:
+    virtual ~IFilter() = default;
+
+    virtual void prepare(double sampleRate) = 0;
+    virtual void reset()                    = 0;
+    virtual float process(float input)      = 0;
+    virtual void setCutoff(float cutoffHz)  = 0;
+    virtual void setResonance(float res)    = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Moog-style ZDF Ladder filter (4-stage TPT with non-linear feedback)
+//
+// Based on Zavalishin "The Art of VA Filter Design" (2018).
+// Each stage is a first-order TPT 1-pole LP.  Non-linear tanh saturation
+// appears in the feedback path and at the input, giving the characteristic
+// warm, self-oscillating Moog sound.
+//
+// setCutoff and setResonance are safe to call every sample (audio-rate
+// modulation). g_ = tan(pi*fc/sr)/(1+tan(pi*fc/sr)) is the TPT gain.
+// ---------------------------------------------------------------------------
+class LadderFilter final : public IFilter
+{
+public:
+    void prepare(double sr) override
+    {
+        sampleRate_ = sr;
+        // Recompute g_ with new sample rate
+        const float fc = juce::jlimit(20.0f, (float)(sampleRate_ * 0.499), lastCutoff_);
+        const float g  = std::tan(juce::MathConstants<float>::pi * fc / (float)sampleRate_);
+        g_ = g / (1.0f + g);
+    }
+
+    void reset() override
+    {
+        s_[0] = s_[1] = s_[2] = s_[3] = 0.0f;
+    }
+
+    void setCutoff(float hz) override
+    {
+        // Clamp and precompute TPT gain: G = tan(pi*fc/sr) / (1 + tan(pi*fc/sr))
+        lastCutoff_ = hz;
+        const float fc = juce::jlimit(20.0f, (float)(sampleRate_ * 0.499), hz);
+        const float g  = std::tan(juce::MathConstants<float>::pi * fc / (float)sampleRate_);
+        g_ = g / (1.0f + g);
+    }
+
+    void setResonance(float res) override
+    {
+        // Map normalised [0..1.2] → feedback gain [0..4.8].
+        // Self-oscillation onset is at k ≈ 4.0.
+        res_ = juce::jlimit(0.0f, 1.2f, res) * 4.0f;
+    }
+
+    float process(float x) override
+    {
+        // Non-linear input stage: subtract resonance * tanh(last stage)
+        const float fb = std::tanh(s_[3]);
+        float y        = std::tanh(x - res_ * fb);
+
+        // 4 first-order TPT 1-pole stages in cascade
+        for (int k = 0; k < 4; ++k)
+        {
+            const float v = (y - s_[k]) * g_;
+            y      = v + s_[k];
+            s_[k]  = y + v;          // s_new = s_old + 2*v
+        }
+
+        // Flush denormals (critical for CPU on sustained notes)
+        for (auto& s : s_) s += 1.0e-20f;
+
+        return y;
+    }
+
+private:
+    double sampleRate_ = 44100.0;
+    float  g_          = 0.0f;      // TPT gain G = tan(pi*fc/sr) / (1+tan(pi*fc/sr))
+    float  res_        = 0.0f;      // resonance feedback gain [0..4.8]
+    float  lastCutoff_ = 1000.0f;   // cached for prepare() re-initialisation
+    float  s_[4]       = {};        // 4 integrator states
+};
+
+// ---------------------------------------------------------------------------
+// Filter factory — returns a new instance for the given mode.
+// Falls back to Ladder if mode is not yet implemented.
+// ---------------------------------------------------------------------------
+inline std::unique_ptr<IFilter> createFilter(FilterMode mode)
+{
+    switch (mode)
+    {
+        case FilterMode::Ladder:  return std::make_unique<LadderFilter>();
+        case FilterMode::SVF:     return std::make_unique<LadderFilter>(); // placeholder
+        case FilterMode::Diode:   return std::make_unique<LadderFilter>(); // placeholder
+    }
+    return std::make_unique<LadderFilter>();
+}
+
+// =============================================================================
+
 class SynthVoice
 {
 public:
@@ -271,7 +381,29 @@ public:
 
         noteLenRemaining_ = noteLenSamples;
 
-        // Clear filter state
+        // Create or reset filter instances
+        // (allocation happens on note-on, not in the audio loop)
+        if (filterL_ == nullptr || filterR_ == nullptr)
+        {
+            filterL_ = createFilter(FilterMode::Ladder);
+            filterR_ = createFilter(FilterMode::Ladder);
+            filterL_->prepare(sr);
+            filterR_->prepare(sr);
+        }
+        else
+        {
+            // Re-prepare in case sample rate changed
+            filterL_->prepare(sr);
+            filterR_->prepare(sr);
+        }
+        filterL_->setCutoff(params_.cutoff);
+        filterL_->setResonance(params_.resonance);
+        filterR_->setCutoff(params_.cutoff);
+        filterR_->setResonance(params_.resonance);
+        filterL_->reset();
+        filterR_->reset();
+
+        // Clear biquad state (used for HP/BP paths)
         z1L_ = z2L_ = z1R_ = z2R_ = 0.0f;
     }
 
@@ -305,8 +437,11 @@ public:
     {
         if (envState_ == Env::Idle && residualFadeRemaining_ <= 0) return;
 
-        float b0, b1, b2, a1, a2;
-        computeFilter(params_.cutoff, params_.resonance, params_.filterType, sr, b0, b1, b2, a1, a2);
+        // Biquad coefficients — only used for HP/BP (filterType 1,2).
+        // LP (filterType 0) is handled by the Ladder filter.
+        float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
+        if (params_.filterType != 0)
+            computeFilter(params_.cutoff, params_.resonance, params_.filterType, sr, b0, b1, b2, a1, a2);
 
         const double lfoInc = params_.lfoRate / sr;
 
@@ -430,7 +565,19 @@ public:
                                                            std::pow(params_.resonance, 0.78f)
                                                          * (0.92f + (1.0f - envOpen) * 0.08f));
                 resonanceSmoothed_ = SynthVoicing::smoothValue(resonanceSmoothed_, resonanceTarget, 0.989f);
-                computeFilter(cutoffSmoothed_, resonanceSmoothed_, params_.filterType, sr, b0, b1, b2, a1, a2);
+
+                // LP → Ladder (audio-rate cutoff/resonance update); HP/BP → biquad
+                if (params_.filterType == 0 && filterL_ != nullptr)
+                {
+                    filterL_->setCutoff(cutoffSmoothed_);
+                    filterL_->setResonance(resonanceSmoothed_);
+                    filterR_->setCutoff(cutoffSmoothed_);
+                    filterR_->setResonance(resonanceSmoothed_);
+                }
+                else if (params_.filterType != 0)
+                {
+                    computeFilter(cutoffSmoothed_, resonanceSmoothed_, params_.filterType, sr, b0, b1, b2, a1, a2);
+                }
 
                 // --- Amplitude LFO — tremolo (target 2) ---
                 float ampMod = 1.0f;
@@ -495,14 +642,25 @@ public:
                 const float sampleL = SynthVoicing::softClip(rawSampleL * harmonicDrive * transientDrive * driveGain) * envVelGain;
                 const float sampleR = SynthVoicing::softClip(rawSampleR * harmonicDrive * transientDrive * driveGain) * envVelGain;
 
-                // --- Biquad filter — separate L/R chains ---
-                const float resonanceBoost = 1.0f + resonanceSmoothed_ * 0.30f;
-                const float filteredL = SynthVoicing::softClip((b0 * sampleL + z1L_) * resonanceBoost);
-                z1L_ = b1 * sampleL - a1 * filteredL + z2L_;
-                z2L_ = b2 * sampleL - a2 * filteredL;
-                const float filteredR = SynthVoicing::softClip((b0 * sampleR + z1R_) * resonanceBoost);
-                z1R_ = b1 * sampleR - a1 * filteredR + z2R_;
-                z2R_ = b2 * sampleR - a2 * filteredR;
+                // --- Filter: Ladder (LP) or biquad (HP/BP) ---
+                float filteredL, filteredR;
+                if (params_.filterType == 0 && filterL_ != nullptr)
+                {
+                    // Moog ZDF Ladder — non-linear 4-pole LP, no extra resonance boost needed
+                    filteredL = filterL_->process(sampleL);
+                    filteredR = filterR_->process(sampleR);
+                }
+                else
+                {
+                    // RBJ biquad for HP/BP
+                    const float resonanceBoost = 1.0f + resonanceSmoothed_ * 0.30f;
+                    filteredL = SynthVoicing::softClip((b0 * sampleL + z1L_) * resonanceBoost);
+                    z1L_ = b1 * sampleL - a1 * filteredL + z2L_;
+                    z2L_ = b2 * sampleL - a2 * filteredL;
+                    filteredR = SynthVoicing::softClip((b0 * sampleR + z1R_) * resonanceBoost);
+                    z1R_ = b1 * sampleR - a1 * filteredR + z2R_;
+                    z2R_ = b2 * sampleR - a2 * filteredR;
+                }
 
                 // Air high-frequency presence blend
                 const float air = juce::jlimit(0.0f, 0.22f,
@@ -592,7 +750,11 @@ private:
 
     int    noteLenRemaining_  = 0;
 
-    // Biquad filter state — separate L/R chains for stereo unison
+    // Ladder filter instances — one per stereo channel (LP path)
+    std::unique_ptr<IFilter> filterL_;
+    std::unique_ptr<IFilter> filterR_;
+
+    // Biquad filter state — used for HP/BP paths (filterType 1, 2)
     float  z1L_ = 0.0f, z2L_ = 0.0f;
     float  z1R_ = 0.0f, z2R_ = 0.0f;
     float  lastOutputL_ = 0.0f, lastOutputR_ = 0.0f;

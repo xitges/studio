@@ -828,6 +828,72 @@ MainComponent::MainComponent()
         markDirty();
     };
 
+    // Automation undo callbacks
+    playlist.onAutomationPointAdded = [this](int laneIdx, int ptIdx, AutomationPoint pt)
+    {
+        audioEngine.setProject(&project);
+        markDirty();
+        undoManager.perform(new LambdaAction(
+            []() { return true; }, // perform = already done
+            [this, laneIdx, ptIdx]()
+            {
+                if (laneIdx < (int)project.automationLanes.size())
+                {
+                    auto& lane = project.automationLanes[(size_t)laneIdx];
+                    if (ptIdx < (int)lane.points.size())
+                        lane.points.erase(lane.points.begin() + ptIdx);
+                    audioEngine.setProject(&project);
+                    playlist.repaint();
+                }
+                return true;
+            }));
+    };
+
+    playlist.onAutomationPointMoved = [this](int laneIdx, int ptIdx, AutomationPoint before, AutomationPoint after)
+    {
+        audioEngine.setProject(&project);
+        markDirty();
+        undoManager.perform(new LambdaAction(
+            [this, laneIdx, ptIdx, after]()
+            {
+                if (laneIdx < (int)project.automationLanes.size())
+                {
+                    auto& lane = project.automationLanes[(size_t)laneIdx];
+                    if (ptIdx < (int)lane.points.size())
+                        lane.points[(size_t)ptIdx] = after;
+                    audioEngine.setProject(&project);
+                    playlist.repaint();
+                }
+                return true;
+            },
+            [this, laneIdx, ptIdx, before]()
+            {
+                if (laneIdx < (int)project.automationLanes.size())
+                {
+                    auto& lane = project.automationLanes[(size_t)laneIdx];
+                    if (ptIdx < (int)lane.points.size())
+                        lane.points[(size_t)ptIdx] = before;
+                    audioEngine.setProject(&project);
+                    playlist.repaint();
+                }
+                return true;
+            }));
+    };
+
+    playlist.onAutomationLaneAdded = [this](AutomationLane /*lane*/)
+    {
+        audioEngine.setProject(&project);
+        markDirty();
+        resized();
+    };
+
+    playlist.onAutomationLaneRemoved = [this](int /*laneIdx*/, AutomationLane /*lane*/)
+    {
+        audioEngine.setProject(&project);
+        markDirty();
+        resized();
+    };
+
     // Phase 4 — double-click clip → navigate to its pattern
     playlist.onNavigateToPattern = [this](int patternId)
     {

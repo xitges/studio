@@ -27,6 +27,7 @@ public:
     void mouseDown       (const juce::MouseEvent& e) override;
     void mouseDrag       (const juce::MouseEvent& e) override;
     void mouseUp         (const juce::MouseEvent& e) override;
+    void mouseMove       (const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseWheelMove  (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override;
 
@@ -138,6 +139,12 @@ public:
 
     // Pattern slip edit — Alt+drag shifts patternStartOffsetBars, called on mouseUp
     std::function<void(int clipId, float oldOffset, float newOffset)> onPatternSlipEdited;
+
+    // Automation undo callbacks
+    std::function<void(int laneIdx, int ptIdx, AutomationPoint pt)>                          onAutomationPointAdded;
+    std::function<void(int laneIdx, int ptIdx, AutomationPoint before, AutomationPoint after)> onAutomationPointMoved;
+    std::function<void(AutomationLane lane)>                                                  onAutomationLaneAdded;
+    std::function<void(int laneIdx, AutomationLane lane)>                                     onAutomationLaneRemoved;
 
     // Returns decoded AudioBuffer for waveform preview (host → AudioEngine)
     std::function<std::shared_ptr<juce::AudioBuffer<float>>(const juce::String& path)> getAudioBuffer;
@@ -461,8 +468,30 @@ private:
     int  autoLanesY() const;
 
     // M9 — automation editing state
-    int   dragLaneIdx   = -1;
-    int   dragPointIdx  = -1;
+    int             dragLaneIdx      = -1;
+    int             dragPointIdx     = -1;
+    AutomationPoint dragStartAutoPt; // captured at mouseDown for undo
+
+    // Automation snap resolution — applied when creating/moving breakpoints
+    enum class AutoSnapResolution { Bar = 1, Half = 2, Quarter = 4, Eighth = 8, Sixteenth = 16 };
+    AutoSnapResolution autoSnapRes = AutoSnapResolution::Quarter;
+
+    float getAutoSnapBeats() const noexcept { return 4.0f / static_cast<float>(static_cast<int>(autoSnapRes)); }
+    float snapAutoBeat(float beat, bool enable) const noexcept
+    {
+        if (!enable) return juce::jmax(0.0f, beat);
+        const float unit = getAutoSnapBeats();
+        return juce::jmax(0.0f, unit * std::round(beat / unit));
+    }
+
+    // Axis lock: determined from initial drag direction, reset each drag session
+    enum class AutoAxisLock { None, TimeOnly, ValueOnly };
+    AutoAxisLock     autoAxisLock    = AutoAxisLock::None;
+    juce::Point<int> autoDragStartPos;
+
+    // Hover state for automation breakpoints
+    int hoverLaneIdx  = -1;
+    int hoverPointIdx = -1;
 
     // Hit testing
     PlaylistClip* findClipAt(int x, int y);
@@ -1193,12 +1222,22 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
             if (hasClipboard) m.addItem(1, "Paste Clip");
             m.addSeparator();
 
+            // "Add Automation Lane" submenu — all targets
             juce::PopupMenu autoMenu;
-            autoMenu.addItem(10, juce::String("Master Volume (0-1)"));
+            autoMenu.addItem(10, juce::String("Master Volume"));
             autoMenu.addItem(11, juce::String("BPM (60-200)"));
-            autoMenu.addItem(12, juce::String("Ch 1 Volume"));
-            autoMenu.addItem(13, juce::String("Ch 2 Volume"));
-            autoMenu.addItem(14, juce::String("Ch 3 Volume"));
+            autoMenu.addSeparator();
+
+            juce::PopupMenu chMenu;
+            for (int i = 0; i < 16; ++i)
+                chMenu.addItem(20 + i, juce::String("Ch ") + juce::String(i + 1));
+            autoMenu.addSubMenu(juce::String("Channel Volumes"), chMenu);
+
+            juce::PopupMenu mixMenu;
+            for (int t = 0; t < 8; ++t)
+                mixMenu.addItem(40 + t, juce::String("Mixer Track ") + juce::String(t + 1));
+            autoMenu.addSubMenu(juce::String("Mixer Track Volumes"), mixMenu);
+
             m.addSubMenu(juce::String("Add Automation Lane"), autoMenu);
 
             m.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
@@ -1218,9 +1257,18 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
                     }
                     else if (r == 10) addAutomationLane("masterVolume", 0.0f, 1.0f, "Master Volume");
                     else if (r == 11) addAutomationLane("bpm",          60.0f, 200.0f, "BPM");
-                    else if (r == 12) addAutomationLane("ch0vol",       0.0f, 1.0f, "Ch 1 Volume");
-                    else if (r == 13) addAutomationLane("ch1vol",       0.0f, 1.0f, "Ch 2 Volume");
-                    else if (r == 14) addAutomationLane("ch2vol",       0.0f, 1.0f, "Ch 3 Volume");
+                    else if (r >= 20 && r <= 35)
+                    {
+                        const int ch = r - 20;
+                        addAutomationLane("ch" + juce::String(ch) + "vol", 0.0f, 1.0f,
+                                          "Ch " + juce::String(ch + 1) + " Volume");
+                    }
+                    else if (r >= 40 && r <= 47)
+                    {
+                        const int t = r - 40;
+                        addAutomationLane("mixVol" + juce::String(t), 0.0f, 1.0f,
+                                          "Mixer Track " + juce::String(t + 1));
+                    }
                 });
         }
         return;
@@ -1245,18 +1293,25 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
                 return;
             }
 
-            const float beatPos  = (float)(pos.x - trackHeaderWidth) / barWidth * 4.0f;
-            const int   laneRelY = relY % autoLaneHeight;
-            const float value    = 1.0f - juce::jlimit(0.0f, 1.0f,
-                                       (float)(laneRelY - 4) / (float)(autoLaneHeight - 8));
+            const bool  shiftHeld = e.mods.isShiftDown();
+            const int   laneY     = autoLanesY() + li * autoLaneHeight;
+            const float rawBeat   = (float)(pos.x - trackHeaderWidth) / barWidth * 4.0f;
+            const float beatPos   = snapAutoBeat(rawBeat, !shiftHeld);
+            const int   laneRelY  = relY % autoLaneHeight;
+            const float value     = 1.0f - juce::jlimit(0.0f, 1.0f,
+                                        (float)(laneRelY - 4) / (float)(autoLaneHeight - 8));
 
-            // Check if clicking near an existing point
+            // Check if clicking near an existing point (radius = 10px, 2D distance)
             dragLaneIdx  = li;
             dragPointIdx = -1;
             for (int pi = 0; pi < (int)lane.points.size(); ++pi)
             {
-                const int px = trackHeaderWidth + (int)(lane.points[(size_t)pi].beat * 0.25 * barWidth);
-                if (std::abs(pos.x - px) < 8)
+                const float ptPx = (float)trackHeaderWidth + (float)(lane.points[(size_t)pi].beat * 0.25 * barWidth);
+                const float ptPy = (float)(laneY + autoLaneHeight - 4)
+                                   - lane.points[(size_t)pi].value * (float)(autoLaneHeight - 8);
+                const float dx   = (float)pos.x - ptPx;
+                const float dy   = (float)pos.y - ptPy;
+                if (std::sqrt(dx * dx + dy * dy) < 10.0f)
                 {
                     dragPointIdx = pi;
                     break;
@@ -1265,16 +1320,24 @@ inline void PlaylistComponent::mouseDown(const juce::MouseEvent& e)
 
             if (dragPointIdx < 0)
             {
-                // Add new point
+                // Add new point (value quantised to 0.01 steps)
                 AutomationPoint pt;
                 pt.beat  = (double)beatPos;
-                pt.value = value;
+                pt.value = juce::jlimit(0.0f, 1.0f, std::round(value / 0.01f) * 0.01f);
                 auto it  = lane.points.begin();
                 while (it != lane.points.end() && it->beat < pt.beat) ++it;
                 const int insertIdx = (int)(it - lane.points.begin());
                 lane.points.insert(it, pt);
                 dragPointIdx = insertIdx;
+                if (onAutomationPointAdded)
+                    onAutomationPointAdded(li, insertIdx, lane.points[(size_t)insertIdx]);
             }
+
+            // Capture state for undo on mouseUp + initialise axis-lock
+            if (dragPointIdx < (int)lane.points.size())
+                dragStartAutoPt = lane.points[(size_t)dragPointIdx];
+            autoDragStartPos = pos;
+            autoAxisLock     = AutoAxisLock::None;
 
             repaint();
             return;
@@ -1355,12 +1418,37 @@ inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
             auto& lane = project->automationLanes[(size_t)dragLaneIdx];
             if (dragPointIdx < (int)lane.points.size())
             {
-                auto& pt       = lane.points[(size_t)dragPointIdx];
-                const int laneY = autoLanesY() + dragLaneIdx * autoLaneHeight;
-                const int relY  = e.getPosition().y - laneY;
-                pt.beat  = juce::jmax(0.0, (double)(e.getPosition().x - trackHeaderWidth) / barWidth * 4.0);
-                pt.value = 1.0f - juce::jlimit(0.0f, 1.0f,
-                               (float)(relY - 4) / (float)(autoLaneHeight - 8));
+                auto& pt = lane.points[(size_t)dragPointIdx];
+
+                const bool shiftHeld = e.mods.isShiftDown();
+                const bool altHeld   = e.mods.isAltDown();
+                const float fineMul  = altHeld ? 0.2f : 1.0f;
+
+                // Axis lock: latch once initial movement exceeds 4px
+                const int totalDx = std::abs(e.getPosition().x - autoDragStartPos.x);
+                const int totalDy = std::abs(e.getPosition().y - autoDragStartPos.y);
+                if (autoAxisLock == AutoAxisLock::None && (totalDx > 4 || totalDy > 4))
+                    autoAxisLock = (totalDx >= totalDy) ? AutoAxisLock::TimeOnly
+                                                        : AutoAxisLock::ValueOnly;
+
+                // Time axis: relative displacement from drag-start position
+                if (autoAxisLock != AutoAxisLock::ValueOnly)
+                {
+                    const float dxPx    = (float)(e.getPosition().x - autoDragStartPos.x) * fineMul;
+                    const float rawBeat = (float)dragStartAutoPt.beat + dxPx / (float)barWidth * 4.0f;
+                    pt.beat = (double)snapAutoBeat(rawBeat, !shiftHeld);
+                }
+
+                // Value axis: relative displacement scaled to lane height
+                if (autoAxisLock != AutoAxisLock::TimeOnly)
+                {
+                    const float dyPx   = (float)(e.getPosition().y - autoDragStartPos.y) * fineMul;
+                    const float rawVal = (float)dragStartAutoPt.value
+                                        - dyPx / (float)(autoLaneHeight - 8);
+                    pt.value = juce::jlimit(0.0f, 1.0f,
+                                            std::round(rawVal / 0.01f) * 0.01f);
+                }
+
                 repaint();
             }
         }
@@ -1466,6 +1554,19 @@ inline void PlaylistComponent::mouseDrag(const juce::MouseEvent& e)
 
 inline void PlaylistComponent::mouseUp(const juce::MouseEvent&)
 {
+    // Fire automation move undo callback BEFORE resetting state
+    if (dragLaneIdx >= 0 && dragPointIdx >= 0 && project != nullptr
+        && dragLaneIdx < (int)project->automationLanes.size())
+    {
+        auto& lane = project->automationLanes[(size_t)dragLaneIdx];
+        if (dragPointIdx < (int)lane.points.size())
+        {
+            const AutomationPoint& after = lane.points[(size_t)dragPointIdx];
+            if ((after.beat != dragStartAutoPt.beat || after.value != dragStartAutoPt.value)
+                && onAutomationPointMoved)
+                onAutomationPointMoved(dragLaneIdx, dragPointIdx, dragStartAutoPt, after);
+        }
+    }
     dragLaneIdx = dragPointIdx = -1;
 
     if (draggingClipId >= 0)
@@ -1522,10 +1623,88 @@ inline void PlaylistComponent::mouseUp(const juce::MouseEvent&)
     }
 }
 
+inline void PlaylistComponent::mouseMove(const juce::MouseEvent& e)
+{
+    if (project == nullptr) return;
+    const auto pos = e.getPosition();
+
+    int newHoverLane  = -1;
+    int newHoverPoint = -1;
+
+    if (pos.y >= autoLanesY())
+    {
+        const int relY = pos.y - autoLanesY();
+        const int li   = relY / autoLaneHeight;
+        if (li >= 0 && li < (int)project->automationLanes.size())
+        {
+            const auto& lane  = project->automationLanes[(size_t)li];
+            const int   laneY = autoLanesY() + li * autoLaneHeight;
+            for (int pi = 0; pi < (int)lane.points.size(); ++pi)
+            {
+                const float ptPx = (float)trackHeaderWidth + (float)(lane.points[(size_t)pi].beat * 0.25 * barWidth);
+                const float ptPy = (float)(laneY + autoLaneHeight - 4)
+                                   - lane.points[(size_t)pi].value * (float)(autoLaneHeight - 8);
+                const float dx   = (float)pos.x - ptPx;
+                const float dy   = (float)pos.y - ptPy;
+                if (std::sqrt(dx * dx + dy * dy) < 10.0f)
+                {
+                    newHoverLane  = li;
+                    newHoverPoint = pi;
+                    break;
+                }
+            }
+            setMouseCursor(newHoverPoint >= 0 ? juce::MouseCursor::PointingHandCursor
+                                              : juce::MouseCursor::CrosshairCursor);
+        }
+        else
+        {
+            setMouseCursor(juce::MouseCursor::NormalCursor);
+        }
+    }
+    else
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    if (newHoverLane != hoverLaneIdx || newHoverPoint != hoverPointIdx)
+    {
+        hoverLaneIdx  = newHoverLane;
+        hoverPointIdx = newHoverPoint;
+        repaint();
+    }
+}
+
 inline void PlaylistComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
     const auto pos = e.getPosition();
     if (pos.y < headerHeight) return;
+
+    // Double-click in automation lane → delete the hit breakpoint
+    if (project != nullptr && pos.y >= autoLanesY())
+    {
+        const int relY = pos.y - autoLanesY();
+        const int li   = relY / autoLaneHeight;
+        if (li >= 0 && li < (int)project->automationLanes.size())
+        {
+            auto& lane  = project->automationLanes[(size_t)li];
+            const int laneY = autoLanesY() + li * autoLaneHeight;
+            for (int pi = 0; pi < (int)lane.points.size(); ++pi)
+            {
+                const float ptPx = (float)trackHeaderWidth + (float)(lane.points[(size_t)pi].beat * 0.25 * barWidth);
+                const float ptPy = (float)(laneY + autoLaneHeight - 4)
+                                   - lane.points[(size_t)pi].value * (float)(autoLaneHeight - 8);
+                const float dx   = (float)pos.x - ptPx;
+                const float dy   = (float)pos.y - ptPy;
+                if (std::sqrt(dx * dx + dy * dy) < 10.0f)
+                {
+                    lane.points.erase(lane.points.begin() + pi);
+                    repaint();
+                    return;
+                }
+            }
+        }
+        return;  // double-click in lane but no point hit → do nothing
+    }
 
     PlaylistClip* existing = findClipAt(pos.x, pos.y);
     if (existing != nullptr)
@@ -2080,6 +2259,7 @@ inline void PlaylistComponent::addAutomationLane(const juce::String& paramId,
     lane.minVal  = minVal;
     lane.maxVal  = maxVal;
     project->automationLanes.push_back(lane);
+    if (onAutomationLaneAdded) onAutomationLaneAdded(lane);
     repaint();
 }
 
@@ -2087,7 +2267,9 @@ inline void PlaylistComponent::removeAutomationLane(int laneIdx)
 {
     if (project == nullptr) return;
     if (laneIdx < 0 || laneIdx >= (int)project->automationLanes.size()) return;
+    const AutomationLane removed = project->automationLanes[(size_t)laneIdx];
     project->automationLanes.erase(project->automationLanes.begin() + laneIdx);
+    if (onAutomationLaneRemoved) onAutomationLaneRemoved(laneIdx, removed);
     repaint();
 }
 
@@ -2127,11 +2309,34 @@ inline void PlaylistComponent::drawAutomationLanes(juce::Graphics& g)
         g.drawText("[right-click to remove]", getWidth() - 150, laneY + 2,
                    146, 14, juce::Justification::centredRight);
 
-        // Bar grid lines
-        g.setColour(juce::Colour(0xff1e1e32));
-        for (int bar = 0; bar <= totalBars; ++bar)
-            g.drawLine((float)(trackHeaderWidth + bar * barWidth), (float)(laneY + 16),
-                       (float)(trackHeaderWidth + bar * barWidth), (float)(laneY + autoLaneHeight), 0.5f);
+        // Snap grid lines — bar lines strong, subdivisions progressively lighter
+        {
+            const int snapDiv = static_cast<int>(autoSnapRes); // 1,2,4,8,16
+            for (int bar = 0; bar < totalBars; ++bar)
+            {
+                // Bar line (always)
+                const float bx = (float)(trackHeaderWidth + bar * barWidth);
+                g.setColour(juce::Colour(0xff2c2c48));
+                g.drawLine(bx, (float)(laneY + 14), bx, (float)(laneY + autoLaneHeight), 0.8f);
+
+                // Subdivision lines
+                for (int sub = 1; sub < snapDiv; ++sub)
+                {
+                    const float sx = bx + (float)sub / (float)snapDiv * (float)barWidth;
+                    // Brightness by subdivision level: count trailing-2 factors of sub
+                    int s = sub, level = 0;
+                    while (s % 2 == 0) { s /= 2; ++level; }
+                    static constexpr float alphas[] = { 0.10f, 0.16f, 0.24f, 0.32f };
+                    const float alpha = alphas[juce::jlimit(0, 3, level)];
+                    g.setColour(juce::Colours::white.withAlpha(alpha * 0.6f));
+                    g.drawLine(sx, (float)(laneY + 14), sx, (float)(laneY + autoLaneHeight), 0.4f);
+                }
+            }
+            // Final bar line at right edge
+            const float lastBx = (float)(trackHeaderWidth + totalBars * barWidth);
+            g.setColour(juce::Colour(0xff2c2c48));
+            g.drawLine(lastBx, (float)(laneY + 14), lastBx, (float)(laneY + autoLaneHeight), 0.8f);
+        }
 
         // Mid-value guide line
         g.setColour(col.withAlpha(0.12f));
@@ -2155,18 +2360,30 @@ inline void PlaylistComponent::drawAutomationLanes(juce::Graphics& g)
             g.strokePath(curvePath, juce::PathStrokeType(1.5f));
         }
 
-        // Breakpoints (circles)
+        // Breakpoints (circles) — larger hit area reflected by 10px radius visually
         for (int pi = 0; pi < (int)lane.points.size(); ++pi)
         {
             const auto& pt = lane.points[(size_t)pi];
-            const float px = trackHeaderWidth + (float)(pt.beat * 0.25 * barWidth);
+            const float px = (float)trackHeaderWidth + (float)(pt.beat * 0.25 * barWidth);
             const float py = (float)(laneY + autoLaneHeight - 4)
                              - pt.value * (float)(autoLaneHeight - 8);
             const bool dragging = (dragLaneIdx == li && dragPointIdx == pi);
-            g.setColour(dragging ? juce::Colours::white : col.brighter(0.4f));
+            const bool hovering = (hoverLaneIdx == li && hoverPointIdx == pi);
+
+            // Outer glow for hover
+            if (hovering && !dragging)
+            {
+                g.setColour(col.brighter(0.6f).withAlpha(0.25f));
+                g.fillEllipse(px - 8.0f, py - 8.0f, 16.0f, 16.0f);
+            }
+
+            const juce::Colour fillCol = dragging ? juce::Colours::white
+                                       : hovering ? col.brighter(0.9f)
+                                       : col.brighter(0.4f);
+            g.setColour(fillCol);
             g.fillEllipse(px - 5.0f, py - 5.0f, 10.0f, 10.0f);
-            g.setColour(col.darker(0.3f));
-            g.drawEllipse(px - 5.0f, py - 5.0f, 10.0f, 10.0f, 1.0f);
+            g.setColour(hovering ? juce::Colours::white.withAlpha(0.7f) : col.darker(0.3f));
+            g.drawEllipse(px - 5.0f, py - 5.0f, 10.0f, 10.0f, 1.2f);
         }
     }
 }
