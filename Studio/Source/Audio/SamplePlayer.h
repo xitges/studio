@@ -88,6 +88,10 @@ public:
     void setMixerTrack(int track) { mixerTrack_ = juce::jlimit(0, 7, track); }
     int getMixerTrack() const { return mixerTrack_; }
 
+    // Per-trigger start position in the source buffer (samples, fractional).
+    // Call before triggerAt(). Reset to 0.0 after each trigger to avoid stale state.
+    void setPlayStartPosition(double samplePos) { playStartPos_ = juce::jmax(0.0, samplePos); }
+
 private:
     void updateFinalRatio(){
         finalPitchRatio = basePitchRatio * bpmRatio;
@@ -102,7 +106,8 @@ private:
     double playerSampleRate = 44100.0;
 
     // M1.2: fractional position enables pitch-shifted playback
-    double playPosition = -1.0;
+    double playPosition    = -1.0;
+    double playStartPos_   = 0.0;   // per-trigger start offset (set before triggerAt, auto-reset)
 
     float basePitchRatio = 1.0f;
     float bpmRatio = 1.0f;

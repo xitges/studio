@@ -87,6 +87,99 @@ ChannelRackComponent::ChannelRackComponent()
     setupVarBtn(varBtnD, 3);
     updateVariationButtonStates();
 
+    // --- Step Inspector setup ---
+    // Collapsed by default; openInspector() makes them visible
+    inspectorLabel.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+    inspectorLabel.setColour(juce::Label::textColourId, juce::Colour(0xffb0b0b8));
+    addChildComponent(inspectorLabel);
+
+    auto setupInspSlider = [this](juce::Slider& sl, double lo, double hi, double step,
+                                  juce::Colour col, const juce::String& suffix)
+    {
+        sl.setRange(lo, hi, step);
+        sl.setSliderStyle(juce::Slider::LinearHorizontal);
+        sl.setTextBoxStyle(juce::Slider::TextBoxRight, false, 48, 16);
+        sl.setNumDecimalPlacesToDisplay(2);
+        sl.setTextValueSuffix(suffix);
+        sl.setColour(juce::Slider::thumbColourId,             col);
+        sl.setColour(juce::Slider::trackColourId,             col.withAlpha(0.7f));
+        sl.setColour(juce::Slider::backgroundColourId,        juce::Colour(0xff1e1e24));
+        sl.setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
+        sl.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff141418));
+        sl.setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff2a2a35));
+        addChildComponent(sl);
+    };
+
+    setupInspSlider(inspVelSlider,      0.0,  2.0,  0.01, juce::Colour(0xff3a9ad9), "");
+    setupInspSlider(inspGateSlider,     0.0,  2.0,  0.01, juce::Colour(0xff27ae60), "");
+    setupInspSlider(inspProbSlider,     0.0,  1.0,  0.01, juce::Colour(0xffe6b32b), "");
+    setupInspSlider(inspPitchSlider,  -12.0, 12.0,  1.0,  juce::Colour(0xffb0b0b8), " st");
+    inspPitchSlider.setNumDecimalPlacesToDisplay(0);
+    setupInspSlider(inspCutoffSlider,  -3.0,  3.0,  0.01, juce::Colour(0xffcc6699), " oct");
+    setupInspSlider(inspStartOffSlider, 0.0,  1.0,  0.01, juce::Colour(0xff669966), "");
+
+    inspVelSlider.onValueChange = [this]
+    {
+        if (inspectorCh < 0 || inspectorStep < 0) return;
+        stepParamsStore[inspectorCh][inspectorStep].velocity = (float)inspVelSlider.getValue();
+        if (onStepParamsChanged)
+            onStepParamsChanged(inspectorCh, inspectorStep, stepParamsStore[inspectorCh][inspectorStep]);
+        repaint();
+    };
+    inspGateSlider.onValueChange = [this]
+    {
+        if (inspectorCh < 0 || inspectorStep < 0) return;
+        stepParamsStore[inspectorCh][inspectorStep].gate = (float)inspGateSlider.getValue();
+        if (onStepParamsChanged)
+            onStepParamsChanged(inspectorCh, inspectorStep, stepParamsStore[inspectorCh][inspectorStep]);
+        repaint();
+    };
+    inspProbSlider.onValueChange = [this]
+    {
+        if (inspectorCh < 0 || inspectorStep < 0) return;
+        stepParamsStore[inspectorCh][inspectorStep].probability = (float)inspProbSlider.getValue();
+        if (onStepParamsChanged)
+            onStepParamsChanged(inspectorCh, inspectorStep, stepParamsStore[inspectorCh][inspectorStep]);
+        repaint();
+    };
+    inspPitchSlider.onValueChange = [this]
+    {
+        if (inspectorCh < 0 || inspectorStep < 0) return;
+        stepParamsStore[inspectorCh][inspectorStep].pitchOffset = (int)std::round(inspPitchSlider.getValue());
+        if (onStepParamsChanged)
+            onStepParamsChanged(inspectorCh, inspectorStep, stepParamsStore[inspectorCh][inspectorStep]);
+        repaint();
+    };
+    inspCutoffSlider.onValueChange = [this]
+    {
+        if (inspectorCh < 0 || inspectorStep < 0) return;
+        stepParamsStore[inspectorCh][inspectorStep].cutoffMod = (float)inspCutoffSlider.getValue();
+        if (onStepParamsChanged)
+            onStepParamsChanged(inspectorCh, inspectorStep, stepParamsStore[inspectorCh][inspectorStep]);
+        repaint();
+    };
+    inspStartOffSlider.onValueChange = [this]
+    {
+        if (inspectorCh < 0 || inspectorStep < 0) return;
+        stepParamsStore[inspectorCh][inspectorStep].startOffsetFrac = (float)inspStartOffSlider.getValue();
+        if (onStepParamsChanged)
+            onStepParamsChanged(inspectorCh, inspectorStep, stepParamsStore[inspectorCh][inspectorStep]);
+        repaint();
+    };
+
+    inspResetBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a2020));
+    inspResetBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffff8888));
+    inspResetBtn.onClick = [this]
+    {
+        if (inspectorCh < 0 || inspectorStep < 0) return;
+        stepParamsStore[inspectorCh][inspectorStep].reset();
+        refreshInspector();
+        if (onStepParamsChanged)
+            onStepParamsChanged(inspectorCh, inspectorStep, stepParamsStore[inspectorCh][inspectorStep]);
+        repaint();
+    };
+    addChildComponent(inspResetBtn);
+
     startTimerHz(30);
 }
 
@@ -207,6 +300,109 @@ void ChannelRackComponent::addChannel(const juce::String& name)
 }
 
 // ---------------------------------------------------------------------------
+// Step Inspector
+// ---------------------------------------------------------------------------
+
+void ChannelRackComponent::openInspector(int ch, int step)
+{
+    inspectorCh   = ch;
+    inspectorStep = step;
+    refreshInspector();
+    inspectorLabel   .setVisible(true);
+    inspVelSlider    .setVisible(true);
+    inspGateSlider   .setVisible(true);
+    inspProbSlider   .setVisible(true);
+    inspPitchSlider  .setVisible(true);
+    inspCutoffSlider .setVisible(true);
+    inspStartOffSlider.setVisible(true);
+    inspResetBtn     .setVisible(true);
+    layoutInspector();
+    repaint();
+}
+
+void ChannelRackComponent::closeInspector()
+{
+    inspectorCh = inspectorStep = -1;
+    inspectorLabel   .setVisible(false);
+    inspVelSlider    .setVisible(false);
+    inspGateSlider   .setVisible(false);
+    inspProbSlider   .setVisible(false);
+    inspPitchSlider  .setVisible(false);
+    inspCutoffSlider .setVisible(false);
+    inspStartOffSlider.setVisible(false);
+    inspResetBtn     .setVisible(false);
+    repaint();
+}
+
+void ChannelRackComponent::refreshInspector()
+{
+    if (inspectorCh < 0 || inspectorStep < 0) return;
+    const StepParams& p = stepParamsStore[inspectorCh][inspectorStep];
+    inspVelSlider    .setValue(p.velocity,           juce::dontSendNotification);
+    inspGateSlider   .setValue(p.gate,               juce::dontSendNotification);
+    inspProbSlider   .setValue(p.probability,        juce::dontSendNotification);
+    inspPitchSlider  .setValue((double)p.pitchOffset,juce::dontSendNotification);
+    inspCutoffSlider .setValue(p.cutoffMod,          juce::dontSendNotification);
+    inspStartOffSlider.setValue(p.startOffsetFrac,   juce::dontSendNotification);
+
+    const juce::String chName = (inspectorCh < (int)channels.size())
+                                ? channels[(size_t)inspectorCh].name : "Ch";
+    inspectorLabel.setText("Step " + juce::String(inspectorStep + 1) + "  \xe2\x80\x94  " + chName,
+                           juce::dontSendNotification);
+}
+
+void ChannelRackComponent::layoutInspector()
+{
+    const int baseY = HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50;
+    const int iy    = baseY + 4;
+
+    inspectorLabel.setBounds(10, iy - 4, 240, 16);
+
+    // Four sliders arranged in two rows, labels provided by drawInspector
+    const int slW  = (getWidth() - 30) / 2;
+    const int slH  = 18;
+    const int col2 = 15 + slW + 8;
+
+    inspVelSlider    .setBounds(15,   iy + 22, slW, slH);
+    inspGateSlider   .setBounds(col2, iy + 22, slW, slH);
+    inspProbSlider   .setBounds(15,   iy + 48, slW, slH);
+    inspPitchSlider  .setBounds(col2, iy + 48, slW, slH);
+    inspCutoffSlider .setBounds(15,   iy + 74, slW, slH);
+    inspStartOffSlider.setBounds(col2, iy + 74, slW, slH);
+    inspResetBtn     .setBounds(getWidth() - 70, iy, 60, 20);
+}
+
+void ChannelRackComponent::drawInspector(juce::Graphics& g)
+{
+    if (inspectorCh < 0) return;
+
+    const int baseY = HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50;
+
+    // Background
+    g.setColour(juce::Colour(0xff1a1a22));
+    g.fillRect(0, baseY, getWidth(), INSPECTOR_HEIGHT);
+    g.setColour(juce::Colour(0xff3a9ad9).withAlpha(0.4f));
+    g.fillRect(0, baseY, 3, INSPECTOR_HEIGHT);   // accent bar on left
+
+    g.setColour(juce::Colour(0xff2a2a38));
+    g.drawLine(0.0f, (float)baseY, (float)getWidth(), (float)baseY, 1.0f);
+
+    // Small parameter labels above sliders
+    const int iy  = baseY + 4;
+    const int slW = (getWidth() - 30) / 2;
+    const int col2 = 15 + slW + 8;
+
+    g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
+    g.setColour(juce::Colour(0xff888892));
+    g.drawText("VEL",      15,   iy + 12, 50, 10, juce::Justification::centredLeft);
+    g.drawText("GATE",     col2, iy + 12, 50, 10, juce::Justification::centredLeft);
+    g.drawText("PROB",     15,   iy + 38, 50, 10, juce::Justification::centredLeft);
+    g.drawText("PITCH",    col2, iy + 38, 50, 10, juce::Justification::centredLeft);
+    g.drawText("CUTOFF",   15,   iy + 64, 50, 10, juce::Justification::centredLeft);
+    g.drawText("START",    col2, iy + 64, 50, 10, juce::Justification::centredLeft);
+}
+
+// ---------------------------------------------------------------------------
 
 // M2.1 — Load pattern steps into the UI grid
 void ChannelRackComponent::loadPattern(const Pattern& pat, int varIdx)
@@ -216,6 +412,12 @@ void ChannelRackComponent::loadPattern(const Pattern& pat, int varIdx)
     // Sync step count
     stepCount = juce::jlimit(1, Pattern::kMaxSteps, pat.stepCount);
     stepCountSlider.setValue(stepCount, juce::dontSendNotification);
+
+    // Sync step params store (always, so badges and inspector reflect the pattern)
+    for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+        for (int s = 0; s < Pattern::kMaxSteps; ++s)
+            stepParamsStore[ch][s] = pat.variations[vi].stepParams[ch][s];
+    if (inspectorCh >= 0 && inspectorStep >= 0) refreshInspector();
 
     // Copy step data, sample name, and per-pattern vol/pan/pitch for each channel
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
@@ -258,7 +460,10 @@ void ChannelRackComponent::saveToPattern(Pattern& pat, int varIdx) const
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
     {
         for (int s = 0; s < Pattern::kMaxSteps; ++s)
-            pat.variations[vi].steps[ch][s] = channels[ch].steps[s];
+        {
+            pat.variations[vi].steps     [ch][s] = channels[ch].steps[s];
+            pat.variations[vi].stepParams[ch][s] = stepParamsStore[ch][s];
+        }
 
         pat.channelVolume[ch] = channels[ch].volume;
         pat.channelPan[ch]    = channels[ch].pan;
@@ -312,6 +517,7 @@ void ChannelRackComponent::paint(juce::Graphics& g)
     drawHeader(g);
     drawChannelLabels(g);
     drawStepGrid(g);
+    drawInspector(g);
 }
 
 void ChannelRackComponent::drawHeader(juce::Graphics& g)
@@ -425,6 +631,9 @@ void ChannelRackComponent::drawStepGrid(juce::Graphics& g)
 
             const bool isCurrentStep = (s == currentPlayStep);
 
+            const bool isSelected = (ch == inspectorCh && s == inspectorStep);
+            const bool hasCustom  = !stepParamsStore[ch][s].isDefault();
+
             if (channels[ch].steps[s])
             {
                 juce::Colour c = isCurrentStep
@@ -450,6 +659,20 @@ void ChannelRackComponent::drawStepGrid(juce::Graphics& g)
                     g.setColour(juce::Colour(0xff2a2a30));
                     g.drawRoundedRectangle(x + 1, y + 2, w, h, 4.0f, 1.0f);
                 }
+            }
+
+            // Custom step params badge — small filled circle in bottom-right corner
+            if (hasCustom)
+            {
+                g.setColour(juce::Colour(0xff3a9ad9).withAlpha(0.85f));
+                g.fillEllipse((float)(x + w - 5), (float)(y + h - 3), 4.0f, 4.0f);
+            }
+
+            // Selected step highlight border
+            if (isSelected)
+            {
+                g.setColour(juce::Colour(0xff3a9ad9).withAlpha(0.9f));
+                g.drawRoundedRectangle((float)(x + 1), (float)(y + 2), (float)w, (float)h, 4.0f, 1.5f);
             }
         }
     }
@@ -562,8 +785,22 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    // Left-click on step grid
-    if (x < stepAreaX) return;
+    // Right-click on step grid → open step inspector
+    if (e.mods.isRightButtonDown() && x >= stepAreaX)
+    {
+        const int s = juce::jlimit(0, stepCount - 1, (int)((x - stepAreaX) / stepW));
+        if (ch >= 0 && ch < (int)channels.size() && s >= 0 && s < stepCount)
+        {
+            if (inspectorCh == ch && inspectorStep == s)
+                closeInspector();   // right-click same step → toggle off
+            else
+                openInspector(ch, s);
+        }
+        return;
+    }
+
+    // Left-click on step grid (right-click is reserved for context menus)
+    if (x < stepAreaX || e.mods.isRightButtonDown()) return;
 
     const int s = (int)((x - stepAreaX) / stepW);
 
@@ -571,12 +808,61 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
     if (ch >= 0 && ch < (int)channels.size() && s >= 0 && s < stepCount
         && channelTypes[(size_t)ch] == ChannelType::Drum)
     {
+        // Begin a new undo transaction for this click/drag gesture
+        if (onStepDragBegin) onStepDragBegin();
+
         const bool oldState = channels[(size_t)ch].steps[(size_t)s];
-        channels[(size_t)ch].steps[(size_t)s] = !oldState;
-        if (onStepToggled) onStepToggled(ch, s, !oldState, oldState);
+        const bool newState = !oldState;
+        channels[(size_t)ch].steps[(size_t)s] = newState;
+        if (onStepToggled) onStepToggled(ch, s, newState, oldState);
         repaint();
+
+        // Arm drag-paint so mouseDrag continues the gesture on adjacent steps
+        dragPaintChannel_ = ch;
+        dragPaintState_   = newState;
+        lastDragStep_     = s;
     }
     // Melodic channel: double-click opens piano roll (handled in mouseDoubleClick)
+}
+
+void ChannelRackComponent::mouseDrag(const juce::MouseEvent& e)
+{
+    // Only active when a step-grid paint gesture was started in mouseDown
+    if (dragPaintChannel_ < 0 || e.mods.isRightButtonDown()) return;
+
+    const int stepAreaX = LABEL_WIDTH;
+    const float stepW   = (getWidth() - stepAreaX) / (float)stepCount;
+    const int x         = e.getPosition().getX();
+
+    if (x < stepAreaX) return;
+
+    // Clamp so dragging past the grid edges doesn't go out of bounds
+    const int s = juce::jlimit(0, stepCount - 1, (int)((x - stepAreaX) / stepW));
+
+    if (s == lastDragStep_) return;   // already painted this step in this gesture
+    lastDragStep_ = s;
+
+    // Only apply if this step's current state differs from the paint state —
+    // dragging back over an already-painted step leaves it unchanged.
+    const bool currentState = channels[(size_t)dragPaintChannel_].steps[(size_t)s];
+    if (currentState != dragPaintState_)
+    {
+        const bool oldState = currentState;
+        channels[(size_t)dragPaintChannel_].steps[(size_t)s] = dragPaintState_;
+        if (onStepToggled) onStepToggled(dragPaintChannel_, s, dragPaintState_, oldState);
+        repaint();
+    }
+}
+
+void ChannelRackComponent::mouseUp(const juce::MouseEvent&)
+{
+    if (dragPaintChannel_ < 0) return;
+
+    // Close the undo transaction so the next action starts fresh
+    if (onStepDragEnd) onStepDragEnd();
+
+    dragPaintChannel_ = -1;
+    lastDragStep_     = -1;
 }
 
 // M1.5 / M3 — Double-click on channel label area
@@ -650,6 +936,9 @@ void ChannelRackComponent::resized()
     varBtnB.setBounds(varBtnX + 1 * (varBtnW + 2), varBtnY, varBtnW, varBtnH);
     varBtnC.setBounds(varBtnX + 2 * (varBtnW + 2), varBtnY, varBtnW, varBtnH);
     varBtnD.setBounds(varBtnX + 3 * (varBtnW + 2), varBtnY, varBtnW, varBtnH);
+
+    // Inspector position update (only if open)
+    if (inspectorCh >= 0) layoutInspector();
 
     // Per-channel controls layout
     for (int i = 0; i < (int)channels.size(); ++i)

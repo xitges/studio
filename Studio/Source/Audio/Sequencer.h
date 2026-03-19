@@ -16,7 +16,7 @@
 class Sequencer
 {
 public:
-    using TriggerCallback = std::function<void(int channelIndex, int offsetInBuffer)>;
+    using TriggerCallback = std::function<void(int channelIndex, int step, int offsetInBuffer)>;
 
     explicit Sequencer(TriggerCallback cb);
 

@@ -114,8 +114,9 @@ void SamplePlayer::renderNextBlock(juce::AudioBuffer<float>& outputBuffer,
             residualTailR = lastOutputR;
             residualFadeRemaining = kResidualFadeSamples;
         }
-        playPosition = 0.0;
-        startOffset_ = triggerOffset_;
+        playPosition   = playStartPos_;   // per-trigger start offset (0.0 = from buffer start)
+        playStartPos_  = 0.0;             // auto-reset so next trigger is clean
+        startOffset_   = triggerOffset_;
         triggerOffset_ = 0;
         envelopeGain = (attackSamples > 0.0f) ? 0.0f : 1.0f;
     }

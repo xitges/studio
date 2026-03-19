@@ -508,6 +508,13 @@ MainComponent::MainComponent()
         markDirty();
     };
 
+    // ---- M6: Step drag undo batching
+    // onStepDragBegin opens a new transaction at mouseDown so all steps toggled
+    // during a single drag gesture are grouped into one Ctrl+Z action.
+    // onStepDragEnd closes the group so the next action starts a fresh transaction.
+    channelRack.onStepDragBegin = [this] { undoManager.beginNewTransaction(); };
+    channelRack.onStepDragEnd   = [this] { undoManager.beginNewTransaction(); };
+
     // ---- M6: Step toggle undo
     channelRack.onStepToggled = [this](int ch, int step, bool newState, bool oldState)
     {
@@ -548,6 +555,18 @@ MainComponent::MainComponent()
                 for (int s = 0; s < pat->stepCount; ++s)
                     audioEngine.setStepPattern(ch, s, false);
 
+            audioEngine.updatePatternSnapshot();
+            markDirty();
+        }
+    };
+
+    // ---- Per-step params: inspector edits → pattern model → engine snapshot
+    channelRack.onStepParamsChanged = [this](int ch, int step, const StepParams& p)
+    {
+        if (auto* pat = findPattern(activePatternId))
+        {
+            const int vi = channelRack.activeVariation;
+            pat->variations[vi].stepParams[ch][step] = p;
             audioEngine.updatePatternSnapshot();
             markDirty();
         }

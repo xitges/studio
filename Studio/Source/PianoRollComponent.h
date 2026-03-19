@@ -483,7 +483,9 @@ public:
                 dragStartBeat  = noteList[(size_t)i].startBeat;
                 dragStartPitch = noteList[(size_t)i].pitch;
                 dragStartLen   = noteList[(size_t)i].lengthBeats;
-                dragStartMouseX = pos.x;
+                // Anchor resize from the actual note right edge, not the raw click position.
+                // Using pos.x introduces an offset that misaligns the snap grid.
+                dragStartMouseX = resizingNote ? xFromBeat(dragStartBeat + dragStartLen) : pos.x;
                 dragStartMouseY = pos.y;
                 captureSelectedNoteDragState();
                 return;
@@ -543,7 +545,9 @@ public:
                 dragStartBeat = pendingEmptyBeat;
                 dragStartPitch = pendingEmptyPitch;
                 dragStartLen = snapBeats;
-                dragStartMouseX = pendingEmptyStartPos.x;
+                // Anchor from the note's actual right edge (snapped beat + initial length),
+                // not the raw click pixel — avoids pre-snap offset contaminating resize dx.
+                dragStartMouseX = xFromBeat(pendingEmptyBeat + snapBeats);
                 dragStartMouseY = pendingEmptyStartPos.y;
                 pendingEmptyGesture = false;
             }

@@ -99,6 +99,22 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
                 for (int s = 0; s < pat.stepCount; ++s)
                     stepsStr += (pat.variations[vi].steps[ch][s] ? "1" : "0");
                 varEl->setAttribute("steps", stepsStr);
+                // Per-step params — only write non-default steps to keep XML compact
+                for (int s = 0; s < pat.stepCount; ++s)
+                {
+                    const auto& stepP = pat.variations[vi].stepParams[ch][s];
+                    if (stepP.isDefault()) continue;
+                    auto* spEl = varEl->createNewChildElement("StepP");
+                    spEl->setAttribute("s",    s);
+                    spEl->setAttribute("vel",  (double)stepP.velocity);
+                    spEl->setAttribute("gate", (double)stepP.gate);
+                    spEl->setAttribute("prob", (double)stepP.probability);
+                    spEl->setAttribute("pit",  stepP.pitchOffset);
+                    if (stepP.cutoffMod != 0.0f)
+                        spEl->setAttribute("cutM",  (double)stepP.cutoffMod);
+                    if (stepP.startOffsetFrac != 0.0f)
+                        spEl->setAttribute("stOff", (double)stepP.startOffsetFrac);
+                }
                 for (const auto& note : pat.variations[vi].notes[ch])
                 {
                     auto* nEl = varEl->createNewChildElement("Note");
@@ -382,6 +398,21 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                         pat.variations[vi].steps[ch][s] = (stepsStr[s] == '1');
                     for (auto* nEl : varEl->getChildIterator())
                     {
+                        if (nEl->getTagName() == "StepP")
+                        {
+                            const int s = nEl->getIntAttribute("s", -1);
+                            if (s >= 0 && s < Pattern::kMaxSteps)
+                            {
+                                auto& stepP = pat.variations[vi].stepParams[ch][s];
+                                stepP.velocity       = (float)nEl->getDoubleAttribute("vel",   1.0);
+                                stepP.gate           = (float)nEl->getDoubleAttribute("gate",  1.0);
+                                stepP.probability    = (float)nEl->getDoubleAttribute("prob",  1.0);
+                                stepP.pitchOffset    = nEl->getIntAttribute("pit", 0);
+                                stepP.cutoffMod      = (float)nEl->getDoubleAttribute("cutM",  0.0);
+                                stepP.startOffsetFrac = (float)nEl->getDoubleAttribute("stOff", 0.0);
+                            }
+                            continue;
+                        }
                         if (nEl->getTagName() != "Note") continue;
                         NoteEvent note;
                         note.pitch       = nEl->getIntAttribute("pitch", 60);

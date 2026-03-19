@@ -62,7 +62,7 @@ namespace
 }
 
 AudioEngine::AudioEngine()
-    : sequencer([this](int ch, int offset) { triggerChannel(ch, offset); })
+    : sequencer([this](int ch, int step, int offset) { triggerChannel(ch, step, offset); })
 {
     for (int i = 0; i < 16; ++i)
     {
@@ -501,7 +501,10 @@ void AudioEngine::updatePatternSnapshot()
     for (int ch = 0; ch < PlaybackSnapshot::kCh; ++ch)
     {
         for (int s = 0; s < PlaybackSnapshot::kSteps; ++s)
-            snap.steps[ch][s] = pat->variations[varIdx].steps[ch][s];
+        {
+            snap.steps     [ch][s] = pat->variations[varIdx].steps     [ch][s];
+            snap.stepParams[ch][s] = pat->variations[varIdx].stepParams[ch][s];
+        }
 
         snap.channelTypes      [ch] = pat->channelTypes[ch];
         snap.synthParams       [ch] = pat->synthParams[ch];
@@ -580,11 +583,11 @@ SynthParams AudioEngine::makeNoteSynthParams(const SynthParams& baseParams,
 
 void AudioEngine::dispatchVoiceNote(int ch, int midiPitch, float velocity,
                                     int noteLenSamples, float outputGain, float outputPan,
-                                    int mixerTrack, const PlaybackSnapshot& snap)
+                                    int mixerTrack,
+                                    const SynthParams& sp, ChannelSourceType srcType,
+                                    const SamplerParams& samplerParams,
+                                    std::shared_ptr<const juce::AudioBuffer<float>> samplerBuf)
 {
-    const ChannelSourceType srcType = snap.channelSourceTypes[(size_t)ch];
-    const SynthParams&      sp      = snap.synthParams[(size_t)ch];
-
     // Sampler channels always play through the voice engine (source type is authoritative).
     // Synth channels require sp.enabled (preserves legacy opt-in behaviour).
     const bool voiceEnabled = sp.enabled || (srcType == ChannelSourceType::Sampler);
@@ -598,12 +601,11 @@ void AudioEngine::dispatchVoiceNote(int ch, int midiPitch, float velocity,
 
     if (srcType == ChannelSourceType::Sampler)
     {
-        auto buf = getSamplerSourceBuffer(ch);
-        if (buf)
+        if (samplerBuf)
         {
             polySynths[(size_t)ch].noteOnSampler(midiPitch, velocity, sampleRate,
-                                                 noteParams, snap.samplerParams[(size_t)ch],
-                                                 std::move(buf), noteLen,
+                                                 noteParams, samplerParams,
+                                                 std::move(samplerBuf), noteLen,
                                                  outputGain, outputPan, mixerTrack);
             return;
         }
@@ -639,7 +641,11 @@ void AudioEngine::previewNote(int ch, int midiPitch)
 
     if (hasSynth || srcType == ChannelSourceType::Sampler)
     {
-        dispatchVoiceNote(ch, midiPitch, 0.8f, noteLenSamples, volume, pan, mixerTrack, snap);
+        auto samplerBuf = (srcType == ChannelSourceType::Sampler) ? getSamplerSourceBuffer(ch) : nullptr;
+        const SynthParams& snapSp = snap.patternId >= 0 ? snap.synthParams[(size_t)ch] : SynthParams{};
+        const SamplerParams& snapSamp = snap.patternId >= 0 ? snap.samplerParams[(size_t)ch] : SamplerParams{};
+        dispatchVoiceNote(ch, midiPitch, 0.8f, noteLenSamples, volume, pan, mixerTrack,
+                          snapSp, srcType, snapSamp, std::move(samplerBuf));
     }
     else
     {
@@ -913,24 +919,44 @@ const AudioEngine::SongSampleCacheMap& AudioEngine::getSongSamplerCache() const
     return songSamplerCaches_[activeSongSamplerCacheIdx_.load(std::memory_order_acquire)];
 }
 
-void AudioEngine::triggerChannel(int channelIndex, int offsetInBuffer)
+void AudioEngine::triggerChannel(int channelIndex, int step, int offsetInBuffer)
 {
     if (channelIndex < 0 || channelIndex >= 16) return;
 
     // Use snapshot for lock-free access to synth params on audio thread
     const PlaybackSnapshot& trigSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
 
+    // --- Per-step params (default StepParams if step out of range) ---
+    const bool validStep = (step >= 0 && step < trigSnap.stepCount);
+    const StepParams& sp = validStep ? trigSnap.stepParams[channelIndex][step] : StepParams{};
+
+    // Probability gate — skip this trigger based on random chance
+    if (sp.probability < 1.0f && stepParamRng_.nextFloat() > sp.probability)
+        return;
+
+    // Step-level velocity and pitch
+    const float stepVel  = juce::jlimit(0.0f, 1.0f, 0.8f * sp.velocity);
+    const int   baseLen  = juce::jmax(1, (int)(0.25 * sampleRate * 60.0 / bpm.load(std::memory_order_relaxed)));
+    const int   noteLen  = juce::jmax(1, (int)(baseLen * sp.gate));
+
     // If a synth is enabled on this channel, trigger a synth voice at the
     // pitch-slider note (channelBasePitch semitone offset from C4=60).
     // This lets Drum-mode channels use the synth engine with the step grid.
-    if (trigSnap.patternId >= 0 && trigSnap.synthParams[(size_t)channelIndex].enabled)
+    // Melodic channels are driven exclusively by NoteEvents (piano roll) — skip step trigger.
+    if (trigSnap.patternId >= 0 && trigSnap.synthParams[(size_t)channelIndex].enabled
+        && trigSnap.channelTypes[(size_t)channelIndex] != ChannelType::Melodic)
     {
         const int   midiPitch = juce::jlimit(0, 127,
-                                    60 + (int)std::round(channelBasePitch[(size_t)channelIndex].load(std::memory_order_relaxed)));
-        const int   noteLen   = juce::jmax(1,
-                                    (int)(0.25 * sampleRate * 60.0 / bpm.load(std::memory_order_relaxed))); // 1/16 note
-        const auto noteParams = makeNoteSynthParams(trigSnap.synthParams[(size_t)channelIndex],
-                                                    midiPitch, 0.8f, noteLen);
+                                    60 + (int)std::round(channelBasePitch[(size_t)channelIndex].load(std::memory_order_relaxed))
+                                       + sp.pitchOffset);
+
+        // Phase 2 — apply per-step cutoff modulation to a local SynthParams copy
+        SynthParams modSP = trigSnap.synthParams[(size_t)channelIndex];
+        if (sp.cutoffMod != 0.0f)
+            modSP.cutoff = juce::jlimit(40.0f, 20000.0f,
+                                        modSP.cutoff * std::pow(2.0f, sp.cutoffMod));
+
+        const auto noteParams = makeNoteSynthParams(modSP, midiPitch, stepVel, noteLen);
         const int mixerTrack  = juce::jlimit(0, 7, trigSnap.channelMixerRouting[(size_t)channelIndex]);
 
         if (trigSnap.channelSourceTypes[(size_t)channelIndex] == ChannelSourceType::Sampler)
@@ -938,9 +964,14 @@ void AudioEngine::triggerChannel(int channelIndex, int offsetInBuffer)
             auto buf = getSamplerSourceBuffer(channelIndex);
             if (buf)
             {
+                // Phase 2 — apply per-step sample start offset
+                SamplerParams samplerP = trigSnap.samplerParams[(size_t)channelIndex];
+                if (sp.startOffsetFrac > 0.0f && buf->getNumSamples() > 0)
+                    samplerP.startOffsetSamples = (int)(sp.startOffsetFrac * (float)buf->getNumSamples());
+
                 polySynths[(size_t)channelIndex].noteOnSampler(
-                    midiPitch, 0.8f, sampleRate,
-                    noteParams, trigSnap.samplerParams[(size_t)channelIndex],
+                    midiPitch, stepVel, sampleRate,
+                    noteParams, samplerP,
                     std::move(buf), noteLen, 1.0f, 0.0f, mixerTrack);
                 return;
             }
@@ -949,7 +980,7 @@ void AudioEngine::triggerChannel(int channelIndex, int offsetInBuffer)
         else
         {
             polySynths[(size_t)channelIndex].noteOn(
-                midiPitch, 0.8f, sampleRate,
+                midiPitch, stepVel, sampleRate,
                 noteParams, noteLen, 1.0f, 0.0f, mixerTrack);
             return;
         }
@@ -962,13 +993,20 @@ void AudioEngine::triggerChannel(int channelIndex, int offsetInBuffer)
     // channelBasePitch is the realtime pitch-slider value (semitones).
     // trigSnap.channelPitch is the same value snapshotted into the pattern.
     // Use the snapshot when a pattern is active to avoid doubling.
-    const float pitch = (trigSnap.patternId >= 0)
+    const float pitch = ((trigSnap.patternId >= 0)
                           ? trigSnap.channelPitch[(size_t)channelIndex]
-                          : channelBasePitch[(size_t)channelIndex].load(std::memory_order_relaxed);
+                          : channelBasePitch[(size_t)channelIndex].load(std::memory_order_relaxed))
+                        + (float)sp.pitchOffset;   // per-step pitch offset
     const int mixerTrack = (trigSnap.patternId >= 0) ? juce::jlimit(0, 7, trigSnap.channelMixerRouting[(size_t)channelIndex]) : 0;
     auto sourceBuffer = getChannelSourceBufferShared(channelIndex);
+
+    // Phase 2 — per-step sample start offset for raw sample triggers
+    double rawStartOffSamples = 0.0;
+    if (sp.startOffsetFrac > 0.0f && sourceBuffer && sourceBuffer->getNumSamples() > 0)
+        rawStartOffSamples = sp.startOffsetFrac * (double)sourceBuffer->getNumSamples();
+
     scheduleSampleTrigger(channelIndex, offsetInBuffer, mixerTrack, sourceBuffer.get(), sourceBuffer,
-                          volume, pan, pitch, 1.0f);
+                          volume * sp.velocity, pan, pitch, 1.0f, rawStartOffSamples);
 }
 
 const juce::AudioBuffer<float>* AudioEngine::getChannelSourceBuffer(int channelIndex) const
@@ -994,7 +1032,8 @@ void AudioEngine::scheduleSampleTrigger(int channelIndex,
                                         float volume,
                                         float pan,
                                         float pitchSemitones,
-                                        float bpmRatio)
+                                        float bpmRatio,
+                                        double startOffsetSamples)
 {
     if (channelIndex < 0 || channelIndex >= 16 || sourceBuffer == nullptr)
         return;
@@ -1012,6 +1051,7 @@ void AudioEngine::scheduleSampleTrigger(int channelIndex,
     trigger.releaseMs = sampleChannelReleaseMs_[(size_t)channelIndex].load(std::memory_order_relaxed);
     trigger.bpmRatio = bpmRatio;
     trigger.muted = channelMuted[(size_t)channelIndex].load(std::memory_order_relaxed);
+    trigger.startOffsetSamples = juce::jmax(0.0, startOffsetSamples);
     scheduledSampleTriggers_.push(trigger);
 }
 
@@ -1023,7 +1063,8 @@ void AudioEngine::triggerSampleVoiceNow(int channelIndex,
                                         float volume,
                                         float pan,
                                         float pitchSemitones,
-                                        float bpmRatio)
+                                        float bpmRatio,
+                                        double startOffsetSamples)
 {
     if (channelIndex < 0 || channelIndex >= 16 || sourceBuffer == nullptr)
         return;
@@ -1046,6 +1087,8 @@ void AudioEngine::triggerSampleVoiceNow(int channelIndex,
     const bool silenced = channelMuted[(size_t)channelIndex].load(std::memory_order_relaxed)
                        || (anySoloed && !channelSoloed[(size_t)channelIndex].load(std::memory_order_relaxed));
     voice.setMuted(silenced);
+    if (startOffsetSamples > 0.0)
+        voice.setPlayStartPosition(startOffsetSamples);
     voice.triggerAt(juce::jmax(0, offsetInBuffer));
 }
 
@@ -1056,7 +1099,7 @@ void AudioEngine::dispatchScheduledSampleTriggers()
         const auto& trigger = scheduledSampleTriggers_.triggers[(size_t)i];
         triggerSampleVoiceNow(trigger.channel, trigger.offsetInBuffer, trigger.mixerTrack, trigger.sourceBuffer,
                               trigger.ownedSourceBuffer, trigger.volume, trigger.pan, trigger.pitchSemitones,
-                              trigger.bpmRatio);
+                              trigger.bpmRatio, trigger.startOffsetSamples);
     }
 
     scheduledSampleTriggers_.clear();
@@ -1160,7 +1203,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
                     if (hasSynth || srcType == ChannelSourceType::Sampler)
                     {
-                        dispatchVoiceNote(ch, pitch, vel, 0, midiVol, midiPan, midiMixer, midiSnap);
+                        auto samplerBuf2 = (srcType == ChannelSourceType::Sampler) ? getSamplerSourceBuffer(ch) : nullptr;
+                        const SynthParams& midiSp   = midiSnap.patternId >= 0 ? midiSnap.synthParams[(size_t)ch]   : SynthParams{};
+                        const SamplerParams& midiSamp = midiSnap.patternId >= 0 ? midiSnap.samplerParams[(size_t)ch] : SamplerParams{};
+                        dispatchVoiceNote(ch, pitch, vel, 0, midiVol, midiPan, midiMixer,
+                                          midiSp, srcType, midiSamp, std::move(samplerBuf2));
                     }
                     else
                     {
@@ -1436,36 +1483,28 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
                         }
                         else
                         {
-                            const SynthParams& sp = snap.synthParams[(size_t)ch];
-                            if (sp.enabled || snap.channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler)
-                            {
-                                const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
-                                const auto noteParams = makeNoteSynthParams(sp, tp, note.velocity, noteLenSamples);
+                            const ChannelSourceType srcType = snap.channelSourceTypes[(size_t)ch];
+                            const SynthParams&      sp      = snap.synthParams[(size_t)ch];
+                            const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
+                            const int mixerTrack     = juce::jlimit(0, 7, snap.channelMixerRouting[(size_t)ch]);
 
-                                if (snap.channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler)
-                                {
-                                    auto buf = getSamplerSourceBuffer(ch);
-                                    if (buf)
-                                    {
-                                        polySynths[(size_t)ch].noteOnSampler(
-                                            tp, note.velocity, sampleRate, noteParams,
-                                            snap.samplerParams[(size_t)ch],
-                                            std::move(buf), noteLenSamples);
-                                    }
-                                }
-                                else
-                                {
-                                    polySynths[(size_t)ch].noteOn(tp, note.velocity,
-                                                                  sampleRate, noteParams, noteLenSamples);
-                                }
+                            if (sp.enabled || srcType == ChannelSourceType::Sampler)
+                            {
+                                auto samplerBuf = (srcType == ChannelSourceType::Sampler)
+                                                  ? getSamplerSourceBuffer(ch) : nullptr;
+                                dispatchVoiceNote(ch, tp, note.velocity, noteLenSamples,
+                                                  1.0f, 0.0f, mixerTrack,
+                                                  sp, srcType, snap.samplerParams[(size_t)ch],
+                                                  std::move(samplerBuf));
                             }
                             else
                             {
-                                // Apply note velocity as volume scale for sample channels
+                                // Raw sample fallback — no synth/sampler, play via sample trigger
                                 auto sourceBuffer = getChannelSourceBufferShared(ch);
-                                scheduleSampleTrigger(ch, 0, juce::jlimit(0, 7, snap.channelMixerRouting[ch]), sourceBuffer.get(), sourceBuffer,
-                                                      snap.channelVolume[ch] * note.velocity,
-                                                      snap.channelPan[ch],
+                                scheduleSampleTrigger(ch, 0, mixerTrack,
+                                                      sourceBuffer.get(), sourceBuffer,
+                                                      snap.channelVolume[(size_t)ch] * note.velocity,
+                                                      snap.channelPan[(size_t)ch],
                                                       channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + (float)(note.pitch - 60),
                                                       1.0f);
                             }
@@ -1691,15 +1730,35 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                 updateSongMixState(*pattern, ch);
                 if (!pattern->variations[clip.variationIdx].steps[ch][localStep]) continue;
 
+                // Melodic channels are driven exclusively by NoteEvents (piano roll).
+                // Skip step trigger to prevent double-triggering → robotic envelope retrigger.
+                if (pattern->channelTypes[(size_t)ch] == ChannelType::Melodic) continue;
+
+                // --- Per-step params ---
+                const StepParams& songSP = pattern->variations[clip.variationIdx].stepParams[ch][localStep];
+
+                // Probability gate
+                if (songSP.probability < 1.0f && stepParamRng_.nextFloat() > songSP.probability)
+                    continue;
+
+                const float songStepVel = juce::jlimit(0.0f, 1.0f, 0.8f * songSP.velocity);
+
                 const bool useSynth = pattern->synthParams[(size_t)ch].enabled
                                    || pattern->channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler;
                 if (useSynth)
                 {
                     const int midiPitch = juce::jlimit(0, 127,
-                        60 + (int)std::round(pattern->channelPitch[ch]));
-                    const int noteLenSamples = juce::jmax(1, (int)(0.25 * samplesPerBeat));
-                    const auto noteParams = makeNoteSynthParams(pattern->synthParams[(size_t)ch],
-                                                                midiPitch, 0.8f, noteLenSamples);
+                        60 + (int)std::round(pattern->channelPitch[ch]) + songSP.pitchOffset);
+                    const int baseLen       = juce::jmax(1, (int)(0.25 * samplesPerBeat));
+                    const int noteLenSamples = juce::jmax(1, (int)(baseLen * songSP.gate));
+
+                    // Phase 2 — per-step cutoff modulation on top of channel cutoff
+                    SynthParams songModSP = pattern->synthParams[(size_t)ch];
+                    if (songSP.cutoffMod != 0.0f)
+                        songModSP.cutoff = juce::jlimit(40.0f, 20000.0f,
+                                                        songModSP.cutoff * std::pow(2.0f, songSP.cutoffMod));
+
+                    const auto noteParams = makeNoteSynthParams(songModSP, midiPitch, songStepVel, noteLenSamples);
                     const int mixerTrack = juce::jlimit(0, 7, pattern->channelMixerRouting[ch]);
                     const float outVol   = songChannelVolume_[(size_t)ch] * stepFadeGain;
                     const float outPan   = songChannelPan_[(size_t)ch];
@@ -1713,16 +1772,22 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                         if (!samplerBuf) samplerBuf = getSamplerSourceBuffer(ch);  // fallback
                         if (samplerBuf)
                         {
+                            // Phase 2 — per-step sample start offset
+                            SamplerParams songSamplerP = pattern->samplerParams[(size_t)ch];
+                            if (songSP.startOffsetFrac > 0.0f && samplerBuf->getNumSamples() > 0)
+                                songSamplerP.startOffsetSamples = (int)(songSP.startOffsetFrac * (float)samplerBuf->getNumSamples());
+
                             polySynths[(size_t)ch].noteOnSampler(
-                                midiPitch, 0.8f, sampleRate, noteParams,
-                                pattern->samplerParams[(size_t)ch],
+                                midiPitch, songStepVel, sampleRate, noteParams,
+                                songSamplerP,
                                 std::move(samplerBuf), noteLenSamples,
                                 outVol, outPan, mixerTrack);
                         }
                     }
                     else
                     {
-                        polySynths[(size_t)ch].noteOn(midiPitch, 0.8f, sampleRate, noteParams, noteLenSamples,
+                        polySynths[(size_t)ch].noteOn(midiPitch, songStepVel, sampleRate,
+                                                      noteParams, noteLenSamples,
                                                       outVol, outPan, mixerTrack);
                     }
                 }
@@ -1732,11 +1797,17 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                     std::shared_ptr<const juce::AudioBuffer<float>> songBuffer =
                         (cit != songSampleCache.end()) ? cit->second[(size_t)ch] : nullptr;
 
+                    // Phase 2 — per-step sample start offset for raw song samples
+                    double songRawStartOff = 0.0;
+                    if (songSP.startOffsetFrac > 0.0f && songBuffer && songBuffer->getNumSamples() > 0)
+                        songRawStartOff = songSP.startOffsetFrac * (double)songBuffer->getNumSamples();
+
                     scheduleSampleTrigger(ch, offsetInBuf, juce::jlimit(0, 7, pattern->channelMixerRouting[ch]), songBuffer.get(), songBuffer,
-                                          songChannelVolume_[(size_t)ch] * stepFadeGain,
+                                          songChannelVolume_[(size_t)ch] * stepFadeGain * songSP.velocity,
                                           songChannelPan_[(size_t)ch],
-                                          pattern->channelPitch[ch],
-                                          (float)(currentBpm / juce::jmax(1.0, runtime.projectBpm)));
+                                          pattern->channelPitch[ch] + (float)songSP.pitchOffset,
+                                          (float)(currentBpm / juce::jmax(1.0, runtime.projectBpm)),
+                                          songRawStartOff);
                 }
             }
         }
@@ -1782,50 +1853,44 @@ void AudioEngine::processSongMode(juce::AudioBuffer<float>& buffer,
                         const float noteLocalBars = (float)((fireBeat - clipStartBeat) / 4.0);
                         const float noteFadeGain  = computeClipFadeGain(clip, noteLocalBars);
 
-                        const SynthParams& sp = pat->synthParams[(size_t)ch];
-                        const int tp2 = juce::jlimit(0, 127, note.pitch + (int)std::round(channelBasePitch[(size_t)ch].load(std::memory_order_relaxed)));
+                        const ChannelSourceType srcType = pat->channelSourceTypes[(size_t)ch];
+                        const SynthParams&      sp      = pat->synthParams[(size_t)ch];
+                        const int tp2        = juce::jlimit(0, 127, note.pitch + (int)std::round(pat->channelPitch[ch]));
+                        const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
+                        const int mixerTrack = juce::jlimit(0, 7, pat->channelMixerRouting[ch]);
 
-                        if (sp.enabled || pat->channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler)
+                        if (sp.enabled || srcType == ChannelSourceType::Sampler)
                         {
-                            const int noteLenSamples = (int)(note.lengthBeats * samplesPerBeat);
-                            const auto noteParams = makeNoteSynthParams(sp, tp2, note.velocity, noteLenSamples);
-                            const int mixerTrack = juce::jlimit(0, 7, pat->channelMixerRouting[ch]);
-                            const float outVol   = songChannelVolume_[(size_t)ch] * noteFadeGain;
-                            const float outPan   = songChannelPan_[(size_t)ch];
-
-                            if (pat->channelSourceTypes[(size_t)ch] == ChannelSourceType::Sampler)
+                            // Resolve sampler buffer: prefer per-pattern cache, fall back to live channel buffer
+                            std::shared_ptr<const juce::AudioBuffer<float>> samplerBuf;
+                            if (srcType == ChannelSourceType::Sampler)
                             {
                                 const auto& samplerCache = getSongSamplerCache();
                                 auto scit = samplerCache.find(clip.patternId);
-                                std::shared_ptr<const juce::AudioBuffer<float>> samplerBuf =
-                                    (scit != samplerCache.end()) ? scit->second[(size_t)ch] : nullptr;
+                                samplerBuf = (scit != samplerCache.end()) ? scit->second[(size_t)ch] : nullptr;
                                 if (!samplerBuf) samplerBuf = getSamplerSourceBuffer(ch);
-                                if (samplerBuf)
-                                {
-                                    polySynths[(size_t)ch].noteOnSampler(
-                                        tp2, note.velocity, sampleRate, noteParams,
-                                        pat->samplerParams[(size_t)ch],
-                                        std::move(samplerBuf), noteLenSamples,
-                                        outVol, outPan, mixerTrack);
-                                }
                             }
-                            else
-                            {
-                                polySynths[(size_t)ch].noteOn(tp2, note.velocity, sampleRate, noteParams, noteLenSamples,
-                                                              outVol, outPan, mixerTrack);
-                            }
+                            // Bake channel vol/pan into the voice at dispatch time.
+                            // Song mode synths render via renderNextBlockRouted() which has
+                            // no post-render gain stage, so vol/pan must be in the voice itself.
+                            dispatchVoiceNote(ch, tp2, note.velocity, noteLenSamples,
+                                              songChannelVolume_[(size_t)ch] * noteFadeGain,
+                                              songChannelPan_[(size_t)ch], mixerTrack,
+                                              sp, srcType, pat->samplerParams[(size_t)ch],
+                                              std::move(samplerBuf));
                         }
                         else
                         {
+                            // Raw sample fallback — no synth/sampler, play via sample trigger
                             auto cit = songSampleCache.find(clip.patternId);
                             std::shared_ptr<const juce::AudioBuffer<float>> songBuffer =
                                 (cit != songSampleCache.end()) ? cit->second[(size_t)ch] : nullptr;
                             const int offset = juce::jlimit(0, numSamples - 1,
                                                             (int)((fireBeat - startBeatSong) * samplesPerBeat));
-                            scheduleSampleTrigger(ch, offset, juce::jlimit(0, 7, pat->channelMixerRouting[ch]), songBuffer.get(), songBuffer,
+                            scheduleSampleTrigger(ch, offset, mixerTrack, songBuffer.get(), songBuffer,
                                                   songChannelVolume_[(size_t)ch] * note.velocity * noteFadeGain,
                                                   songChannelPan_[(size_t)ch],
-                                                  channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + (float)(note.pitch - 60),
+                                                  pat->channelPitch[ch] + (float)(note.pitch - 60),
                                                   (float)(currentBpm / juce::jmax(1.0, runtime.projectBpm)));
                         }
                     }
@@ -1873,14 +1938,16 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
         stagingBuf.clear();
 
         const bool usePlugin = (instrumentPlugins[(size_t)ch] != nullptr);
-        // Render synth voices whenever active (song mode triggers noteOn in
-        // processSongMode, so isAnyActive() is the correct gate there).
-        // In pattern mode also render when the synth is marked enabled so
-        // the channel produces audio even before the first note is triggered.
-        const bool useSynth = polySynths[(size_t)ch].isAnyActive()
-                           || (playMode != PlayMode::Song
-                               && mixSnap.patternId >= 0
-                               && mixSnap.synthParams[(size_t)ch].enabled);
+        // Song mode synth voices are rendered exclusively via renderNextBlockRouted()
+        // below, which uses per-voice mixer track routing.  Calling renderNextBlock()
+        // here in Song mode would render the same voice objects a second time in the
+        // same audio callback — the first call advances voice state (ADSR, oscillator
+        // phase), so the second call produces a broken, phasey, robotic signal.
+        // Pattern mode still uses this staging path (renderNextBlockRouted is skipped).
+        const bool useSynth = (playMode != PlayMode::Song)
+                           && (polySynths[(size_t)ch].isAnyActive()
+                               || (mixSnap.patternId >= 0
+                                   && mixSnap.synthParams[(size_t)ch].enabled));
 
         if (usePlugin)
         {

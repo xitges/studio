@@ -243,6 +243,29 @@ namespace MusicTheory
     }
 }
 
+// Per-step expressive parameters — applied when a step fires.
+// All values are multiplicative or additive on top of channel defaults.
+// Default (isDefault() == true) → no change from current behaviour.
+struct StepParams
+{
+    float velocity    = 1.0f;   // 0..2  — multiplier on trigger velocity (1.0 = default 0.8)
+    float gate        = 1.0f;   // 0..2  — multiplier on note gate length  (1.0 = full 1/16 step)
+    float probability = 1.0f;   // 0..1  — chance this step fires           (1.0 = always)
+    int   pitchOffset = 0;      // -12..+12  semitone offset added to channel pitch
+
+    // Phase 2 — timbral modulation
+    float cutoffMod      = 0.0f;  // -3..+3 octaves applied on top of channel cutoff (0 = no change)
+    float startOffsetFrac = 0.0f; // 0..1  — normalized source-buffer start position (0 = channel default)
+
+    bool isDefault() const noexcept
+    {
+        return velocity == 1.0f && gate == 1.0f
+            && probability == 1.0f && pitchOffset == 0
+            && cutoffMod == 0.0f && startOffsetFrac == 0.0f;
+    }
+    void reset() { *this = StepParams{}; }
+};
+
 // M3 — one note in a melodic channel's piano roll
 struct NoteEvent
 {
@@ -602,7 +625,8 @@ struct VariationData
     static constexpr int kMaxChannels = 16;
     static constexpr int kMaxSteps    = kMaxPatternSteps;
 
-    bool steps[kMaxChannels][kMaxSteps] {};
+    bool       steps     [kMaxChannels][kMaxSteps] {};
+    StepParams stepParams[kMaxChannels][kMaxSteps] {};   // per-step expression; isDefault() → no override
     std::vector<NoteEvent> notes[kMaxChannels];
 };
 

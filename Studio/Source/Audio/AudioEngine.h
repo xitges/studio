@@ -31,6 +31,8 @@ struct PlaybackSnapshot
     int  stepCount = 16;
     bool steps[kCh][kSteps] = {};
 
+    StepParams stepParams[kCh][kSteps] = {};  // per-step expression (Pattern mode)
+
     struct NoteSlot { NoteEvent notes[kNotes]; int count = 0; };
     NoteSlot noteSlots[kCh];
 
@@ -67,7 +69,7 @@ public:
     // Sample management
     void loadSample        (int channelIndex, const juce::File& file);
     void unloadSample      (int channelIndex);   // clear player so channel plays nothing
-    void triggerChannel    (int channelIndex, int offsetInBuffer = 0);
+    void triggerChannel    (int channelIndex, int step, int offsetInBuffer = 0);
 
     // Sampler Synth — load the oscillator-source buffer for a Sampler channel.
     // Call from the message thread when the user assigns a sample to a Sampler channel.
@@ -323,7 +325,8 @@ private:
         float attackMs = 10.0f;
         float releaseMs = 0.0f;
         float bpmRatio = 1.0f;
-        bool muted = false;
+        bool  muted = false;
+        double startOffsetSamples = 0.0;  // per-step sample start position (0 = buffer start)
     };
 
     struct ScheduledSampleTriggerQueue
@@ -495,7 +498,8 @@ private:
                                float volume,
                                float pan,
                                float pitchSemitones,
-                               float bpmRatio);
+                               float bpmRatio,
+                               double startOffsetSamples = 0.0);
     void triggerSampleVoiceNow(int channelIndex,
                                int offsetInBuffer,
                                int mixerTrack,
@@ -504,7 +508,8 @@ private:
                                float volume,
                                float pan,
                                float pitchSemitones,
-                               float bpmRatio);
+                               float bpmRatio,
+                               double startOffsetSamples = 0.0);
     void dispatchScheduledSampleTriggers();
     const juce::AudioBuffer<float>* getChannelSourceBuffer(int channelIndex) const;
     std::shared_ptr<const juce::AudioBuffer<float>> getChannelSourceBufferShared(int channelIndex) const;
@@ -560,9 +565,12 @@ private:
     // Unified voice dispatch — routes to noteOnSampler or noteOn based on source type.
     // Sampler channels play regardless of synthParams.enabled; Synth channels require it.
     // noteLenSamples == 0 → use 1/16th note at current BPM.
+    // samplerBuf must be non-null when srcType == Sampler; pass nullptr for synth channels.
     void dispatchVoiceNote(int ch, int midiPitch, float velocity, int noteLenSamples,
                            float outputGain, float outputPan, int mixerTrack,
-                           const PlaybackSnapshot& snap);
+                           const SynthParams& sp, ChannelSourceType srcType,
+                           const SamplerParams& samplerParams,
+                           std::shared_ptr<const juce::AudioBuffer<float>> samplerBuf);
     
     double sampleRate = 44100.0;
     int    bufferSize = 512;
@@ -573,6 +581,7 @@ private:
     std::array<float, 8>             trackInputTrim_ {};
     float                            masterInputTrim_ = 1.0f;
     float                            masterGlueEnvelope_ = 0.0f;
+    juce::Random                     stepParamRng_;   // for per-step probability (audio thread)
 
     // M8 — VST/AU instrument plugin hosting
     // Lock held by message thread (ScopedLock) on load/unload,

@@ -100,6 +100,6 @@ void Sequencer::triggerCurrentStep(int offsetInBuffer)
 {
     for (int ch = 0; ch < CHANNEL_COUNT; ++ch)
         if (pattern[ch][currentStep])
-            onTrigger(ch, offsetInBuffer);
+            onTrigger(ch, currentStep, offsetInBuffer);
 }
 

@@ -1,8 +1,7 @@
 /*
   ==============================================================================
 
-    SynthEngine.h  — M13 Built-in Synthesizer
-    8-voice polyphonic subtractive synth: oscillator + biquad LP filter + ADSR + LFO
+    
 
   ==============================================================================
 */

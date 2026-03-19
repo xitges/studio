@@ -42,6 +42,8 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseUp  (const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;   // M1.5 rename
     void timerCallback() override;
 
@@ -64,6 +66,8 @@ public:
     std::function<void(int ch, float pitch)>  onPitchChanged;   // M1.2
     std::function<void(int ch, juce::File)>   onSampleDropped;
     std::function<void(int ch, int step, bool newState, bool oldState)> onStepToggled; // M6
+    std::function<void()>                     onStepDragBegin;  // mouseDown on step → start undo txn
+    std::function<void()>                     onStepDragEnd;    // mouseUp  on step → close undo txn
     std::function<void()>                     onClearAllSteps;
     std::function<void(int ch)>               onOpenPianoRoll;      // M3
     std::function<void(int newStepCount)>     onStepCountChanged;   // M3
@@ -137,8 +141,46 @@ public:
     // M1.4 — expose needed height so Viewport can be sized correctly
     int getNeededHeight() const
     {
-        return HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50;
+        return HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50 + INSPECTOR_HEIGHT;
     }
+
+    // Step inspector — call from MainComponent to push model state to inspector
+    void setStepParams(int ch, int step, const StepParams& p)
+    {
+        if (ch < 0 || ch >= Pattern::kMaxChannels || step < 0 || step >= Pattern::kMaxSteps) return;
+        stepParamsStore[ch][step] = p;
+        if (inspectorCh == ch && inspectorStep == step) refreshInspector();
+        repaint();   // badge update
+    }
+
+    const StepParams& getStepParams(int ch, int step) const
+    {
+        return stepParamsStore[ch][step];
+    }
+
+    // Load all step params from a pattern (call alongside loadPattern)
+    void loadStepParams(const Pattern& pat, int varIdx = -1)
+    {
+        const int vi = (varIdx >= 0) ? varIdx : activeVariation;
+        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+            for (int s = 0; s < Pattern::kMaxSteps; ++s)
+                stepParamsStore[ch][s] = pat.variations[vi].stepParams[ch][s];
+        if (inspectorCh >= 0 && inspectorStep >= 0) refreshInspector();
+        repaint();
+    }
+
+    // Save all step params back into a pattern variation
+    void saveStepParams(Pattern& pat, int varIdx = -1) const
+    {
+        const int vi = (varIdx >= 0) ? varIdx : activeVariation;
+        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+            for (int s = 0; s < Pattern::kMaxSteps; ++s)
+                pat.variations[vi].stepParams[ch][s] = stepParamsStore[ch][s];
+
+    }
+
+    // Callback fired when user edits step params in the inspector
+    std::function<void(int ch, int step, const StepParams&)> onStepParamsChanged;
 
     // M2.1 — Pattern load / save (-1 = use activeVariation)
     void loadPattern(const Pattern& pat, int varIdx = -1);
@@ -152,9 +194,10 @@ public:
     }
     void resetToChannelCount(int count, const juce::String* names);
 
-    static constexpr int ROW_HEIGHT    = 58;
-    static constexpr int LABEL_WIDTH   = 250;
-    static constexpr int HEADER_HEIGHT = 30;
+    static constexpr int ROW_HEIGHT      = 58;
+    static constexpr int LABEL_WIDTH     = 250;
+    static constexpr int HEADER_HEIGHT   = 30;
+    static constexpr int INSPECTOR_HEIGHT = 114; // height of step inspector strip (3 rows)
 
 private:
     std::vector<ChannelRow> channels;
@@ -172,6 +215,34 @@ private:
     int dragHoverChannel = -1;
     int currentPlayStep  = -1;
     int stepCount        = 16;
+
+    // Drag-to-paint state — reset in mouseUp
+    int  dragPaintChannel_ = -1;   // channel row locked at mouseDown; -1 = not painting
+    bool dragPaintState_   = false; // ON or OFF — determined by the initial click
+    int  lastDragStep_     = -1;   // last step index processed (dedup)
+
+    // --- Per-step params store (UI-side mirror of project model) ---
+    StepParams stepParamsStore[Pattern::kMaxChannels][Pattern::kMaxSteps] {};
+
+    // --- Step Inspector ---
+    int inspectorCh   = -1;   // currently inspected channel (-1 = none)
+    int inspectorStep = -1;   // currently inspected step    (-1 = none)
+
+    // Inspector controls (shown when a step is selected via right-click)
+    juce::Label  inspectorLabel;
+    juce::Slider inspVelSlider;        // velocity multiplier 0..2
+    juce::Slider inspGateSlider;       // gate multiplier 0..2
+    juce::Slider inspProbSlider;       // probability 0..1
+    juce::Slider inspPitchSlider;      // pitch offset -12..+12 st
+    juce::Slider inspCutoffSlider;     // cutoff mod -3..+3 octaves (Phase 2)
+    juce::Slider inspStartOffSlider;   // sample start offset 0..1 (Phase 2)
+    juce::TextButton inspResetBtn { "Reset" };
+
+    void openInspector(int ch, int step);   // select a step for inspection
+    void closeInspector();
+    void refreshInspector();                // sync inspector controls from stepParamsStore
+    void drawInspector(juce::Graphics& g);  // paint the inspector background/labels
+    void layoutInspector();                 // position inspector controls
 
     void addChannel(const juce::String& name);
     void drawStepGrid(juce::Graphics& g);
