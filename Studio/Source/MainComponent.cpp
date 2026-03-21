@@ -155,42 +155,23 @@ MainComponent::MainComponent()
 
     toolbar.onPlay = [this]
     {
-        pausedBarSong = -1.0;   // toolbar play = always from beginning
+        pausedBarSong = -1.0;
         syncPatternToEngine();
         markDirty();
         project.bpm = toolbar.getBPM();
         audioEngine.setBPM(project.bpm);
         audioEngine.setPlayMode(toolbar.getPlayMode());
         audioEngine.play();
-
-        // Start recording if armed
-        if (audioEngine.isRecordArmed())
-        {
-            // Build recording file path
-            juce::File recDir;
-            if (currentFile.existsAsFile())
-                recDir = currentFile.getParentDirectory().getChildFile("Recordings");
-            else
-                recDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-                             .getChildFile("Studio").getChildFile("Recordings");
-            recDir.createDirectory();
-
-            auto now = juce::Time::getCurrentTime();
-            auto filename = "Recording_" + now.formatted("%Y%m%d_%H%M%S") + ".wav";
-            auto recFile = recDir.getChildFile(filename);
-
-            if (audioEngine.startRecording(recFile))
-                toolbar.setRecordingActive(true);
-        }
     };
 
     toolbar.onStop = [this]
     {
-        pausedBarSong = -1.0;   // toolbar stop = reset to beginning
+        pausedBarSong = -1.0;
 
-        // Stop recording first (before stopping transport)
+        // Stop recording if active
         if (audioEngine.isRecording())
         {
+            audioEngine.setInputMonitoring(false);
             audioEngine.stopRecording();
             toolbar.setRecordingActive(false);
         }
@@ -203,9 +184,44 @@ MainComponent::MainComponent()
             pianoRollWindow->content.pianoRoll.setPlayheadBeat(-1.0);
     };
 
-    toolbar.onRecordToggled = [this](bool armed)
+    // Rec button: single click to start recording, click again to stop
+    toolbar.onRecordStart = [this]
     {
-        audioEngine.setRecordArmed(armed);
+        // Build recording file path
+        juce::File recDir;
+        if (currentFile.existsAsFile())
+            recDir = currentFile.getParentDirectory().getChildFile("Recordings");
+        else
+            recDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                         .getChildFile("Studio").getChildFile("Recordings");
+        recDir.createDirectory();
+
+        auto now = juce::Time::getCurrentTime();
+        auto filename = "Recording_" + now.formatted("%Y%m%d_%H%M%S") + ".wav";
+        auto recFile = recDir.getChildFile(filename);
+
+        // Start transport if not already playing
+        if (!audioEngine.isPlaying())
+        {
+            syncPatternToEngine();
+            project.bpm = toolbar.getBPM();
+            audioEngine.setBPM(project.bpm);
+            audioEngine.setPlayMode(toolbar.getPlayMode());
+            audioEngine.play();
+        }
+
+        // Enable input monitoring automatically
+        audioEngine.setInputMonitoring(true);
+
+        if (audioEngine.startRecording(recFile))
+            toolbar.setRecordingActive(true);
+    };
+
+    toolbar.onRecordStop = [this]
+    {
+        audioEngine.setInputMonitoring(false);
+        audioEngine.stopRecording();
+        toolbar.setRecordingActive(false);
     };
 
     // When recording finishes, auto-create an audio clip in the playlist
@@ -227,24 +243,14 @@ MainComponent::MainComponent()
         clip.name          = recordedFile.getFileNameWithoutExtension();
         clip.startBar      = (float)startBar;
         clip.lengthBars    = (float)lengthBars;
-        clip.trackIndex    = 0;   // place on first track
+        clip.trackIndex    = 0;
 
         project.playlistClips.push_back(clip);
         audioEngine.loadAudioClip(clip.id, recordedFile, clip.lengthBars);
         audioEngine.refreshSongCacheAsync();
 
-        // Refresh playlist UI (PlaylistComponent reads project.playlistClips directly)
         playlist.repaint();
         markDirty();
-
-        // Disarm record after successful recording
-        audioEngine.setRecordArmed(false);
-        toolbar.setRecordingActive(false);
-    };
-
-    toolbar.onInputMonitoringToggled = [this](bool on)
-    {
-        audioEngine.setInputMonitoring(on);
     };
 
     toolbar.onBPMChanged = [this](double bpm)
@@ -2778,6 +2784,7 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
             // Stop recording on any pause/stop via Space
             if (audioEngine.isRecording())
             {
+                audioEngine.setInputMonitoring(false);
                 audioEngine.stopRecording();
                 toolbar.setRecordingActive(false);
             }

@@ -182,8 +182,9 @@ private:
             const int bufIdx = (fifoStart + i) * numChannels_;
             for (int c = 0; c < numChannels_; ++c)
             {
-                fifoBuffer_[(size_t)bufIdx + (size_t)c] =
-                    (c < ch) ? inputData[c][srcOffset + i] : 0.0f;
+                // Mono input → duplicate to both channels
+                const int srcCh = (c < ch) ? c : 0;
+                fifoBuffer_[(size_t)bufIdx + (size_t)c] = inputData[srcCh][srcOffset + i];
             }
         }
     }

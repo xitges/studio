@@ -88,13 +88,12 @@ public:
     // Trackpad multitouch controller toggle
     std::function<void()>  onToggleTrackpad;
 
-    // Recording
-    std::function<void(bool armed)> onRecordToggled;
-    std::function<void(bool on)>    onInputMonitoringToggled;
+    // Recording — single toggle: start/stop recording
+    std::function<void()>  onRecordStart;
+    std::function<void()>  onRecordStop;
 
-    // Set recording state (for visual feedback)
+    // Set recording state (for visual feedback — called by MainComponent)
     void setRecordingActive(bool active);
-    bool isRecordArmed() const { return recordArmed_; }
 
     // Input level metering — call from MainComponent timer
     void setInputLevels(float levelL, float levelR);
@@ -111,6 +110,9 @@ private:
     juce::Slider     bpmSlider;
     juce::Label      bpmLabel;
     juce::Label      titleLabel;
+
+    // Recording elapsed time label
+    juce::Label      recTimeLabel;
 
     // Row 2 — pattern management
     juce::Label      patternLabel;
@@ -142,19 +144,12 @@ private:
     // Trackpad multitouch button
     juce::TextButton trackpadBtn      { "Touch" };
 
-    // Input monitoring button
-    juce::TextButton monitorBtn       { "Mon" };
-
-    // Recording elapsed time label
-    juce::Label      recTimeLabel;
-
-    bool     playing     = false;
-    bool     recordArmed_ = false;
+    bool     playing          = false;
     bool     recordingActive_ = false;
-    int      blinkCounter_ = 0;        // for armed state blinking
-    float    inputLevelL_ = 0.0f;
-    float    inputLevelR_ = 0.0f;
-    double   recElapsedSec_ = 0.0;
+    int      blinkCounter_    = 0;
+    float    inputLevelL_     = 0.0f;
+    float    inputLevelR_     = 0.0f;
+    double   recElapsedSec_   = 0.0;
     PlayMode playMode = PlayMode::Pattern;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ToolbarComponent)

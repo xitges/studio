@@ -238,7 +238,9 @@ void AudioEngine::stop()
 
 bool AudioEngine::startRecording(const juce::File& outputFile)
 {
-    recordStartBar_ = songBeatPosition_.load(std::memory_order_relaxed) / 4.0;
+    recordStartBar_ = (playMode == PlayMode::Song)
+                      ? songBeatPosition_.load(std::memory_order_relaxed) / 4.0
+                      : 0.0;
     return recorder_.startRecording(outputFile, sampleRate, 2);
 }
 
@@ -247,14 +249,19 @@ juce::File AudioEngine::stopRecording()
     if (!recorder_.isRecording())
         return {};
 
-    const double endBar = songBeatPosition_.load(std::memory_order_relaxed) / 4.0;
-    const double lengthBars = juce::jmax(0.0, endBar - recordStartBar_);
+    // Compute length from actual samples written (reliable in both Pattern and Song mode)
+    const juce::int64 samplesWritten = recorder_.getTotalSamplesWritten();
+    const double currentBpm = bpm.load(std::memory_order_relaxed);
+    const double samplesPerBar = (sampleRate * 60.0 / currentBpm) * 4.0;
+    const double lengthBars = (samplesPerBar > 0.0)
+                              ? (double)samplesWritten / samplesPerBar
+                              : 1.0;
     const double startBar = recordStartBar_;
 
     recorder_.stopRecording();
     auto file = recorder_.getRecordedFile();
 
-    if (onRecordingFinished && file.existsAsFile())
+    if (onRecordingFinished && file.existsAsFile() && lengthBars > 0.0)
     {
         juce::MessageManager::callAsync([this, file, startBar, lengthBars]
         {
@@ -1252,12 +1259,15 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         recorder_.writeBlock(inputChannelData, numInputChannels, numSamples);
 
     // --- Input monitoring: mix input directly to output ---
+    // Mono input → both channels; stereo input → L to L, R to R
     if (inputMonitoring_.load(std::memory_order_relaxed)
         && inputChannelData != nullptr && numInputChannels > 0)
     {
-        const int chToCopy = juce::jmin(numInputChannels, numOutputChannels);
-        for (int c = 0; c < chToCopy; ++c)
-            buffer.addFrom(c, 0, inputChannelData[c], numSamples);
+        buffer.addFrom(0, 0, inputChannelData[0], numSamples);
+        if (numInputChannels >= 2 && numOutputChannels >= 2)
+            buffer.addFrom(1, 0, inputChannelData[1], numSamples);
+        else if (numOutputChannels >= 2)
+            buffer.addFrom(1, 0, inputChannelData[0], numSamples);  // mono → both
     }
 
     // --- Input level metering (peak detection for UI) ---
