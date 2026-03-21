@@ -326,17 +326,32 @@ struct SynthParams
     int   unisonVoices = 1;       // 1–8 stacked oscillators
     float unisonDetune = 0.0f;    // 0–100 cents total spread
     float unisonSpread = 0.5f;    // 0–1 stereo width
-    float attack       = 5.0f;   // ms
-    float decay        = 80.0f;  // ms
-    float sustain      = 0.6f;   // 0.0 – 1.0
-    float release      = 200.0f; // ms
-    float cutoff       = 4000.0f;// Hz
-    float resonance    = 0.3f;   // 0.0 – 1.0
+
+    // ---------------------------------------------------------------------------
+    // ADSR — UI slider values in ms (mapped through double-log curve internally).
+    // Practical perceived times at 44.1 kHz:
+    //   attack 5 ms UI  → ~0.51 ms actual   (noteOnFade provides pop-free onset)
+    //   decay  800 ms UI → ~25  ms actual   → ~146 ms audible decay tail
+    //   release 900 ms UI → ~29 ms actual   → ~278 ms audible release tail
+    // ---------------------------------------------------------------------------
+    float attack       = 5.0f;    // ms
+    float decay        = 800.0f;  // ms  (was 80 → snap; 800 = natural settle)
+    float sustain      = 0.65f;   // 0.0–1.0  (was 0.6; slightly fuller body)
+    float release      = 900.0f;  // ms  (was 200 → abrupt; 900 = musical tail)
+
+    // ---------------------------------------------------------------------------
+    // Filter — default tuned so the Ladder LP stays audible throughout the note:
+    //   cutoff 3200 Hz + filterEnvAmount 0.30 → sweeps 4.3 kHz (closed) → 9.4 kHz
+    //   (sustain).  Old 4000 Hz + 0.50 swept the filter fully open at sustain,
+    //   effectively bypassing it and losing all warmth on held notes.
+    // ---------------------------------------------------------------------------
+    float cutoff       = 3200.0f; // Hz  (was 4000; warmer base, filter stays in play)
+    float resonance    = 0.18f;   // 0.0–1.0  (was 0.3; less nasal/peaky character)
     int   filterType      = 0;      // 0=LP 1=HP 2=BP 3=Notch (for SVF)
     int   filterMode      = 0;      // 0=Ladder 1=SVF
     float filterDrive     = 0.0f;   // 0–1 pre-filter saturation
-    float filterEnvAmount = 0.5f;   // -1..+1 filter envelope depth
-    float driftDepth      = 0.3f;   // 0..1 oscillator drift amount
+    float filterEnvAmount = 0.30f;  // -1..+1  (was 0.5; gentle musical sweep, not dominant)
+    float driftDepth      = 0.22f;  // 0..1  (was 0.3; still organic, less obvious wobble)
     float lfoRate      = 2.0f;   // Hz
     float lfoDepth     = 0.0f;   // 0.0 – 1.0
     int   lfoTarget    = 0;      // 0=Cutoff 1=Pitch 2=Amplitude 3=PulseWidth

@@ -949,10 +949,16 @@ public:
                 const float loudnessComp  = std::pow(2.0f, pitchDelta * 0.65f);
                 const float transientDrive = 1.0f + (1.0f - envLevel_) * (0.18f + velocity_ * 0.12f)
                                            + (envOpen * 0.08f);
-                const float harmonicDrive  = 1.12f + resonanceSmoothed_ * 0.85f
-                                           + ((oscWaveform_ == 1 || oscWaveform_ == 2 || oscWaveform_ == 4) ? 0.18f : 0.0f);
+                // harmonicDrive — pre-filter gentle saturation for warmth and density.
+                // Reduced base (1.06 vs 1.12) and resonance coupling (0.60 vs 0.85) so
+                // the Ladder/SVF filter does the heavy tonal lifting rather than hard
+                // pre-clip harshness.  Saw/square bonus trimmed to 0.10 (was 0.18).
+                const float harmonicDrive  = 1.06f + resonanceSmoothed_ * 0.60f
+                                           + ((oscWaveform_ == 1 || oscWaveform_ == 2 || oscWaveform_ == 4) ? 0.10f : 0.0f);
                 const float driveGain     = 1.0f + params_.filterDrive * 3.0f;
-                const float envVelGain    = envLevel_ * velocity_ * 0.28f
+                // envVelGain scalar raised 0.28→0.30 to compensate for the ~8% reduction
+                // in pre-filter level from the tighter harmonicDrive ceiling.
+                const float envVelGain    = envLevel_ * velocity_ * 0.30f
                                           * transientPunch_ * outputGain_ * loudnessComp * ampMod;
 
                 const float sampleL = SynthVoicing::softClip(rawSampleL * harmonicDrive * transientDrive * driveGain) * envVelGain;
