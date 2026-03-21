@@ -83,6 +83,8 @@ public:
     // Launchpad toggle
     std::function<void()>  onToggleLaunchpad;
 
+    // Trackpad multitouch controller toggle
+    std::function<void()>  onToggleTrackpad;
 
 private:
     // Row 1 — transport
@@ -121,6 +123,8 @@ private:
     // Launchpad button
     juce::TextButton launchpadBtn     { "Pad" };
 
+    // Trackpad multitouch button
+    juce::TextButton trackpadBtn      { "Touch" };
 
     bool     playing  = false;
     PlayMode playMode = PlayMode::Pattern;

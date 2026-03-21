@@ -15,6 +15,7 @@
 #include "SampleBrowserComponent.h"
 #include "PluginBrowserComponent.h"
 #include "DynamicEQComponent.h"
+#include "TrackpadController.h"
 
 class MainComponent : public juce::Component,
                       public juce::Timer,
@@ -73,6 +74,9 @@ private:
 
     // Dynamic EQ windows (0-7 = mixer tracks, 8 = master)
     std::array<std::unique_ptr<DynamicEQWindow>, 9>         dynEQWindows;
+
+    // Trackpad multitouch → launchpad pads 0-15
+    TrackpadController trackpadController;
 
     // M2 — pattern management state
     int activePatternId = 1;

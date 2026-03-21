@@ -37,6 +37,8 @@
       <FILE id="MixC01" name="MixerComponent.h" compile="0" resource="0" file="Source/MixerComponent.h"/>
       <FILE id="SLF001" name="StudioLookAndFeel.h" compile="0" resource="0" file="Source/StudioLookAndFeel.h"/>
       <FILE id="LPad01" name="LaunchpadComponent.h" compile="0" resource="0" file="Source/LaunchpadComponent.h"/>
+      <FILE id="TPCtrl" name="TrackpadController.h" compile="0" resource="0" file="Source/TrackpadController.h"/>
+      <FILE id="TPImpl" name="TrackpadController.mm" compile="1" resource="0" file="Source/TrackpadController.mm"/>
       <FILE id="Syn001" name="SynthEngine.h" compile="0" resource="0" file="Source/SynthEngine.h"/>
       <FILE id="FXP001" name="FXProcessor.h" compile="0" resource="0" file="Source/FXProcessor.h"/>
       <FILE id="SynE01" name="SynthEditorComponent.h" compile="0" resource="0" file="Source/SynthEditorComponent.h"/>
@@ -65,8 +67,8 @@
   <EXPORTFORMATS>
     <XCODE_MAC targetFolder="Builds/MacOSX">
       <CONFIGURATIONS>
-        <CONFIGURATION isDebug="1" name="Debug" targetName="XitgeS" headerPath="$(SOURCE_ROOT)/Source $(SOURCE_ROOT)/Source/Audio /opt/homebrew/include" libraryPath="/opt/homebrew/lib" extraLinkerFlags="-lrubberband"/>
-        <CONFIGURATION isDebug="0" name="Release" targetName="XitgeS" headerPath="$(SOURCE_ROOT)/Source $(SOURCE_ROOT)/Source/Audio /opt/homebrew/include" libraryPath="/opt/homebrew/lib" extraLinkerFlags="-lrubberband"/>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="XitgeS" headerPath="$(SOURCE_ROOT)/Source $(SOURCE_ROOT)/Source/Audio /opt/homebrew/include" libraryPath="/opt/homebrew/lib" extraLinkerFlags="-lrubberband -F/System/Library/PrivateFrameworks -framework MultitouchSupport"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="XitgeS" headerPath="$(SOURCE_ROOT)/Source $(SOURCE_ROOT)/Source/Audio /opt/homebrew/include" libraryPath="/opt/homebrew/lib" extraLinkerFlags="-lrubberband -F/System/Library/PrivateFrameworks -framework MultitouchSupport"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
         <MODULEPATH id="juce_audio_basics" path="../../Documents/JUCE/modules"/>

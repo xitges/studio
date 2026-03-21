@@ -1771,6 +1771,24 @@ MainComponent::MainComponent()
             });
     };
 
+    // Trackpad multitouch → launchpad pads 0-15
+    toolbar.onToggleTrackpad = [this]
+    {
+        if (trackpadController.isRunning())
+        {
+            trackpadController.stop();
+        }
+        else
+        {
+            trackpadController.onPadEvent = [this](int padIdx, float /*velocity*/, bool isNoteOn)
+            {
+                if (isNoteOn)
+                    audioEngine.triggerLaunchpadPad(padIdx);
+            };
+            trackpadController.start();
+        }
+    };
+
     setWantsKeyboardFocus(true);
 
     // Sync engine with the initial pattern so previewNote / synth works before first Play
@@ -1783,6 +1801,7 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    trackpadController.stop();
     stopTimer();
 
     // Release static PropertiesFile instances before JUCE's LeakDetector fires.
