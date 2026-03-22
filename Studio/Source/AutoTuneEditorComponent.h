@@ -128,11 +128,14 @@ public:
         p.formantPreserve = formantBtn.getToggleState();
     }
 
-    void setDetectedPitch(float hz, float targetHz)
+    void setDetectedPitch(float hz, float targetHz, float rms = 0.0f)
     {
         if (hz <= 0.0f || std::isnan(hz) || std::isinf(hz))
         {
-            pitchDisplay.setText("--", juce::dontSendNotification);
+            if (rms < 0.001f)
+                pitchDisplay.setText("No signal", juce::dontSendNotification);
+            else
+                pitchDisplay.setText("-- (level: " + juce::String(rms, 3) + ")", juce::dontSendNotification);
             return;
         }
 

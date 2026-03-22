@@ -71,8 +71,14 @@ public:
 
         recording_.store(false, std::memory_order_release);
 
-        // Wait for writer thread to flush remaining samples
-        stopThread(2000);
+        // Wait for writer thread — keep trying until it actually exits.
+        // The thread checks threadShouldExit() in its loop.
+        if (!stopThread(5000))
+        {
+            // Thread didn't exit in time — wait more rather than
+            // proceeding while the thread still accesses writer_.
+            waitForThreadToExit(5000);
+        }
         flushFifo();
         writer_.reset();
     }

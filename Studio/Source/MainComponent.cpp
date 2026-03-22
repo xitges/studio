@@ -187,6 +187,9 @@ MainComponent::MainComponent()
     // Rec button: single click to start recording, click again to stop
     toolbar.onRecordStart = [this]
     {
+        if (recordTransitioning_) return;
+        recordTransitioning_ = true;
+
         // Build recording file path
         juce::File recDir;
         if (currentFile.existsAsFile())
@@ -200,28 +203,25 @@ MainComponent::MainComponent()
         auto filename = "Recording_" + now.formatted("%Y%m%d_%H%M%S") + ".wav";
         auto recFile = recDir.getChildFile(filename);
 
-        // Start transport if not already playing
-        if (!audioEngine.isPlaying())
-        {
-            syncPatternToEngine();
-            project.bpm = toolbar.getBPM();
-            audioEngine.setBPM(project.bpm);
-            audioEngine.setPlayMode(toolbar.getPlayMode());
-            audioEngine.play();
-        }
-
         // Enable input monitoring automatically
         audioEngine.setInputMonitoring(true);
 
         if (audioEngine.startRecording(recFile))
             toolbar.setRecordingActive(true);
+
+        recordTransitioning_ = false;
     };
 
     toolbar.onRecordStop = [this]
     {
+        if (recordTransitioning_) return;
+        recordTransitioning_ = true;
+
         audioEngine.setInputMonitoring(false);
         audioEngine.stopRecording();
         toolbar.setRecordingActive(false);
+
+        recordTransitioning_ = false;
     };
 
     // When recording finishes, auto-create an audio clip in the playlist
@@ -2969,7 +2969,8 @@ void MainComponent::timerCallback()
     {
         const auto& proc = audioEngine.getAutoTuneProcessor(autoTuneEditorTrack);
         autoTuneEditorWindow->panel.setDetectedPitch(proc.getDetectedPitchHz(),
-                                                      proc.getTargetPitchHz());
+                                                      proc.getTargetPitchHz(),
+                                                      proc.getInputRms());
     }
 
     if (!audioEngine.isPlaying()) return;

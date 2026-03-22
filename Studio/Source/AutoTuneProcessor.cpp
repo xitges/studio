@@ -26,9 +26,7 @@ AutoTuneProcessor::AutoTuneProcessor(AutoTuneProcessor&&) noexcept = default;
 AutoTuneProcessor& AutoTuneProcessor::operator=(AutoTuneProcessor&&) noexcept = default;
 
 // ---------------------------------------------------------------------------
-// Helper: prime the stretcher so it's ready to produce output immediately.
-// Pre-feeds silence as start padding, then drains any processed silence
-// from the output buffer so the first real process() call yields real audio.
+// Prime stretcher: feed start padding + drain processed silence
 // ---------------------------------------------------------------------------
 
 void AutoTuneProcessor::primeStretcher()
@@ -42,8 +40,6 @@ void AutoTuneProcessor::primeStretcher()
         float* silPtrs[2] = { silence.data(), silence.data() };
         stretcher_->process(silPtrs, startPad, false);
 
-        // Drain all processed silence from the output buffer.
-        // Without this, retrieve() would return silence instead of real audio.
         const int avail = (int)stretcher_->available();
         if (avail > 0)
         {
@@ -52,6 +48,34 @@ void AutoTuneProcessor::primeStretcher()
             stretcher_->retrieve(drainPtrs, (size_t)avail);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Output FIFO helpers
+// ---------------------------------------------------------------------------
+
+void AutoTuneProcessor::pushToOutFifo(const float* L, const float* R, int count)
+{
+    for (int i = 0; i < count && outFifoSize_ < outFifoCapacity_; ++i)
+    {
+        outFifoL_[(size_t)outFifoWritePos_] = L[i];
+        outFifoR_[(size_t)outFifoWritePos_] = R[i];
+        outFifoWritePos_ = (outFifoWritePos_ + 1) % outFifoCapacity_;
+        ++outFifoSize_;
+    }
+}
+
+int AutoTuneProcessor::pullFromOutFifo(float* L, float* R, int count)
+{
+    const int toPull = std::min(count, outFifoSize_);
+    for (int i = 0; i < toPull; ++i)
+    {
+        L[i] = outFifoL_[(size_t)outFifoReadPos_];
+        R[i] = outFifoR_[(size_t)outFifoReadPos_];
+        outFifoReadPos_ = (outFifoReadPos_ + 1) % outFifoCapacity_;
+    }
+    outFifoSize_ -= toPull;
+    return toPull;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,11 +89,10 @@ void AutoTuneProcessor::prepare(double sampleRate, int maxBlockSize)
 
     pitchDetector_.prepare(sampleRate, maxBlockSize);
 
-    // RubberBand in real-time mode, stereo, pitch-only (timeRatio = 1.0)
+    // RubberBand real-time mode — NO OptionWindowShort (causes artifacts on tonal material)
     const int opts = RBS::OptionProcessRealTime
                    | RBS::OptionPitchHighQuality
-                   | RBS::OptionFormantPreserved
-                   | RBS::OptionWindowShort;
+                   | RBS::OptionFormantPreserved;
 
     stretcher_ = std::make_unique<RBS>((size_t)sampleRate, 2, opts, 1.0, 1.0);
     stretcher_->setMaxProcessSize((size_t)maxBlockSize);
@@ -82,12 +105,23 @@ void AutoTuneProcessor::prepare(double sampleRate, int maxBlockSize)
     dryL_.resize(sz, 0.0f);
     dryR_.resize(sz, 0.0f);
 
-    // Retrieve buffer — RubberBand may return slightly more than input
-    retrieveL_.resize(sz * 2, 0.0f);
-    retrieveR_.resize(sz * 2, 0.0f);
+    // RubberBand may return up to 2x input in some cases
+    retrieveL_.resize(sz * 4, 0.0f);
+    retrieveR_.resize(sz * 4, 0.0f);
 
-    currentPitchRatio_ = 1.0f;
+    // Output FIFO — 8 blocks worth of buffering for latency compensation
+    outFifoCapacity_ = maxBlockSize * 8;
+    outFifoL_.resize((size_t)outFifoCapacity_, 0.0f);
+    outFifoR_.resize((size_t)outFifoCapacity_, 0.0f);
+    outFifoReadPos_  = 0;
+    outFifoWritePos_ = 0;
+    outFifoSize_     = 0;
+
+    currentPitchRatio_  = 1.0f;
+    targetPitchRatio_   = 1.0f;
     lastFormantPreserve_ = true;
+    prevDetectedHz_     = 0.0f;
+    stablePitchCount_   = 0;
 }
 
 void AutoTuneProcessor::reset()
@@ -105,9 +139,17 @@ void AutoTuneProcessor::reset()
     if (!retrieveL_.empty()) std::fill(retrieveL_.begin(), retrieveL_.end(), 0.0f);
     if (!retrieveR_.empty()) std::fill(retrieveR_.begin(), retrieveR_.end(), 0.0f);
 
-    currentPitchRatio_ = 1.0f;
-    detectedPitchHz_ = 0.0f;
-    targetPitchHz_   = 0.0f;
+    outFifoReadPos_  = 0;
+    outFifoWritePos_ = 0;
+    outFifoSize_     = 0;
+
+    currentPitchRatio_  = 1.0f;
+    targetPitchRatio_   = 1.0f;
+    detectedPitchHz_    = 0.0f;
+    targetPitchHz_      = 0.0f;
+    inputRms_           = 0.0f;
+    prevDetectedHz_     = 0.0f;
+    stablePitchCount_   = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +171,7 @@ void AutoTuneProcessor::processBlock(float* L, float* R, int numSamples,
         lastFormantPreserve_ = params.formantPreserve;
     }
 
-    // --- Save original input (for dry mix and fallback) ---
+    // --- Save original input (for dry mix) ---
     for (int i = 0; i < numSamples; ++i)
     {
         dryL_[(size_t)i] = L[i];
@@ -137,71 +179,97 @@ void AutoTuneProcessor::processBlock(float* L, float* R, int numSamples,
     }
 
     // --- Pitch detection (mono mix) ---
+    float energy = 0.0f;
     for (int i = 0; i < numSamples; ++i)
+    {
         monoBuf_[(size_t)i] = (L[i] + R[i]) * 0.5f;
+        energy += monoBuf_[(size_t)i] * monoBuf_[(size_t)i];
+    }
+    inputRms_ = std::sqrt(energy / (float)numSamples);
 
     pitchDetector_.processBlock(monoBuf_.data(), numSamples);
     const float detectedHz = pitchDetector_.getPitchHz();
     detectedPitchHz_ = detectedHz;
 
-    // --- Compute target pitch ratio ---
-    float targetRatio = 1.0f;
-
+    // --- Compute target pitch ratio with stability check ---
     if (detectedHz > 0.0f && !std::isnan(detectedHz) && !std::isinf(detectedHz))
     {
-        const float detectedMidi = hzToMidi(detectedHz);
-        const float targetMidi   = snapToScale(detectedMidi, params.keyTonic, params.scaleType);
-        const float targetHz     = midiToHz(targetMidi);
-        targetPitchHz_ = targetHz;
+        // Stability: require pitch to be consistent for a few readings
+        // before applying correction (prevents crackling from jittery detection)
+        const float hzDiff = std::abs(detectedHz - prevDetectedHz_);
+        const float hzThreshold = prevDetectedHz_ * 0.05f; // 5% tolerance (~1 semitone)
 
-        targetRatio = targetHz / detectedHz;
+        if (prevDetectedHz_ > 0.0f && hzDiff < hzThreshold)
+            ++stablePitchCount_;
+        else
+            stablePitchCount_ = 0;
 
-        // Clamp to reasonable range (±1 octave)
-        targetRatio = std::clamp(targetRatio, 0.5f, 2.0f);
+        prevDetectedHz_ = detectedHz;
+
+        // Only compute correction once pitch is stable (at least 2 consistent readings)
+        if (stablePitchCount_ >= 1)
+        {
+            const float detectedMidi = hzToMidi(detectedHz);
+            const float targetMidi   = snapToScale(detectedMidi, params.keyTonic, params.scaleType);
+            const float targetHz     = midiToHz(targetMidi);
+            targetPitchHz_ = targetHz;
+
+            float ratio = targetHz / detectedHz;
+            ratio = std::clamp(ratio, 0.5f, 2.0f);
+            targetPitchRatio_ = ratio;
+        }
     }
     else
     {
         targetPitchHz_ = 0.0f;
-        targetRatio = 1.0f; // no correction on unvoiced segments
+        // Smoothly return to unity when unvoiced
+        targetPitchRatio_ = 1.0f;
+        prevDetectedHz_ = 0.0f;
+        stablePitchCount_ = 0;
     }
 
-    // --- Apply retune speed smoothing ---
+    // --- Apply retune speed smoothing (per-sample for smooth transitions) ---
     // retuneSpeed 0 = instant, 1 = very slow
-    // smoothing coefficient: 1.0 means jump instantly, 0.001 means very slow
-    const float smoothCoef = 1.0f - std::clamp(params.retuneSpeed, 0.0f, 0.999f);
-    currentPitchRatio_ += (targetRatio - currentPitchRatio_) * smoothCoef;
+    // Smoothing coefficient per block (not per sample — avoids overshooting)
+    const float speed = std::clamp(params.retuneSpeed, 0.0f, 0.999f);
+    const float smoothCoef = 1.0f - speed * speed; // quadratic curve for more natural feel
+    currentPitchRatio_ += (targetPitchRatio_ - currentPitchRatio_) * smoothCoef;
 
     // --- RubberBand pitch shift ---
     stretcher_->setPitchScale((double)currentPitchRatio_);
 
-    float* inPtrs[2] = { L, R };
+    float* inPtrs[2] = { dryL_.data(), dryR_.data() };
     stretcher_->process(inPtrs, (size_t)numSamples, false);
 
-    // Retrieve available output
+    // Retrieve ALL available output into FIFO (not just numSamples)
     const int avail = (int)stretcher_->available();
-    const int toRetrieve = std::min(avail, numSamples);
-
-    if (toRetrieve > 0)
+    if (avail > 0)
     {
+        const int toRetrieve = std::min(avail, (int)retrieveL_.size());
         float* outPtrs[2] = { retrieveL_.data(), retrieveR_.data() };
         stretcher_->retrieve(outPtrs, (size_t)toRetrieve);
+        pushToOutFifo(retrieveL_.data(), retrieveR_.data(), toRetrieve);
     }
 
-    // --- Dry/wet mix ---
+    // --- Pull from FIFO and apply dry/wet mix ---
     const float wet = std::clamp(params.mix, 0.0f, 1.0f);
     const float dry = 1.0f - wet;
 
-    for (int i = 0; i < numSamples; ++i)
+    // Try to pull numSamples from FIFO
+    const int pulled = pullFromOutFifo(L, R, numSamples);
+
+    // Apply dry/wet mix for pulled samples
+    for (int i = 0; i < pulled; ++i)
     {
-        const float dryLSample = dryL_[(size_t)i];
-        const float dryRSample = dryR_[(size_t)i];
+        L[i] = dryL_[(size_t)i] * dry + L[i] * wet;
+        R[i] = dryR_[(size_t)i] * dry + R[i] * wet;
+    }
 
-        // Wet signal: use RubberBand output if available, else passthrough original
-        const float wetLSample = (i < toRetrieve) ? retrieveL_[(size_t)i] : dryLSample;
-        const float wetRSample = (i < toRetrieve) ? retrieveR_[(size_t)i] : dryRSample;
-
-        L[i] = dryLSample * dry + wetLSample * wet;
-        R[i] = dryRSample * dry + wetRSample * wet;
+    // If FIFO didn't have enough, use dry signal for remaining (startup only)
+    for (int i = pulled; i < numSamples; ++i)
+    {
+        L[i] = dryL_[(size_t)i];
+        R[i] = dryR_[(size_t)i];
     }
 }
 
@@ -228,7 +296,5 @@ float AutoTuneProcessor::snapToScale(float midiNote, int keyTonic, int scaleType
     key.scale = static_cast<ScaleType>(scaleType);
 
     const int snappedMidi = MusicTheory::snapPitchToScale(roundedMidi, key);
-
-    // Return the snapped pitch (integer — instant snap for the robotic effect)
     return (float)snappedMidi;
 }

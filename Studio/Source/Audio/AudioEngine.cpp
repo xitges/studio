@@ -2143,7 +2143,85 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
         }
     }
 
+    // Render sample voice pools and synths into mixer track buses
+    // (must happen before per-track FX/AT processing)
+    for (auto& pool : sampleVoicePools)
+        pool.renderNextBlockRouted(mixerTrackBufs, safe);
+
+    if (playMode == PlayMode::Song)
+        for (auto& synth : polySynths)
+            synth.renderNextBlockRouted(mixerTrackBufs, safe, sampleRate);
+
+    // --- Audio clip rendering (Stage 1 — playhead-based loop mode) ------
+    // inst.active / fileReadStart / fileTotalSamples are set each block
+    // by processSongMode.  Uses try-lock: skip silently if lock unavailable.
+    // Must run BEFORE per-track AT/FX so auto-tune can process audio clips.
+    {
+        const juce::SpinLock::ScopedTryLockType tryLock(audioClipLock_);
+        if (tryLock.isLocked())
+        {
+            for (auto& inst : audioClipInstances_)
+            {
+                if (!inst.active || inst.buffer == nullptr || inst.fileTotalSamples <= 0) continue;
+
+                // Use pitched buffer when available (Stretch/Elastique); else original
+                const juce::AudioBuffer<float>* playBuf =
+                    (inst.pitchedBuffer != nullptr) ? inst.pitchedBuffer.get() : inst.buffer.get();
+
+                const int    srcCh   = playBuf->getNumChannels();
+                const int    startS  = inst.startOffsetInBlock;
+                const int    fileLen = inst.fileTotalSamples;
+                const double pitch   = inst.pitchRatio;
+                double       filePos = inst.fileReadStart;
+
+                for (int s = startS; s < safe; ++s)
+                {
+                    // Loop: wrap fractional position into file range
+                    double wp = std::fmod(filePos, (double)fileLen);
+                    if (wp < 0.0) wp += (double)fileLen;
+
+                    // Linear interpolation between adjacent samples
+                    const int   s0   = (int)wp;
+                    const int   s1   = (s0 + 1) % fileLen;
+                    const float frac = (float)(wp - (double)s0);
+                    const float invF = 1.0f - frac;
+
+                    float sL = playBuf->getSample(0, s0) * invF
+                             + playBuf->getSample(0, s1) * frac;
+                    float sR = (srcCh > 1)
+                             ? playBuf->getSample(1, s0) * invF
+                             + playBuf->getSample(1, s1) * frac
+                             : sL;
+
+                    // Fade gain envelope
+                    if (inst.fadeInBeats > 0.0f || inst.fadeOutBeats > 0.0f)
+                    {
+                        const float clipBeat = (float)(inst.localBeatAtBlockStart
+                                              + (double)(s - startS) * inst.beatsPerSample);
+                        float gain = 1.0f;
+                        if (inst.fadeInBeats > 0.0f && clipBeat < inst.fadeInBeats)
+                            gain = juce::jlimit(0.0f, 1.0f, clipBeat / inst.fadeInBeats);
+                        if (inst.fadeOutBeats > 0.0f)
+                        {
+                            const float remain = inst.clipLengthBeats - clipBeat;
+                            if (remain < inst.fadeOutBeats)
+                                gain = juce::jmin(gain, juce::jlimit(0.0f, 1.0f, remain / inst.fadeOutBeats));
+                        }
+                        sL *= gain;
+                        sR *= gain;
+                    }
+
+                    mixerTrackBufs[0].addSample(0, s, sL);
+                    mixerTrackBufs[0].addSample(1, s, sR);
+
+                    filePos += pitch;
+                }
+            }
+        }
+    }
+
     // M14 — apply FX chains per mixer track bus
+    // (now runs AFTER all audio sources are mixed into track buses)
     for (int t = 0; t < 8; ++t)
     {
         float trackPeak = 0.0f;
@@ -2209,80 +2287,6 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
         {
             masterPeak = juce::jmax(masterPeak, std::abs(mixerTrackBufs[(size_t)t].getSample(0, s) * trackL * mL));
             masterPeak = juce::jmax(masterPeak, std::abs(mixerTrackBufs[(size_t)t].getSample(1, s) * trackR * mR));
-        }
-    }
-
-    for (auto& pool : sampleVoicePools)
-        pool.renderNextBlockRouted(mixerTrackBufs, safe);
-
-    if (playMode == PlayMode::Song)
-        for (auto& synth : polySynths)
-            synth.renderNextBlockRouted(mixerTrackBufs, safe, sampleRate);
-
-    // --- Audio clip rendering (Stage 1 — playhead-based loop mode) ------
-    // inst.active / fileReadStart / fileTotalSamples are set each block
-    // by processSongMode.  Uses try-lock: skip silently if lock unavailable.
-    {
-        const juce::SpinLock::ScopedTryLockType tryLock(audioClipLock_);
-        if (tryLock.isLocked())
-        {
-            for (auto& inst : audioClipInstances_)
-            {
-                if (!inst.active || inst.buffer == nullptr || inst.fileTotalSamples <= 0) continue;
-
-                // Use pitched buffer when available (Stretch/Elastique); else original
-                const juce::AudioBuffer<float>* playBuf =
-                    (inst.pitchedBuffer != nullptr) ? inst.pitchedBuffer.get() : inst.buffer.get();
-
-                const int    srcCh   = playBuf->getNumChannels();
-                const int    startS  = inst.startOffsetInBlock;
-                const int    fileLen = inst.fileTotalSamples;
-                const double pitch   = inst.pitchRatio;
-                double       filePos = inst.fileReadStart;
-
-                for (int s = startS; s < safe; ++s)
-                {
-                    // Loop: wrap fractional position into file range
-                    double wp = std::fmod(filePos, (double)fileLen);
-                    if (wp < 0.0) wp += (double)fileLen;
-
-                    // Linear interpolation between adjacent samples
-                    const int   s0   = (int)wp;
-                    const int   s1   = (s0 + 1) % fileLen;
-                    const float frac = (float)(wp - (double)s0);
-                    const float invF = 1.0f - frac;
-
-                    float sL = playBuf->getSample(0, s0) * invF
-                             + playBuf->getSample(0, s1) * frac;
-                    float sR = (srcCh > 1)
-                             ? playBuf->getSample(1, s0) * invF
-                             + playBuf->getSample(1, s1) * frac
-                             : sL;
-
-                    // Fade gain envelope
-                    if (inst.fadeInBeats > 0.0f || inst.fadeOutBeats > 0.0f)
-                    {
-                        const float clipBeat = (float)(inst.localBeatAtBlockStart
-                                              + (double)(s - startS) * inst.beatsPerSample);
-                        float gain = 1.0f;
-                        if (inst.fadeInBeats > 0.0f && clipBeat < inst.fadeInBeats)
-                            gain = juce::jlimit(0.0f, 1.0f, clipBeat / inst.fadeInBeats);
-                        if (inst.fadeOutBeats > 0.0f)
-                        {
-                            const float remain = inst.clipLengthBeats - clipBeat;
-                            if (remain < inst.fadeOutBeats)
-                                gain = juce::jmin(gain, juce::jlimit(0.0f, 1.0f, remain / inst.fadeOutBeats));
-                        }
-                        sL *= gain;
-                        sR *= gain;
-                    }
-
-                    mixerTrackBufs[0].addSample(0, s, sL);
-                    mixerTrackBufs[0].addSample(1, s, sR);
-
-                    filePos += pitch;
-                }
-            }
         }
     }
 

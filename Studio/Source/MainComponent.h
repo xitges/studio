@@ -127,5 +127,7 @@ private:
     // Kept alive until async chooser completes
     std::shared_ptr<juce::FileChooser> fileChooser;
 
+    bool recordTransitioning_ = false;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
