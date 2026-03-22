@@ -58,6 +58,11 @@ public:
         stopAllBtn.onClick = [this] { if (onStopAll) onStopAll(); };
         addAndMakeVisible(stopAllBtn);
 
+        clearAllBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff4a1a1a));
+        clearAllBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+        clearAllBtn.onClick = [this] { clearAllPads(); };
+        addAndMakeVisible(clearAllBtn);
+
         statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff888888));
         statusLabel.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
         statusLabel.setText("Drop samples onto pads", juce::dontSendNotification);
@@ -68,6 +73,13 @@ public:
 
     bool handleKey(const juce::KeyPress& key)
     {
+        // Escape → Stop All
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (onStopAll) onStopAll();
+            return true;
+        }
+
         const int idx = padForKey(key);
         if (idx < 0) return false;
         triggerPad(idx);
@@ -137,6 +149,7 @@ public:
     std::function<void(int padIdx)>                                      onPadTriggered;
     std::function<void(int padIdx)>                                      onPadStopped;
     std::function<void()>                                                onStopAll;
+    std::function<void()>                                                onClearAll;
     std::function<void()>                                                onDefaultsLoaded;
     std::function<void(int padIdx, juce::File)>                          onSampleDropped;
     std::function<void(const std::vector<RecordedHit>&, int numBars)>    onConvertToPattern;
@@ -178,6 +191,7 @@ private:
     juce::TextButton saveDefaultBtn { "Save Default" };
     juce::TextButton loadDefaultBtn { "Load Default" };
     juce::TextButton stopAllBtn     { "Stop All" };
+    juce::TextButton clearAllBtn    { "Clear All" };
     juce::ComboBox   barsBox;
     juce::Label      statusLabel;
 
@@ -336,6 +350,16 @@ private:
         statusLabel.setText("Pattern created!", juce::dontSendNotification);
     }
 
+    void clearAllPads()
+    {
+        if (project == nullptr) return;
+        for (int i = 0; i < kPads; ++i)
+            project->launchpadPads[(size_t)i].filePath = {};
+        repaint();
+        if (onClearAll) onClearAll();
+        statusLabel.setText("All pads cleared", juce::dontSendNotification);
+    }
+
     void showContextMenu(int padIdx);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LaunchpadPanel)
@@ -367,10 +391,12 @@ inline void LaunchpadPanel::resized()
         row1.removeFromLeft(4);
         statusLabel    .setBounds(row1);
 
-        // Row 2: save, load defaults
+        // Row 2: save, load, clear
         saveDefaultBtn .setBounds(row2.removeFromLeft(78).reduced(1));
         row2.removeFromLeft(3);
         loadDefaultBtn .setBounds(row2.removeFromLeft(78).reduced(1));
+        row2.removeFromLeft(3);
+        clearAllBtn    .setBounds(row2.removeFromLeft(68).reduced(1));
     }
     else
     {
@@ -385,6 +411,8 @@ inline void LaunchpadPanel::resized()
         saveDefaultBtn .setBounds(bar.removeFromLeft(84).reduced(1));
         bar.removeFromLeft(4);
         loadDefaultBtn .setBounds(bar.removeFromLeft(84).reduced(1));
+        bar.removeFromLeft(4);
+        clearAllBtn    .setBounds(bar.removeFromLeft(64).reduced(1));
         bar.removeFromLeft(4);
         stopAllBtn     .setBounds(bar.removeFromLeft(64).reduced(1));
         bar.removeFromLeft(6);

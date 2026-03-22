@@ -1714,6 +1714,13 @@ MainComponent::MainComponent()
         audioEngine.stopAllLaunchpadPads();
     };
 
+    launchpadPanel.onClearAll = [this]()
+    {
+        for (int i = 0; i < 64; ++i)
+            audioEngine.unloadLaunchpadSample(i);
+        markDirty();
+    };
+
     launchpadPanel.onDefaultsLoaded = [this]()
     {
         for (int i = 0; i < 64; ++i)
