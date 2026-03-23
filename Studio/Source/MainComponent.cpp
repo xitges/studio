@@ -1683,7 +1683,7 @@ MainComponent::MainComponent()
         if (autoTuneEditorWindow == nullptr)
         {
             autoTuneEditorWindow = std::make_unique<AutoTuneEditorWindow>();
-            autoTuneEditorWindow->centreWithSize(360, 380);
+            autoTuneEditorWindow->centreWithSize(420, 560);
         }
 
         autoTuneEditorWindow->setTrackName("Track " + juce::String(t + 1));
@@ -2970,7 +2970,10 @@ void MainComponent::timerCallback()
         const auto& proc = audioEngine.getAutoTuneProcessor(autoTuneEditorTrack);
         autoTuneEditorWindow->panel.setDetectedPitch(proc.getDetectedPitchHz(),
                                                       proc.getTargetPitchHz(),
-                                                      proc.getInputRms());
+                                                      proc.getInputRms(),
+                                                      proc.getConfidence(),
+                                                      proc.isVoiced(),
+                                                      proc.getCorrectedPitchHz());
     }
 
     if (!audioEngine.isPlaying()) return;

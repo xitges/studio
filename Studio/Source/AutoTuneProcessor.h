@@ -5,7 +5,24 @@
     Created: 22 Mar 2026
     Author:  홍준영
 
-    Real-time auto-tune effect using YIN pitch detection + RubberBand.
+    Dedicated real-time vocal pitch correction engine.
+
+    Architecture (staged pipeline):
+      1. Input Conditioning — mono downmix, RMS metering, DC block
+      2. Voiced/Unvoiced Detection — YIN pitch + confidence + onset
+      3. Note-Target Controller — scale snap, note lock, hysteresis
+      4. Correction Law — retune speed, correction amount, humanize, flex tune
+      5. Transition Engine — glide/portamento between note targets
+      6. Vibrato Handler — detect and preserve/reduce natural vibrato
+      7. Pitch Shifting — TD-PSOLA (pitch-synchronous overlap-add)
+      8. Wet/Dry Output — mix stage
+
+    Pitch shifting uses TD-PSOLA instead of RubberBand for:
+      - ~5-10ms latency (vs ~23-46ms with phase vocoder)
+      - Characteristic Auto-Tune sound from grain-based processing
+      - Continuous formant control (0-1, not binary)
+      - Minimal CPU cost (no FFT)
+
     Audio-thread safe: all buffers pre-allocated in prepare().
 
   ==============================================================================
@@ -14,8 +31,7 @@
 #pragma once
 #include "ProjectModel.h"
 #include "PitchDetector.h"
-
-namespace RubberBand { class RubberBandStretcher; }
+#include "PSOLAPitchShifter.h"
 
 class AutoTuneProcessor
 {
@@ -30,55 +46,87 @@ public:
     void processBlock(float* L, float* R, int numSamples, const AutoTuneParams& params);
     void reset();
 
-    /** Detected pitch in Hz (for UI metering). */
+    // --- UI metering accessors (read from message thread) ---
     float getDetectedPitchHz() const { return detectedPitchHz_; }
-
-    /** Target pitch in Hz after scale snap (for UI). */
-    float getTargetPitchHz() const { return targetPitchHz_; }
-
-    /** Input RMS level (for UI diagnostics). */
-    float getInputRms() const { return inputRms_; }
+    float getTargetPitchHz()   const { return targetPitchHz_; }
+    float getInputRms()        const { return inputRms_; }
+    float getConfidence()      const { return confidence_; }
+    float getCorrectedPitchHz() const { return correctedPitchHz_; }
+    bool  isVoiced()           const { return voiced_; }
 
 private:
     double sampleRate_ = 44100.0;
     int    maxBlockSize_ = 512;
 
+    // --- Stage 1: Pitch Detection ---
     PitchDetector pitchDetector_;
 
-    // RubberBand real-time stretcher (pimpl — header only forward-declares)
-    std::unique_ptr<RubberBand::RubberBandStretcher> stretcher_;
+    // --- Stage 2: Note-Target Controller ---
+    struct NoteTarget
+    {
+        float targetMidi   = 0.0f;   // current locked target (MIDI note, fractional)
+        float targetHz     = 0.0f;
+        int   targetNoteInt = -1;    // integer MIDI note of current target
+        bool  locked       = false;  // true when we have a stable note lock
+        int   lockFrames   = 0;      // how many frames we've been locked on this note
+        float entryMidi    = 0.0f;   // pitch when we first locked onto this note
+    };
+    NoteTarget noteTarget_;
 
-    // Smoothed pitch ratio for retune speed control
+    // Hysteresis: pitch must move more than this (in semitones) to break lock
+    static constexpr float kLockBreakSemitones = 0.8f;
+    // Minimum frames to hold a note before allowing target change
+    static constexpr int   kMinLockFrames = 3;
+    // Confidence threshold for note lock
+    static constexpr float kLockConfThreshold = 0.4f;
+
+    // --- Stage 3: Correction Law ---
+    float correctedMidi_ = 0.0f;
+
+    // --- Stage 4: Transition / Glide ---
+    float prevTargetMidi_ = 0.0f;
+    float glideProgress_  = 1.0f;
+
+    // --- Stage 5: Vibrato Detection ---
+    float vibratoAccum_   = 0.0f;
+    float vibratoEnergy_  = 0.0f;
+    static constexpr int kVibratoWindowFrames = 12;
+    float vibratoHistory_[16] = {};
+    int   vibratoHistIdx_ = 0;
+
+    // --- Stage 6: Pitch Shifting (TD-PSOLA) ---
+    PSOLAPitchShifter psolaShifter_;
     float currentPitchRatio_ = 1.0f;
     float targetPitchRatio_  = 1.0f;
 
-    // Pre-allocated work buffers
+    // --- Pre-allocated work buffers ---
     std::vector<float> monoBuf_;
     std::vector<float> dryL_, dryR_;
-    std::vector<float> retrieveL_, retrieveR_;
+    std::vector<float> psolaOutBuf_;  // PSOLA mono output
 
-    // Output FIFO for RubberBand latency compensation
-    std::vector<float> outFifoL_, outFifoR_;
-    int outFifoReadPos_  = 0;
-    int outFifoWritePos_ = 0;
-    int outFifoSize_     = 0;
-    int outFifoCapacity_ = 0;
+    // --- DC blocker state ---
+    float dcIn_  = 0.0f;
+    float dcOut_ = 0.0f;
 
-    // UI metering (read from message thread — relaxed atomic not needed for simple floats)
-    float detectedPitchHz_ = 0.0f;
-    float targetPitchHz_   = 0.0f;
-    float inputRms_        = 0.0f;
+    // --- UI metering (relaxed read from message thread) ---
+    float detectedPitchHz_  = 0.0f;
+    float targetPitchHz_    = 0.0f;
+    float correctedPitchHz_ = 0.0f;
+    float inputRms_         = 0.0f;
+    float confidence_       = 0.0f;
+    bool  voiced_           = false;
 
-    bool  lastFormantPreserve_ = true;
-
-    // Pitch stability tracking
-    float prevDetectedHz_ = 0.0f;
-    int   stablePitchCount_ = 0;
-
-    void primeStretcher();
-    void pushToOutFifo(const float* L, const float* R, int count);
-    int  pullFromOutFifo(float* L, float* R, int count);
+    // --- Internal methods ---
     float hzToMidi(float hz) const;
     float midiToHz(float midi) const;
-    float snapToScale(float midiNote, int keyTonic, int scaleType) const;
+    float snapToScale(float midiNote, int keyTonic, int scaleType,
+                      const bool* noteMask, bool useNoteMask) const;
+
+    void  updateNoteTarget(float detectedMidi, float confidence,
+                           bool isOnset, const AutoTuneParams& params);
+    float applyCorrectionLaw(float detectedMidi, float targetMidi,
+                             const AutoTuneParams& params) const;
+    float applyVibratoHandling(float detectedMidi, float correctedMidi,
+                               float vibratoPreserve) const;
+    void  updateVibratoDetector(float detectedMidi, float targetMidi);
 };

@@ -212,18 +212,41 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         for (int t = 0; t < 8; ++t)
         {
             const auto& at = project.autoTuneParams[(size_t)t];
-            if (!at.enabled && at.keyTonic == 0 && at.scaleType == 0
-                && at.retuneSpeed == 0.0f && at.mix == 1.0f && at.formantPreserve)
-                continue; // all defaults — skip
+            // Skip entirely-default tracks
+            AutoTuneParams def;
+            if (!at.enabled && at.keyTonic == def.keyTonic && at.scaleType == def.scaleType
+                && at.retuneSpeed == def.retuneSpeed && at.correctionAmount == def.correctionAmount
+                && at.humanize == def.humanize && at.flexTune == def.flexTune
+                && at.transitionSpeed == def.transitionSpeed && at.vibratoPreserve == def.vibratoPreserve
+                && at.formantAmount == def.formantAmount && at.mix == def.mix
+                && at.presetIndex == def.presetIndex && !at.useNoteMask)
+                continue;
 
             auto* tEl = atEl->createNewChildElement("Track");
-            tEl->setAttribute("i",               t);
-            tEl->setAttribute("enabled",         at.enabled ? 1 : 0);
-            tEl->setAttribute("keyTonic",        at.keyTonic);
-            tEl->setAttribute("scaleType",       at.scaleType);
-            tEl->setAttribute("retuneSpeed",     (double)at.retuneSpeed);
-            tEl->setAttribute("mix",             (double)at.mix);
-            tEl->setAttribute("formantPreserve", at.formantPreserve ? 1 : 0);
+            tEl->setAttribute("i",                t);
+            tEl->setAttribute("enabled",          at.enabled ? 1 : 0);
+            tEl->setAttribute("keyTonic",         at.keyTonic);
+            tEl->setAttribute("scaleType",        at.scaleType);
+            tEl->setAttribute("retuneSpeed",      (double)at.retuneSpeed);
+            tEl->setAttribute("correctionAmount", (double)at.correctionAmount);
+            tEl->setAttribute("humanize",         (double)at.humanize);
+            tEl->setAttribute("flexTune",         (double)at.flexTune);
+            tEl->setAttribute("transitionSpeed",  (double)at.transitionSpeed);
+            tEl->setAttribute("vibratoPreserve",  (double)at.vibratoPreserve);
+            tEl->setAttribute("formantAmount",    (double)at.formantAmount);
+            tEl->setAttribute("mix",              (double)at.mix);
+            tEl->setAttribute("inputLowHz",       (double)at.inputLowHz);
+            tEl->setAttribute("inputHighHz",      (double)at.inputHighHz);
+            tEl->setAttribute("presetIndex",      at.presetIndex);
+            if (at.useNoteMask)
+            {
+                tEl->setAttribute("useNoteMask", 1);
+                // Encode note mask as 12-char string "110110110110"
+                juce::String mask;
+                for (int n = 0; n < 12; ++n)
+                    mask += at.noteMask[n] ? "1" : "0";
+                tEl->setAttribute("noteMask", mask);
+            }
         }
     }
 
@@ -669,13 +692,39 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
         {
             const int t = tEl->getIntAttribute("i", -1);
             if (t < 0 || t >= 8) continue;
-            auto& at            = loaded.autoTuneParams[(size_t)t];
-            at.enabled          = tEl->getIntAttribute("enabled", 0) != 0;
-            at.keyTonic         = tEl->getIntAttribute("keyTonic", 0);
-            at.scaleType        = tEl->getIntAttribute("scaleType", 0);
-            at.retuneSpeed      = (float)tEl->getDoubleAttribute("retuneSpeed", 0.0);
-            at.mix              = (float)tEl->getDoubleAttribute("mix", 1.0);
-            at.formantPreserve  = tEl->getIntAttribute("formantPreserve", 1) != 0;
+            auto& at             = loaded.autoTuneParams[(size_t)t];
+            at.enabled           = tEl->getIntAttribute("enabled", 0) != 0;
+            at.keyTonic          = tEl->getIntAttribute("keyTonic", 0);
+            at.scaleType         = tEl->getIntAttribute("scaleType", 0);
+            at.retuneSpeed       = (float)tEl->getDoubleAttribute("retuneSpeed", 0.0);
+            at.correctionAmount  = (float)tEl->getDoubleAttribute("correctionAmount", 1.0);
+            at.humanize          = (float)tEl->getDoubleAttribute("humanize", 0.0);
+            at.flexTune          = (float)tEl->getDoubleAttribute("flexTune", 0.0);
+            at.transitionSpeed   = (float)tEl->getDoubleAttribute("transitionSpeed", 0.0);
+            at.vibratoPreserve   = (float)tEl->getDoubleAttribute("vibratoPreserve", 0.5);
+            at.formantAmount     = (float)tEl->getDoubleAttribute("formantAmount", 1.0);
+            at.mix               = (float)tEl->getDoubleAttribute("mix", 1.0);
+            at.inputLowHz        = (float)tEl->getDoubleAttribute("inputLowHz", 65.0);
+            at.inputHighHz       = (float)tEl->getDoubleAttribute("inputHighHz", 1200.0);
+            at.presetIndex       = tEl->getIntAttribute("presetIndex",
+                                       (int)AutoTunePreset::ModernPop);
+            at.useNoteMask       = tEl->getIntAttribute("useNoteMask", 0) != 0;
+            if (at.useNoteMask)
+            {
+                juce::String mask = tEl->getStringAttribute("noteMask", "111111111111");
+                for (int n = 0; n < 12 && n < mask.length(); ++n)
+                    at.noteMask[n] = (mask[n] == '1');
+            }
+            // Legacy compat: if old file has formantPreserve but no formantAmount
+            if (!tEl->hasAttribute("formantAmount") && tEl->hasAttribute("formantPreserve"))
+            {
+                at.formantPreserve = tEl->getIntAttribute("formantPreserve", 1) != 0;
+                at.formantAmount = at.formantPreserve ? 1.0f : 0.0f;
+            }
+            else
+            {
+                at.formantPreserve = at.formantAmount >= 0.5f;
+            }
         }
     }
 

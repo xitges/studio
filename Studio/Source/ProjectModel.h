@@ -620,15 +620,58 @@ struct FXParams
     float reverbWidth   = 1.0f;     // 0.0 – 1.0
 };
 
+// Auto-Tune preset indices
+enum class AutoTunePreset
+{
+    Subtle = 0,
+    NaturalPop,
+    ModernPop,
+    HardTune,
+    HyperPop,
+    Robotic,
+    Custom,       // user-modified from any preset
+    NumPresets
+};
+
 // Auto-Tune — real-time pitch correction (hyper-pop / T-Pain style)
 struct AutoTuneParams
 {
     bool  enabled         = false;
     int   keyTonic        = 0;       // 0=C, 1=C#, … 11=B
     int   scaleType       = 0;       // 0=Major, 1=Minor (maps to ScaleType)
-    float retuneSpeed     = 0.0f;    // 0.0 = instant (robotic), 1.0 = slow/natural
+
+    // -- Correction engine --
+    float retuneSpeed     = 0.0f;    // 0.0 = instant snap, 1.0 = very slow convergence
+    float correctionAmount = 1.0f;   // 0.0 = no correction, 1.0 = full snap to target
+    float humanize        = 0.0f;    // 0.0 = rigid, 1.0 = allows expressive micro-deviation
+    float flexTune        = 0.0f;    // 0.0 = strict, 1.0 = tolerates near-center pitch (cents window)
+
+    // -- Transition / Glide --
+    float transitionSpeed = 0.0f;    // 0.0 = instant note change, 1.0 = slow portamento between notes
+
+    // -- Vibrato --
+    float vibratoPreserve = 0.5f;    // 0.0 = kill all vibrato, 1.0 = fully preserve natural vibrato
+
+    // -- Formant --
+    float formantAmount   = 1.0f;    // 0.0 = shift formants with pitch (robotic), 1.0 = full preserve
+    // Legacy compat: formantPreserve maps to formantAmount >= 0.5
+    bool  formantPreserve = true;
+
+    // -- Mix --
     float mix             = 1.0f;    // 0.0 = dry, 1.0 = fully corrected
-    bool  formantPreserve = true;    // preserve vocal formants
+
+    // -- Input range --
+    float inputLowHz      = 65.0f;   // lowest expected input pitch (C2)
+    float inputHighHz     = 1200.0f; // highest expected input pitch (D6)
+
+    // -- Per-note scale mask (chromatic: true = note allowed as target) --
+    // Default: all 12 notes enabled (scale filtering still applies via keyTonic+scaleType)
+    bool  noteMask[12]    = { true, true, true, true, true, true,
+                              true, true, true, true, true, true };
+    bool  useNoteMask     = false;   // when true, noteMask overrides scale snapping
+
+    // -- Preset --
+    int   presetIndex     = static_cast<int>(AutoTunePreset::ModernPop);
 };
 
 // M5 — one strip in the mixer
