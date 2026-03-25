@@ -364,6 +364,22 @@ struct SynthParams
     bool  lfoFreeRun   = false;  // don't reset phase on noteOn
     float lfoFadeIn    = 0.0f;   // 0–2000 ms ramp-up
     DDSPAutoSettings ddspAuto;
+
+    // Physical modelling params (waveform 7 = Plucked, waveform 8 = Wind)
+    // Plucked (Karplus-Strong)
+    float ksDamping        = 0.15f;  // 0=bright, 1=dark (loss filter coeff)
+    float ksDecay          = 0.9985f; // feedback gain (sustain length)
+    float ksStiffness      = 0.3f;   // allpass dispersion (inharmonicity)
+    float ksBrightness     = 8000.0f; // excitation LP cutoff Hz
+    float ksPluckPos       = 0.10f;  // pluck position (0=bridge, 0.5=middle)
+    float ksBodyFreq       = 180.0f; // body resonance center Hz
+    float ksBodyAmount     = 0.25f;  // body resonance wet mix
+    // Wind (reed + bore)
+    float windBreathPressure = 0.5f; // steady-state breath level
+    float windReedStiffness  = 0.7f; // reed nonlinearity
+    float windBoreLoss       = 0.15f; // bore LP loss coefficient
+    float windNoiseAmount    = 0.03f; // breath noise mix
+
     juce::String presetName;  // tracks last selected preset (not a synthesis param)
 };
 

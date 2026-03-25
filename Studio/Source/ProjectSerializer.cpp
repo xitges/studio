@@ -76,6 +76,21 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
             chEl->setAttribute("spDdspAmount",     (double)sp.ddspAuto.amount);
             chEl->setAttribute("spDdspBrightness", (double)sp.ddspAuto.brightness);
             chEl->setAttribute("spDdspMotion",     (double)sp.ddspAuto.motion);
+            // Physical modelling params (sparse: only write non-default)
+            if (sp.waveform == 7 || sp.waveform == 8)
+            {
+                chEl->setAttribute("spKsDamping",     (double)sp.ksDamping);
+                chEl->setAttribute("spKsDecay",       (double)sp.ksDecay);
+                chEl->setAttribute("spKsStiffness",   (double)sp.ksStiffness);
+                chEl->setAttribute("spKsBrightness",  (double)sp.ksBrightness);
+                chEl->setAttribute("spKsPluckPos",    (double)sp.ksPluckPos);
+                chEl->setAttribute("spKsBodyFreq",    (double)sp.ksBodyFreq);
+                chEl->setAttribute("spKsBodyAmount",  (double)sp.ksBodyAmount);
+                chEl->setAttribute("spWindBreath",    (double)sp.windBreathPressure);
+                chEl->setAttribute("spWindReed",      (double)sp.windReedStiffness);
+                chEl->setAttribute("spWindBoreLoss",  (double)sp.windBoreLoss);
+                chEl->setAttribute("spWindNoise",     (double)sp.windNoiseAmount);
+            }
             chEl->setAttribute("mixRoute",    pat.channelMixerRouting[ch]);
 
             // Sampler Synth source type + params
@@ -334,6 +349,18 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         pEl->setAttribute("ddspAmount", (double)preset.params.ddspAuto.amount);
         pEl->setAttribute("ddspBrightness", (double)preset.params.ddspAuto.brightness);
         pEl->setAttribute("ddspMotion", (double)preset.params.ddspAuto.motion);
+        // Physical modelling
+        pEl->setAttribute("ksDamping",    (double)preset.params.ksDamping);
+        pEl->setAttribute("ksDecay",      (double)preset.params.ksDecay);
+        pEl->setAttribute("ksStiffness",  (double)preset.params.ksStiffness);
+        pEl->setAttribute("ksBrightness", (double)preset.params.ksBrightness);
+        pEl->setAttribute("ksPluckPos",   (double)preset.params.ksPluckPos);
+        pEl->setAttribute("ksBodyFreq",   (double)preset.params.ksBodyFreq);
+        pEl->setAttribute("ksBodyAmount", (double)preset.params.ksBodyAmount);
+        pEl->setAttribute("windBreath",   (double)preset.params.windBreathPressure);
+        pEl->setAttribute("windReed",     (double)preset.params.windReedStiffness);
+        pEl->setAttribute("windBoreLoss", (double)preset.params.windBoreLoss);
+        pEl->setAttribute("windNoise",    (double)preset.params.windNoiseAmount);
     }
 
     return root.writeTo(file);
@@ -417,6 +444,18 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
                 sp.ddspAuto.amount     = (float)chEl->getDoubleAttribute("spDdspAmount", 0.0);
                 sp.ddspAuto.brightness = (float)chEl->getDoubleAttribute("spDdspBrightness", 0.5);
                 sp.ddspAuto.motion     = (float)chEl->getDoubleAttribute("spDdspMotion", 0.25);
+                // Physical modelling params (backward compat: defaults match struct init)
+                sp.ksDamping         = (float)chEl->getDoubleAttribute("spKsDamping",    0.15);
+                sp.ksDecay           = (float)chEl->getDoubleAttribute("spKsDecay",      0.9985);
+                sp.ksStiffness       = (float)chEl->getDoubleAttribute("spKsStiffness",  0.3);
+                sp.ksBrightness      = (float)chEl->getDoubleAttribute("spKsBrightness", 8000.0);
+                sp.ksPluckPos        = (float)chEl->getDoubleAttribute("spKsPluckPos",   0.10);
+                sp.ksBodyFreq        = (float)chEl->getDoubleAttribute("spKsBodyFreq",   180.0);
+                sp.ksBodyAmount      = (float)chEl->getDoubleAttribute("spKsBodyAmount", 0.25);
+                sp.windBreathPressure= (float)chEl->getDoubleAttribute("spWindBreath",   0.5);
+                sp.windReedStiffness = (float)chEl->getDoubleAttribute("spWindReed",     0.7);
+                sp.windBoreLoss      = (float)chEl->getDoubleAttribute("spWindBoreLoss", 0.15);
+                sp.windNoiseAmount   = (float)chEl->getDoubleAttribute("spWindNoise",    0.03);
 
                 // Sampler Synth source type + params (default Synth for backward compat)
                 pat.channelSourceTypes[ch] = (ChannelSourceType)chEl->getIntAttribute("channelSourceType", 0);
@@ -824,6 +863,18 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
             preset.params.ddspAuto.amount = (float)pEl->getDoubleAttribute("ddspAmount", 0.0);
             preset.params.ddspAuto.brightness = (float)pEl->getDoubleAttribute("ddspBrightness", 0.5);
             preset.params.ddspAuto.motion = (float)pEl->getDoubleAttribute("ddspMotion", 0.25);
+            // Physical modelling
+            preset.params.ksDamping         = (float)pEl->getDoubleAttribute("ksDamping",    0.15);
+            preset.params.ksDecay           = (float)pEl->getDoubleAttribute("ksDecay",      0.9985);
+            preset.params.ksStiffness       = (float)pEl->getDoubleAttribute("ksStiffness",  0.3);
+            preset.params.ksBrightness      = (float)pEl->getDoubleAttribute("ksBrightness", 8000.0);
+            preset.params.ksPluckPos        = (float)pEl->getDoubleAttribute("ksPluckPos",   0.10);
+            preset.params.ksBodyFreq        = (float)pEl->getDoubleAttribute("ksBodyFreq",   180.0);
+            preset.params.ksBodyAmount      = (float)pEl->getDoubleAttribute("ksBodyAmount", 0.25);
+            preset.params.windBreathPressure= (float)pEl->getDoubleAttribute("windBreath",   0.5);
+            preset.params.windReedStiffness = (float)pEl->getDoubleAttribute("windReed",     0.7);
+            preset.params.windBoreLoss      = (float)pEl->getDoubleAttribute("windBoreLoss", 0.15);
+            preset.params.windNoiseAmount   = (float)pEl->getDoubleAttribute("windNoise",    0.03);
 
             if (preset.name.isNotEmpty())
                 loaded.customSynthPresets.push_back(std::move(preset));

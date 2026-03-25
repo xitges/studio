@@ -509,6 +509,33 @@ public:
         makeSlider(driftDepthSl, 0.0, 1.0, 0.01, 0.3); driftDepthSl.onValueChange = [this] { notify(); };
         makeLabel(driftDepthLbl, "Drift");
 
+        // ---- Physical modelling sliders ----------------------------------------
+        auto pmNotify = [this] { notify(); };
+        // Plucked (KS)
+        makeSlider(pmDampingSl,    0.0, 0.8, 0.01, 0.15); pmDampingSl.onValueChange    = pmNotify;
+        makeLabel(pmDampingLbl, "Damping");
+        makeSlider(pmDecaySl,      0.990, 1.0, 0.0001, 0.9985); pmDecaySl.onValueChange = pmNotify;
+        makeLabel(pmDecayLbl, "Decay");
+        makeSlider(pmStiffnessSl,  0.0, 0.8, 0.01, 0.3); pmStiffnessSl.onValueChange  = pmNotify;
+        makeLabel(pmStiffnessLbl, "Stiffness");
+        makeSlider(pmBrightnessSl, 1000, 16000, 100, 8000); pmBrightnessSl.onValueChange = pmNotify;
+        makeLabel(pmBrightnessLbl, "Brightness");
+        makeSlider(pmPluckPosSl,   0.02, 0.5, 0.01, 0.10); pmPluckPosSl.onValueChange = pmNotify;
+        makeLabel(pmPluckPosLbl, "Pluck Pos");
+        makeSlider(pmBodyFreqSl,   60, 400, 1, 180); pmBodyFreqSl.onValueChange = pmNotify;
+        makeLabel(pmBodyFreqLbl, "Body Freq");
+        makeSlider(pmBodyAmtSl,    0.0, 0.6, 0.01, 0.25); pmBodyAmtSl.onValueChange = pmNotify;
+        makeLabel(pmBodyAmtLbl, "Body Amt");
+        // Wind
+        makeSlider(pmBreathSl,     0.1, 1.0, 0.01, 0.5); pmBreathSl.onValueChange    = pmNotify;
+        makeLabel(pmBreathLbl, "Breath");
+        makeSlider(pmReedSl,       0.1, 1.0, 0.01, 0.7); pmReedSl.onValueChange      = pmNotify;
+        makeLabel(pmReedLbl, "Reed Stiff");
+        makeSlider(pmBoreLossSl,   0.01, 0.5, 0.01, 0.15); pmBoreLossSl.onValueChange = pmNotify;
+        makeLabel(pmBoreLossLbl, "Bore Loss");
+        makeSlider(pmWindNoiseSl,  0.0, 0.2, 0.005, 0.03); pmWindNoiseSl.onValueChange = pmNotify;
+        makeLabel(pmWindNoiseLbl, "Breath Noise");
+
         setAvailablePresets(SynthPresets::getAll());
         updateWaveformPreview();
 
@@ -767,6 +794,11 @@ public:
         sectionHeader("ADSR ENVELOPE",   yHeaderADSR_);
         sectionHeader("FILTER",          yHeaderFilter_);
         sectionHeader("LFO",             yHeaderLFO_);
+
+        // Only show PM section header when waveform is Plucked or Wind
+        const int wf = waveBox.getSelectedId() - 1;
+        if (wf == 7 || wf == 8)
+            sectionHeader("PHYSICAL MODEL", yHeaderPhysModel_);
     }
 
     void resized() override
@@ -961,7 +993,28 @@ public:
             auto row = area.removeFromTop(kSlH);
             lfoTargetLbl.setBounds(row.getX(), row.getY() + (kSlH - 14) / 2, kLblW, 14);
             lfoTargetBox.setBounds(slX, row.getY(), 110, kSlH);
+            area.removeFromTop(kGroup);
         }
+
+        // ---- Physical Model section -----------------------------------------
+        yHeaderPhysModel_ = area.getY();
+        area.removeFromTop(kHdrH + kGap);
+        // Plucked params
+        placeSliderRow(pmDampingLbl,    pmDampingSl,    slW);
+        placeSliderRow(pmDecayLbl,      pmDecaySl,      slW);
+        placeSliderRow(pmStiffnessLbl,  pmStiffnessSl,  slW);
+        placeSliderRow(pmBrightnessLbl, pmBrightnessSl, slW);
+        placeSliderRow(pmPluckPosLbl,   pmPluckPosSl,   slW);
+        placeSliderRow(pmBodyFreqLbl,   pmBodyFreqSl,   slW);
+        placeSliderRow(pmBodyAmtLbl,    pmBodyAmtSl,    slW);
+        area.removeFromTop(kGap);
+        // Wind params
+        placeSliderRow(pmBreathLbl,     pmBreathSl,     slW);
+        placeSliderRow(pmReedLbl,       pmReedSl,       slW);
+        placeSliderRow(pmBoreLossLbl,   pmBoreLossSl,   slW);
+        placeSliderRow(pmWindNoiseLbl,  pmWindNoiseSl,  slW);
+
+      //  updatePhysModelVisibility();
     }
 
 private:
@@ -1167,6 +1220,15 @@ private:
     juce::Label    unisonVoicesLbl, unisonDetuneLbl, unisonSpreadLbl;
     juce::Slider   driftDepthSl;
     juce::Label    driftDepthLbl;
+
+    // Physical modelling (Plucked / Wind)
+    juce::Slider pmDampingSl, pmDecaySl, pmStiffnessSl, pmBrightnessSl;
+    juce::Slider pmPluckPosSl, pmBodyFreqSl, pmBodyAmtSl;
+    juce::Label  pmDampingLbl, pmDecayLbl, pmStiffnessLbl, pmBrightnessLbl;
+    juce::Label  pmPluckPosLbl, pmBodyFreqLbl, pmBodyAmtLbl;
+    juce::Slider pmBreathSl, pmReedSl, pmBoreLossSl, pmWindNoiseSl;
+    juce::Label  pmBreathLbl, pmReedLbl, pmBoreLossLbl, pmWindNoiseLbl;
+    int yHeaderPhysModel_ = 0;
 
     // Sampler Synth controls
     juce::TextButton synthSourceBtn   { "Synth" };
