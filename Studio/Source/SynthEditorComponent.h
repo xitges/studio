@@ -362,7 +362,7 @@ public:
         waveBox.addItem("Plucked",  8);
         waveBox.addItem("Wind",     9);
         waveBox.setSelectedId(2, juce::dontSendNotification);
-        waveBox.onChange = [this] { notify(); };
+        waveBox.onChange = [this] { updatePhysModelVisibility(); repaint(); notify(); };
         addAndMakeVisible(waveBox);
         makeLabel(waveLbl, "Waveform");
         previewLbl.setText("Wave Preview", juce::dontSendNotification);
@@ -703,6 +703,21 @@ public:
         ddspAmountSl.setValue(p.ddspAuto.amount, juce::dontSendNotification);
         ddspBrightnessSl.setValue(p.ddspAuto.brightness, juce::dontSendNotification);
         ddspMotionSl.setValue(p.ddspAuto.motion, juce::dontSendNotification);
+
+        // Physical Model params
+        pmDampingSl.setValue(p.ksDamping, juce::dontSendNotification);
+        pmDecaySl.setValue(p.ksDecay, juce::dontSendNotification);
+        pmStiffnessSl.setValue(p.ksStiffness, juce::dontSendNotification);
+        pmBrightnessSl.setValue(p.ksBrightness, juce::dontSendNotification);
+        pmPluckPosSl.setValue(p.ksPluckPos, juce::dontSendNotification);
+        pmBodyFreqSl.setValue(p.ksBodyFreq, juce::dontSendNotification);
+        pmBodyAmtSl.setValue(p.ksBodyAmount, juce::dontSendNotification);
+        pmBreathSl.setValue(p.windBreathPressure, juce::dontSendNotification);
+        pmReedSl.setValue(p.windReedStiffness, juce::dontSendNotification);
+        pmBoreLossSl.setValue(p.windBoreLoss, juce::dontSendNotification);
+        pmWindNoiseSl.setValue(p.windNoiseAmount, juce::dontSendNotification);
+
+        updatePhysModelVisibility();
         updateWaveformPreview();
     }
 
@@ -735,6 +750,18 @@ public:
         p.ddspAuto.amount     = (float)ddspAmountSl.getValue();
         p.ddspAuto.brightness = (float)ddspBrightnessSl.getValue();
         p.ddspAuto.motion     = (float)ddspMotionSl.getValue();
+        // Physical Model params
+        p.ksDamping          = (float)pmDampingSl.getValue();
+        p.ksDecay            = (float)pmDecaySl.getValue();
+        p.ksStiffness        = (float)pmStiffnessSl.getValue();
+        p.ksBrightness       = (float)pmBrightnessSl.getValue();
+        p.ksPluckPos         = (float)pmPluckPosSl.getValue();
+        p.ksBodyFreq         = (float)pmBodyFreqSl.getValue();
+        p.ksBodyAmount       = (float)pmBodyAmtSl.getValue();
+        p.windBreathPressure = (float)pmBreathSl.getValue();
+        p.windReedStiffness  = (float)pmReedSl.getValue();
+        p.windBoreLoss       = (float)pmBoreLossSl.getValue();
+        p.windNoiseAmount    = (float)pmWindNoiseSl.getValue();
         p.presetName = getSelectedPresetName();
     }
 
@@ -1014,7 +1041,7 @@ public:
         placeSliderRow(pmBoreLossLbl,   pmBoreLossSl,   slW);
         placeSliderRow(pmWindNoiseLbl,  pmWindNoiseSl,  slW);
 
-      //  updatePhysModelVisibility();
+        updatePhysModelVisibility();
     }
 
 private:
@@ -1090,6 +1117,28 @@ private:
         samplerSourceBtn.setColour(juce::TextButton::buttonColourId,
             isSampler ? juce::Colour(0xff3498db) : juce::Colour(0xff2c3e50));
         repaint();
+    }
+
+    void updatePhysModelVisibility()
+    {
+        const int wf = waveBox.getSelectedId() - 1;
+        const bool isPlucked = (wf == 7);
+        const bool isWind    = (wf == 8);
+
+        // Plucked params
+        pmDampingLbl.setVisible(isPlucked);    pmDampingSl.setVisible(isPlucked);
+        pmDecayLbl.setVisible(isPlucked);      pmDecaySl.setVisible(isPlucked);
+        pmStiffnessLbl.setVisible(isPlucked);  pmStiffnessSl.setVisible(isPlucked);
+        pmBrightnessLbl.setVisible(isPlucked); pmBrightnessSl.setVisible(isPlucked);
+        pmPluckPosLbl.setVisible(isPlucked);   pmPluckPosSl.setVisible(isPlucked);
+        pmBodyFreqLbl.setVisible(isPlucked);   pmBodyFreqSl.setVisible(isPlucked);
+        pmBodyAmtLbl.setVisible(isPlucked);    pmBodyAmtSl.setVisible(isPlucked);
+
+        // Wind params
+        pmBreathLbl.setVisible(isWind);        pmBreathSl.setVisible(isWind);
+        pmReedLbl.setVisible(isWind);          pmReedSl.setVisible(isWind);
+        pmBoreLossLbl.setVisible(isWind);      pmBoreLossSl.setVisible(isWind);
+        pmWindNoiseLbl.setVisible(isWind);     pmWindNoiseSl.setVisible(isWind);
     }
 
     void notify()

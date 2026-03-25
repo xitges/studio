@@ -88,7 +88,7 @@ public:
 
     // Pattern Variation (A/B/C/D)
     int activeVariation = 0;  // 0=A 1=B 2=C 3=D
-    std::function<void(int)> onVariationChanged;  // fires when user clicks A/B/C/D tab
+    std::function<void(int, int)> onVariationChanged;  // fires when user clicks A/B/C/D tab (prevIdx, newIdx)
 
     void setChannelHasPlugin(int ch, bool has)
     {

@@ -290,25 +290,12 @@ MainComponent::MainComponent()
         const int newNum  = (int)project.patterns.size() + 1;
 
         Pattern np;
-        np.id        = newId;
-        np.name      = "Pattern " + juce::String(newNum);
-        
-        if (auto* cur = findPattern(activePatternId))
-        {
-            np.stepCount = cur->stepCount;
-            for (int i = 0; i < Pattern::kMaxChannels; ++i)
-            {
-                np.channelTypes[i]        = cur->channelTypes[i];
-                np.channelNames[i]        = cur->channelNames[i];
-            }
-        }
-        else
-        {
-            np.stepCount = 16;
-        }
-        
-        project.patterns.push_back(np);
+        np.id           = newId;
+        np.name         = "Pattern " + juce::String(newNum);
+        np.stepCount    = 16;
+        np.channelCount = 3;   // fresh pattern starts with 3 channels
 
+        project.patterns.push_back(np);
         selectPattern(newId);
         markDirty();
         audioEngine.refreshSongCacheAsync();
@@ -1191,23 +1178,23 @@ MainComponent::MainComponent()
     };
 
     // Pattern Variation (A/B/C/D) — save current variation, switch, reload
-    channelRack.onVariationChanged = [this](int varIdx)
+    channelRack.onVariationChanged = [this](int prevIdx, int newIdx)
     {
-        // Save current step edits to the current pattern's current variation
+        // Save current step edits to the OLD variation before switching
         if (auto* pat = findPattern(activePatternId))
-            channelRack.saveToPattern(*pat);
+            channelRack.saveToPattern(*pat, prevIdx);
         // Tell AudioEngine which variation to use for pattern mode playback
-        audioEngine.setActiveVariation(varIdx);
+        audioEngine.setActiveVariation(newIdx);
         audioEngine.updatePatternSnapshot();
         // Reload the newly selected variation into the UI
         if (auto* pat = findPattern(activePatternId))
-            channelRack.loadPattern(*pat, varIdx);
+            channelRack.loadPattern(*pat, newIdx);
         // Update piano roll if open
         if (pianoRollWindow != nullptr && pianoRollWindow->isVisible() && pianoRollChannel >= 0)
         {
             if (auto* pat = findPattern(activePatternId))
             {
-                pianoRollWindow->content.pianoRoll.variationIdx = varIdx;
+                pianoRollWindow->content.pianoRoll.variationIdx = newIdx;
                 pianoRollWindow->content.setPattern(pat, pianoRollChannel, project.bpm);
             }
         }
@@ -2055,6 +2042,10 @@ void MainComponent::selectPattern(int id)
     // Load new pattern into channel rack, samples, and sync steps to engine immediately
     if (auto* newPat = findPattern(activePatternId))
     {
+        // Restore per-pattern channel count
+        const int patChCount = juce::jlimit(1, Pattern::kMaxChannels, newPat->channelCount);
+        project.channelCount = patChCount;
+        channelRack.resetToChannelCount(patChCount, newPat->channelNames);
         channelRack.loadPattern(*newPat);
 
         for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
@@ -2353,11 +2344,21 @@ void MainComponent::reloadProjectIntoUI()
         activePatternId = project.patterns.empty() ? 1 : project.patterns.front().id;
     project.activePatternId = activePatternId;
 
-    // Restore channel count (names/types come from the pattern via loadPattern)
+    // Migrate legacy projects: if patterns lack per-pattern channelCount,
+    // inherit the global project.channelCount so existing projects aren't truncated.
+    for (auto& pat : project.patterns)
+    {
+        if (pat.channelCount == 3 && project.channelCount > 3)
+            pat.channelCount = project.channelCount;
+    }
+
+    // Restore channel count from the active pattern
     {
         const auto* activePat = findPattern(activePatternId);
+        const int chCount = activePat != nullptr ? activePat->channelCount : project.channelCount;
+        project.channelCount = chCount;
         const juce::String* names = activePat != nullptr ? activePat->channelNames : nullptr;
-        channelRack.resetToChannelCount(project.channelCount, names);
+        channelRack.resetToChannelCount(chCount, names);
     }
 
     // Load active pattern into channel rack and restore its samples.

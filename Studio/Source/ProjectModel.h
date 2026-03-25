@@ -723,11 +723,12 @@ struct VariationData
 
 struct Pattern
 {
-    int          id         = 0;
-    juce::String name       = "Pattern 1";
-    int          lengthBars = 1;
-    int          stepCount  = 16;
-    float        swingAmount = 0.0f;  // 0.0 = straight, 0.33 = triplet, 0.5 = dotted swing
+    int          id           = 0;
+    juce::String name         = "Pattern 1";
+    int          lengthBars   = 1;
+    int          stepCount    = 16;
+    int          channelCount = 3;      // per-pattern channel count (default 3)
+    float        swingAmount  = 0.0f;   // 0.0 = straight, 0.33 = triplet, 0.5 = dotted swing
 
     static constexpr int kMaxChannels  = 16;
     static constexpr int kMaxSteps     = kMaxPatternSteps;

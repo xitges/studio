@@ -75,9 +75,10 @@ ChannelRackComponent::ChannelRackComponent()
         btn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
         btn.onClick = [this, idx]
         {
+            const int prevVariation = activeVariation;
             activeVariation = idx;
             updateVariationButtonStates();
-            if (onVariationChanged) onVariationChanged(idx);
+            if (onVariationChanged) onVariationChanged(prevVariation, idx);
         };
         addAndMakeVisible(btn);
     };
@@ -222,10 +223,20 @@ ChannelRackComponent::~ChannelRackComponent()
 
 void ChannelRackComponent::updateVariationButtonStates()
 {
-    varBtnA.setColour(juce::TextButton::buttonColourId, activeVariation == 0 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
-    varBtnB.setColour(juce::TextButton::buttonColourId, activeVariation == 1 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
-    varBtnC.setColour(juce::TextButton::buttonColourId, activeVariation == 2 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
-    varBtnD.setColour(juce::TextButton::buttonColourId, activeVariation == 3 ? juce::Colour(0xff3a5fa0) : juce::Colour(0xff2a2a3a));
+    const juce::Colour activeCol   (0xff4a90d9);   // bright blue — clearly selected
+    const juce::Colour activeTxt   (juce::Colours::white);
+    const juce::Colour inactiveCol (0xff1e1e28);   // dark inset — recessed look
+    const juce::Colour inactiveTxt (0xff6a6a78);   // dim text
+
+    auto style = [&](juce::TextButton& btn, bool on)
+    {
+        btn.setColour(juce::TextButton::buttonColourId,  on ? activeCol   : inactiveCol);
+        btn.setColour(juce::TextButton::textColourOffId, on ? activeTxt   : inactiveTxt);
+    };
+    style(varBtnA, activeVariation == 0);
+    style(varBtnB, activeVariation == 1);
+    style(varBtnC, activeVariation == 2);
+    style(varBtnD, activeVariation == 3);
     repaint();
 }
 
@@ -496,8 +507,9 @@ void ChannelRackComponent::loadPattern(const Pattern& pat, int varIdx)
 void ChannelRackComponent::saveToPattern(Pattern& pat, int varIdx) const
 {
     const int vi = (varIdx >= 0) ? varIdx : activeVariation;
-    pat.stepCount = stepCount;
-    pat.swingAmount = (float)swingSlider.getValue();
+    pat.stepCount    = stepCount;
+    pat.channelCount = (int)channels.size();
+    pat.swingAmount  = (float)swingSlider.getValue();
     for (int ch = 0; ch < (int)channels.size() && ch < Pattern::kMaxChannels; ++ch)
     {
         for (int s = 0; s < Pattern::kMaxSteps; ++s)

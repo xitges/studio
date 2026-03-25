@@ -30,8 +30,9 @@ bool ProjectSerializer::save(const Project& project, const juce::File& file)
         auto* patEl = patternsEl->createNewChildElement("Pattern");
         patEl->setAttribute("id",         pat.id);
         patEl->setAttribute("name",       pat.name);
-        patEl->setAttribute("stepCount",  pat.stepCount);
-        patEl->setAttribute("lengthBars", pat.lengthBars);
+        patEl->setAttribute("stepCount",    pat.stepCount);
+        patEl->setAttribute("channelCount", pat.channelCount);
+        patEl->setAttribute("lengthBars",   pat.lengthBars);
         if (pat.swingAmount != 0.0f)
             patEl->setAttribute("swing",  (double)pat.swingAmount);
 
@@ -393,9 +394,11 @@ bool ProjectSerializer::load(juce::File& file, Project& projectOut)
             Pattern pat;
             pat.id        = patEl->getIntAttribute("id",        0);
             pat.name      = patEl->getStringAttribute("name",   "Pattern");
-            pat.stepCount = juce::jlimit(1, Pattern::kMaxSteps,
-                                         patEl->getIntAttribute("stepCount", 16));
-            pat.lengthBars  = patEl->getIntAttribute("lengthBars", 1);
+            pat.stepCount    = juce::jlimit(1, Pattern::kMaxSteps,
+                                          patEl->getIntAttribute("stepCount", 16));
+            pat.channelCount = juce::jlimit(1, Pattern::kMaxChannels,
+                                            patEl->getIntAttribute("channelCount", 3));
+            pat.lengthBars   = patEl->getIntAttribute("lengthBars", 1);
             pat.swingAmount = (float)patEl->getDoubleAttribute("swing", 0.0);
 
             for (auto* chEl : patEl->getChildIterator())
