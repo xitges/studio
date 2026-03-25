@@ -407,19 +407,21 @@ private:
 
     static PresetValues getPreset(int idx)
     {
+        // { retuneSpeed, correctionAmount, humanize, flexTune,
+        //   transitionSpeed, vibratoPreserve, formantAmount, mix }
         switch (idx)
         {
-            case 0: // Subtle
-                return { 0.65f, 0.6f, 0.5f, 0.4f, 0.1f, 0.9f, 1.0f, 0.7f };
-            case 1: // Natural Pop
-                return { 0.4f,  0.8f, 0.3f, 0.2f, 0.05f, 0.7f, 1.0f, 0.9f };
-            case 2: // Modern Pop
-                return { 0.15f, 0.95f, 0.1f, 0.05f, 0.0f, 0.4f, 1.0f, 1.0f };
-            case 3: // Hard Tune
-                return { 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.85f, 1.0f };
-            case 4: // Hyper-Pop
-                return { 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 1.0f };
-            case 5: // Robotic
+            case 0: // Subtle — barely noticeable, preserves expression
+                return { 0.75f, 0.45f, 0.6f, 0.5f, 0.15f, 0.95f, 1.0f, 0.6f };
+            case 1: // Natural Pop — smooth correction, musical feel
+                return { 0.45f, 0.8f, 0.35f, 0.25f, 0.08f, 0.7f, 1.0f, 0.85f };
+            case 2: // Modern Pop — tight but not robotic, slight vibrato preserved
+                return { 0.12f, 0.95f, 0.08f, 0.05f, 0.02f, 0.3f, 1.0f, 1.0f };
+            case 3: // Hard Tune — T-Pain/Cher effect, instant snap, no vibrato
+                return { 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.9f, 1.0f };
+            case 4: // Hyper-Pop — hard correction, slight formant shift for character
+                return { 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.45f, 1.0f };
+            case 5: // Robotic — full formant destruction, maximum artificial
                 return { 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f };
             default: // Custom — don't change values
                 return { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };

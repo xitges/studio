@@ -74,11 +74,11 @@ private:
     NoteTarget noteTarget_;
 
     // Hysteresis: pitch must move more than this (in semitones) to break lock
-    static constexpr float kLockBreakSemitones = 0.8f;
+    static constexpr float kLockBreakSemitones = 1.0f;
     // Minimum frames to hold a note before allowing target change
-    static constexpr int   kMinLockFrames = 3;
+    static constexpr int   kMinLockFrames = 4;
     // Confidence threshold for note lock
-    static constexpr float kLockConfThreshold = 0.4f;
+    static constexpr float kLockConfThreshold = 0.55f;
 
     // --- Stage 3: Correction Law ---
     float correctedMidi_ = 0.0f;
@@ -88,16 +88,20 @@ private:
     float glideProgress_  = 1.0f;
 
     // --- Stage 5: Vibrato Detection ---
-    float vibratoAccum_   = 0.0f;
-    float vibratoEnergy_  = 0.0f;
-    static constexpr int kVibratoWindowFrames = 12;
-    float vibratoHistory_[16] = {};
+    float vibratoAccum_      = 0.0f;
+    float vibratoEnergy_     = 0.0f;
+    float vibratoDepthSt_    = 0.0f;   // estimated vibrato depth in semitones
+    float vibratoRateHz_     = 0.0f;   // estimated vibrato rate
+    static constexpr int kVibratoWindowFrames = 24;  // ~280ms at 86Hz update rate
+    float vibratoHistory_[32] = {};
     int   vibratoHistIdx_ = 0;
+    float vibratoPhase_   = 0.0f;      // phase tracker for vibrato extraction
 
     // --- Stage 6: Pitch Shifting (TD-PSOLA) ---
     PSOLAPitchShifter psolaShifter_;
     float currentPitchRatio_ = 1.0f;
     float targetPitchRatio_  = 1.0f;
+    float ratioSmoothCoef_   = 0.002f; // per-sample smoothing coefficient
 
     // --- Pre-allocated work buffers ---
     std::vector<float> monoBuf_;

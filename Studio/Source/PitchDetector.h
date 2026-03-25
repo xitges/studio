@@ -95,7 +95,7 @@ public:
     bool isOnset() const { return onsetDetected_; }
 
     /** Returns true if signal is currently voiced. */
-    bool isVoiced() const { return currentPitchHz_ > 0.0f && confidence_ > 0.3f; }
+    bool isVoiced() const { return currentPitchHz_ > 0.0f && confidence_ > 0.4f; }
 
     void reset()
     {
@@ -152,11 +152,11 @@ private:
     float prevRms_ = 0.0f;
     bool  onsetDetected_ = false;
 
-    float kYinThreshold = 0.15f;
+    float kYinThreshold = 0.12f;    // tighter threshold → fewer false positives
     float kMinFreq      = 65.0f;   // lowest detectable (C2)
     float kMaxFreq      = 1200.0f; // highest detectable (D6)
-    static constexpr float kMinRms = 0.002f;   // RMS gate threshold
-    static constexpr float kOnsetRmsRatio = 3.0f; // onset = RMS jumps 3x
+    static constexpr float kMinRms = 0.003f;   // RMS gate threshold (raised to reject more noise)
+    static constexpr float kOnsetRmsRatio = 2.5f; // onset = RMS jumps 2.5x (more responsive)
 
     // -----------------------------------------------------------------------
     void runAnalysisFrame()
@@ -209,8 +209,12 @@ private:
             else
             {
                 // Smooth: higher confidence = faster tracking
-                // alpha ranges from 0.3 (low conf) to 0.85 (high conf)
-                const float alpha = 0.3f + 0.55f * confidence_;
+                // alpha ranges from 0.15 (low conf) to 0.9 (high conf)
+                // Also track faster when pitch jump is large (note change)
+                const float basealpha = 0.15f + 0.75f * confidence_;
+                const float jumpSt = std::abs(12.0f * std::log2(medianPitch / std::max(1.0f, smoothedPitchHz_)));
+                // Large jump (>1 semitone): snap faster
+                const float alpha = (jumpSt > 1.0f) ? std::min(basealpha + 0.3f, 0.95f) : basealpha;
                 smoothedPitchHz_ += (medianPitch - smoothedPitchHz_) * alpha;
             }
         }
@@ -276,10 +280,10 @@ private:
             }
         }
 
-        // If no tau below threshold, use global minimum if it's reasonable
+        // If no tau below threshold, use global minimum if it's very clear
         if (tauEstimate < 1)
         {
-            if (bestTau > 0 && bestVal < 0.35f)
+            if (bestTau > 0 && bestVal < 0.25f)
                 tauEstimate = bestTau;
             else
             {

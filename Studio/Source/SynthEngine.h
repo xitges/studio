@@ -627,6 +627,49 @@ public:
 
         // Clear biquad state (used for HP/BP paths)
         z1L_ = z2L_ = z1R_ = z2R_ = 0.0f;
+
+        // Karplus-Strong init (waveform 7 = "Plucked")
+        useKarplusStrong_ = (p.waveform == 7);
+        if (useKarplusStrong_)
+        {
+            ksDelayLen_ = juce::jlimit(2, kKSMaxDelay - 1, (int)std::round(sr / frequency_));
+            ksDamping_ = 0.5f;
+            ksDecay_   = 0.996f;
+
+            // Excitation: 70% shaped noise + 30% short triangle impulse,
+            // filtered through one-pole LP at ~4000 Hz for warmth.
+            const float exciteCutoff = 4000.0f; // hardcoded, Phase 2 param
+            const float exciteAlpha = 1.0f - std::exp(-2.0f * 3.14159265f * exciteCutoff / (float)sr);
+            float exciteLP = 0.0f;
+
+            // Triangle impulse: ramps up then down over the delay length
+            const float triHalf = (float)ksDelayLen_ * 0.5f;
+
+            for (int i = 0; i < ksDelayLen_; ++i)
+            {
+                // Noise component
+                noiseSeed_ = noiseSeed_ * 1664525u + 1013904223u;
+                const float noise = (float)(int32_t)noiseSeed_ * (1.0f / 2147483648.0f);
+
+                // Triangle impulse component (peaks at center, 0 at edges)
+                const float tri = 1.0f - std::abs((float)i - triHalf) / triHalf;
+
+                // Mix: 70% noise + 30% triangle
+                const float raw = noise * 0.7f + tri * 0.3f;
+
+                // One-pole LP filter on excitation
+                exciteLP += (raw - exciteLP) * exciteAlpha;
+
+                ksDelayLine_[i] = exciteLP * velocity * 0.8f;
+            }
+            for (int i = ksDelayLen_; i < kKSMaxDelay; ++i)
+                ksDelayLine_[i] = 0.0f;
+
+            ksWritePos_   = 0;
+            ksLPState_    = 0.0f;
+            ksDCBlock_z1_ = 0.0f;
+            ksDCBlock_y1_ = 0.0f;
+        }
     }
 
     void noteOff()
@@ -919,7 +962,19 @@ public:
                 if (subPhase_ >= 1.0) subPhase_ -= 1.0;
 
                 float rawSampleL = 0.0f, rawSampleR = 0.0f;
-                if (oscWaveform_ == 5)   // White noise — no phase oscillation
+                if (useKarplusStrong_)   // Waveform 7 — Karplus-Strong plucked string
+                {
+                    const float delaySample = ksDelayLine_[ksWritePos_];
+                    ksLPState_ = (1.0f - ksDamping_) * delaySample + ksDamping_ * ksLPState_;
+                    ksDelayLine_[ksWritePos_] = ksLPState_ * ksDecay_;
+                    ksWritePos_ = (ksWritePos_ + 1) % ksDelayLen_;
+                    // DC blocker
+                    const float dcOut = delaySample - ksDCBlock_z1_ + 0.995f * ksDCBlock_y1_;
+                    ksDCBlock_z1_ = delaySample;
+                    ksDCBlock_y1_ = dcOut;
+                    rawSampleL = rawSampleR = dcOut;
+                }
+                else if (oscWaveform_ == 5)   // White noise — no phase oscillation
                 {
                     rawSampleL = rawSampleR = nextNoise();
                 }
@@ -1092,6 +1147,18 @@ private:
     SamplerSource samplerSrc_;
     bool  useSamplerSource_ = false;
     float samplerGain_      = 1.0f;
+
+    // Karplus-Strong delay line (active when useKarplusStrong_ == true)
+    bool  useKarplusStrong_  = false;
+    static constexpr int kKSMaxDelay = 2048; // covers down to ~21 Hz at 44.1kHz
+    float ksDelayLine_[kKSMaxDelay] = {};
+    int   ksDelayLen_   = 100;      // delay line length in samples (= sr / freq)
+    int   ksWritePos_   = 0;
+    float ksLPState_    = 0.0f;     // one-pole LP filter state (damping)
+    float ksDCBlock_z1_ = 0.0f;     // DC blocker state
+    float ksDCBlock_y1_ = 0.0f;
+    float ksDamping_    = 0.5f;     // LP coeff: 0=bright, 1=dark
+    float ksDecay_      = 0.996f;   // feedback gain (controls sustain)
 
     // Preview voice tag — set when triggered via editor Test Sound.
     // Allows killPreviewVoices() to target only editor-audition voices.

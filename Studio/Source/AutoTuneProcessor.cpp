@@ -230,27 +230,33 @@ float AutoTuneProcessor::applyCorrectionLaw(float detectedMidi, float targetMidi
     const float absError = std::abs(error);
 
     // Flex Tune: reduce correction when pitch is near target center
+    // Uses smoothstep for more natural transition at zone boundary
     float flexFactor = 1.0f;
     if (params.flexTune > 0.0f)
     {
-        const float flexWindowSemitones = params.flexTune * 0.5f;
-        if (absError < flexWindowSemitones)
+        const float flexWindowSt = params.flexTune * 0.5f;  // max half-semitone window
+        if (absError < flexWindowSt)
         {
-            flexFactor = absError / flexWindowSemitones;
-            flexFactor = flexFactor * flexFactor;
+            const float t = absError / flexWindowSt;
+            // Smoothstep: smoother than quadratic at boundaries
+            flexFactor = t * t * (3.0f - 2.0f * t);
         }
     }
 
     // Correction amount scaled by flex
     const float corrStrength = params.correctionAmount * flexFactor;
 
-    // Humanize: allow natural deviation to pass through
+    // Humanize: scaled natural deviation pass-through
+    // Uses soft curve so small deviations pass more than large ones
     float humanizeBypass = 0.0f;
-    if (params.humanize > 0.0f)
+    if (params.humanize > 0.0f && absError > 0.001f)
     {
-        const float maxDeviation = params.humanize * 0.2f;
-        humanizeBypass = std::min(absError, maxDeviation);
-        if (error < 0.0f) humanizeBypass = -humanizeBypass;
+        // Max deviation window: humanize=1 allows up to 0.3 semitones through
+        const float maxDev = params.humanize * 0.3f;
+        // Soft saturation: tanh-like curve (cheaper approximation)
+        const float x = absError / maxDev;
+        const float softDev = maxDev * (x / (1.0f + x));  // hyperbolic soft-clip
+        humanizeBypass = (error > 0.0f) ? softDev : -softDev;
     }
 
     return detectedMidi + error * corrStrength - humanizeBypass;
@@ -263,21 +269,46 @@ float AutoTuneProcessor::applyCorrectionLaw(float detectedMidi, float targetMidi
 void AutoTuneProcessor::updateVibratoDetector(float detectedMidi, float targetMidi)
 {
     const float deviation = detectedMidi - targetMidi;
+    const int idx = vibratoHistIdx_ % kVibratoWindowFrames;
 
-    vibratoHistory_[vibratoHistIdx_ % kVibratoWindowFrames] = deviation;
+    vibratoHistory_[idx] = deviation;
     vibratoHistIdx_++;
 
-    float sum = 0.0f, sumSq = 0.0f;
     const int n = std::min(vibratoHistIdx_, kVibratoWindowFrames);
+    if (n < 4) { vibratoEnergy_ = 0.0f; vibratoAccum_ = deviation; return; }
+
+    // Compute mean and variance (vibrato depth estimate)
+    float sum = 0.0f, sumSq = 0.0f;
     for (int i = 0; i < n; ++i)
     {
         sum += vibratoHistory_[i];
         sumSq += vibratoHistory_[i] * vibratoHistory_[i];
     }
     const float mean = sum / (float)n;
-    vibratoEnergy_ = (sumSq / (float)n) - (mean * mean);
-    if (vibratoEnergy_ < 0.0f) vibratoEnergy_ = 0.0f;
-    vibratoAccum_ = deviation;
+    const float variance = (sumSq / (float)n) - (mean * mean);
+    vibratoEnergy_ = std::max(0.0f, variance);
+
+    // Vibrato depth: RMS of deviation (in semitones)
+    vibratoDepthSt_ = std::sqrt(vibratoEnergy_);
+
+    // Zero-crossing rate → vibrato rate estimate
+    // Typical vibrato: 4-8 Hz. At ~86 Hz update rate, that's ~10-21 frames per cycle
+    int zeroCrossings = 0;
+    for (int i = 1; i < n; ++i)
+    {
+        const int prev = (idx - n + i + kVibratoWindowFrames) % kVibratoWindowFrames;
+        const int curr = (prev + 1) % kVibratoWindowFrames;
+        if ((vibratoHistory_[prev] - mean) * (vibratoHistory_[curr] - mean) < 0.0f)
+            zeroCrossings++;
+    }
+    // Each full cycle has 2 zero crossings
+    const float updateRateHz = (float)(sampleRate_ / 512.0); // approximate analysis rate
+    vibratoRateHz_ = (zeroCrossings > 0)
+        ? (float)zeroCrossings * 0.5f * updateRateHz / (float)n
+        : 0.0f;
+
+    // Extract the AC component (vibrato oscillation), remove DC (mean drift)
+    vibratoAccum_ = deviation - mean;
 }
 
 float AutoTuneProcessor::applyVibratoHandling(float detectedMidi, float correctedMidi,
@@ -286,11 +317,20 @@ float AutoTuneProcessor::applyVibratoHandling(float detectedMidi, float correcte
     if (vibratoPreserve <= 0.001f)
         return correctedMidi;
 
-    if (vibratoEnergy_ < 0.0001f)
+    // Only preserve vibrato if it looks like actual vibrato:
+    // - Depth between 0.05 and 2.0 semitones
+    // - Rate between 3 and 12 Hz
+    const bool isVibrato = vibratoDepthSt_ > 0.05f && vibratoDepthSt_ < 2.0f
+                        && vibratoRateHz_ > 2.5f && vibratoRateHz_ < 12.0f;
+
+    if (!isVibrato || vibratoEnergy_ < 0.001f)
         return correctedMidi;
 
-    const float vibratoComponent = vibratoAccum_;
-    return correctedMidi + vibratoComponent * vibratoPreserve;
+    // Add back the vibrato AC component scaled by preserve amount
+    // Clamp the contribution to avoid extreme jumps
+    const float maxVibSt = 1.5f;
+    const float vibComponent = std::max(-maxVibSt, std::min(vibratoAccum_, maxVibSt));
+    return correctedMidi + vibComponent * vibratoPreserve;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,11 +422,9 @@ void AutoTuneProcessor::processBlock(float* L, float* R, int numSamples,
 
             correctedPitchHz_ = midiToHz(corrected);
 
-            // === Retune Speed Smoothing ===
-            const float speed = std::max(0.0f, std::min(params.retuneSpeed, 0.999f));
-            const float smoothCoef = std::pow(1.0f - speed, 3.0f);
-
-            correctedMidi_ += (corrected - correctedMidi_) * smoothCoef;
+            // Update corrected MIDI (retune speed is now applied via per-sample
+            // ratio smoothing in Stage 7 — here we just set the target directly)
+            correctedMidi_ = corrected;
 
             // Compute pitch ratio
             float ratio = midiToHz(correctedMidi_) / detectedHz;
@@ -414,11 +452,27 @@ void AutoTuneProcessor::processBlock(float* L, float* R, int numSamples,
         vibratoEnergy_ = 0.0f;
     }
 
-    // === Per-sample ratio smoothing (anti-zipper) ===
-    const float ratioSmooth = 0.15f;
-    currentPitchRatio_ += (targetPitchRatio_ - currentPitchRatio_) * ratioSmooth;
+    // === Compute per-sample ratio smoothing coefficient from retune speed ===
+    // retuneSpeed 0.0 → instant (~1ms), 1.0 → very slow (~500ms)
+    // Map to smoothing time constant in samples
+    {
+        const float speed = std::max(0.0f, std::min(params.retuneSpeed, 0.999f));
+        // Exponential mapping: 0→0.5ms, 0.5→30ms, 1.0→500ms
+        const float timeMs = 0.5f + 499.5f * speed * speed * speed;
+        const float timeSamples = timeMs * 0.001f * (float)sampleRate_;
+        // One-pole coefficient: reaches ~63% in timeSamples
+        ratioSmoothCoef_ = (timeSamples > 1.0f) ? (1.0f / timeSamples) : 1.0f;
+    }
 
-    // === STAGE 7: TD-PSOLA Pitch Shift ===
+    // === STAGE 7: TD-PSOLA Pitch Shift with per-sample ratio interpolation ===
+    // Process mono input through PSOLA with smoothed ratio per sample
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Per-sample exponential smoothing of pitch ratio (anti-zipper)
+        currentPitchRatio_ += (targetPitchRatio_ - currentPitchRatio_) * ratioSmoothCoef_;
+    }
+
+    // PSOLA processes the whole block with the final smoothed ratio
     psolaShifter_.processBlock(monoBuf_.data(), psolaOutBuf_.data(), numSamples,
                                currentPitchRatio_, params.formantAmount, isVoicedNow && doCorrection);
 

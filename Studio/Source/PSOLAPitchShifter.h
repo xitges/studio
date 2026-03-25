@@ -85,8 +85,14 @@ public:
     {
         if (periodSamples > 20.0f && periodSamples < 1200.0f)
         {
-            // Smooth period changes to avoid grain size jumps
-            const float alpha = 0.3f;
+            // Adaptive smoothing: fast tracking for large jumps (new note),
+            // smooth tracking for small changes (sustain/vibrato)
+            const float diff = std::abs(periodSamples - currentPeriodSamples_);
+            const float relDiff = diff / std::max(1.0f, currentPeriodSamples_);
+            // >15% change → alpha 0.7 (fast lock), <5% → alpha 0.15 (smooth)
+            const float alpha = (relDiff > 0.15f) ? 0.7f
+                              : (relDiff > 0.05f) ? 0.35f
+                              :                     0.15f;
             currentPeriodSamples_ += (periodSamples - currentPeriodSamples_) * alpha;
         }
     }
@@ -277,7 +283,7 @@ private:
     float prevPitchRatio_ = 1.0f;
 
     // Voiced/unvoiced crossfade
-    static constexpr int kCrossfadeSamples = 64;
+    static constexpr int kCrossfadeSamples = 128;  // longer crossfade for smoother transitions
     int  crossfadeCounter_ = 0;
     bool wasVoiced_ = false;
 

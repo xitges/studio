@@ -651,9 +651,9 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
         if (clip.trackIndex < 0 || clip.trackIndex >= tc) continue;
 
         const int x  = trackHeaderWidth + (int)(clip.startBar  * barWidth);
-        const int w  = juce::jmin((int)(clip.lengthBars * barWidth) - 2, getWidth() * 4);
+        const int w  = juce::jmax(4, juce::jmin((int)(clip.lengthBars * barWidth) - 2, getWidth() * 4));
         const int ty = headerHeight + clip.trackIndex * (trackHeight + trackGap) + 3;
-        const int h  = trackHeight - 6;
+        const int h  = juce::jmax(4, trackHeight - 6);
 
         // Skip clips entirely outside visible area
         if (x + w < 0 || x > getWidth()) continue;
