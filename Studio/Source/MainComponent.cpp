@@ -1643,6 +1643,7 @@ MainComponent::MainComponent()
             snap->push_back(std::move(s));
         }
         const int oldCount = project.channelCount;
+        const auto oldPluginSlots = project.channelInstrumentPlugins;
 
         auto doDelete = [this, ch]()
         {
@@ -1684,14 +1685,20 @@ MainComponent::MainComponent()
                         pat.variations[v].steps[last][st] = false;
                     pat.variations[v].notes[last].clear();
                 }
+                pat.channelCount = juce::jmax(1, project.channelCount - 1);
             }
+
+            for (int i = ch; i < project.channelCount - 1; ++i)
+                project.channelInstrumentPlugins[(size_t)i] = project.channelInstrumentPlugins[(size_t)(i + 1)];
+            project.channelInstrumentPlugins[(size_t)(project.channelCount - 1)] = {};
+
             project.channelCount--;
             reloadProjectIntoUI();
             audioEngine.updatePatternSnapshot();
             markDirty();
         };
 
-        auto doRestore = [this, ch, oldCount, snap]()
+        auto doRestore = [this, ch, oldCount, snap, oldPluginSlots]()
         {
             project.channelCount = oldCount;
             int patIdx = 0;
@@ -1736,7 +1743,9 @@ MainComponent::MainComponent()
                         pat.variations[v].steps[ch][st] = s.varData[v].steps[st];
                     pat.variations[v].notes[ch] = s.varData[v].notes;
                 }
+                pat.channelCount = oldCount;
             }
+            project.channelInstrumentPlugins = oldPluginSlots;
             reloadProjectIntoUI();
             audioEngine.updatePatternSnapshot();
             markDirty();
@@ -2385,6 +2394,7 @@ void MainComponent::reloadProjectIntoUI()
     // processSongMode reads project->patterns on the audio thread.
     audioEngine.stop();
     audioEngine.allSynthNotesOff();
+    audioEngine.clearTransientPlaybackState();
     channelRack.setPlaybackStep(-1);
     playlist.setPlayheadBar(-1.0);
 
