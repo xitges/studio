@@ -130,6 +130,10 @@ public:
     }
 
     int getStepCount() const { return stepCount; }
+    void setStepCountFromExternal(int newCount)
+    {
+        stepCountSlider.setValue(juce::jlimit(1, Pattern::kMaxSteps, newCount), juce::sendNotification);
+    }
     void setPatternStartStep(int stepZeroBased)
     {
         patternStartStep = juce::jlimit(0, juce::jmax(0, stepCount - 1), stepZeroBased);

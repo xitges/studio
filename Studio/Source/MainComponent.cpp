@@ -259,6 +259,8 @@ MainComponent::MainComponent()
     {
         project.bpm = bpm;
         audioEngine.setBPM(bpm);
+        if (pianoRollWindow != nullptr)
+            pianoRollWindow->content.setBPM(bpm);
         markDirty();
     };
 
@@ -1101,7 +1103,7 @@ MainComponent::MainComponent()
         if (pianoRollWindow == nullptr)
         {
             pianoRollWindow = std::make_unique<PianoRollWindow>();
-            pianoRollWindow->centreWithSize(1000, 520);
+            pianoRollWindow->centreWithSize(1520, 700);
         }
 
         if (auto* pat = findPattern(activePatternId))
@@ -1176,6 +1178,17 @@ MainComponent::MainComponent()
             pianoRollWindow->content.pianoRoll.onStartStepSelected = [this](int stepZeroBased)
             {
                 pianoRollStartStep = juce::jmax(0, stepZeroBased);
+                markDirty();
+            };
+            pianoRollWindow->content.onStepCountChanged = [this](int newCount)
+            {
+                channelRack.setStepCountFromExternal(newCount);
+            };
+            pianoRollWindow->content.onBPMChanged = [this](double bpm)
+            {
+                project.bpm = bpm;
+                toolbar.setBPM(bpm);
+                audioEngine.setBPM(bpm);
                 markDirty();
             };
 
@@ -2127,6 +2140,7 @@ void MainComponent::selectPattern(int id)
         if (auto* pat = findPattern(activePatternId))
         {
             pianoRollWindow->content.setPattern(pat, pianoRollChannel, project.bpm);
+            pianoRollWindow->content.setBPM(project.bpm);
             pianoRollStartStep = juce::jlimit(0, pat->stepCount - 1, pianoRollStartStep);
             pianoRollWindow->content.setStartStep(pianoRollStartStep);
             pianoRollWindow->content.setKeySignature(project.keySignature);

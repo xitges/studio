@@ -74,6 +74,7 @@ public:
     }
     KeySignature getKeySignature() const { return keySignature; }
     int getKeyboardWidth() const { return keyWidth; }
+    int getHeaderHeight() const { return headerH; }
 
     static constexpr int kKeyboardSpan = 16;   // # of keys: a,w,s,e,d,f,t,g,y,h,u,j,k,o,l,p
     static constexpr int kRangeBarW    = 6;    // px width of the draggable range strip
@@ -363,7 +364,6 @@ public:
         drawGrid(g);
         drawHoverStep(g);
         drawCursor(g);
-        drawRuler(g);
         drawNotes(g);
         drawMarqueeSelection(g);
         drawPlayhead(g);
@@ -383,13 +383,36 @@ public:
 
         g.saveState();
         g.reduceClipRegion(0, headerH, keyWidth, overlayHeight - headerH);
-        g.addTransform(juce::AffineTransform::translation(0.0f, (float)-viewY));
+        g.addTransform(juce::AffineTransform::translation(0.0f, (float)-(viewY + headerH)));
         drawPianoKeys(g);
         drawVelocityKeyStub(g);
         g.restoreState();
 
         g.setColour(juce::Colour(0xff0f3460));
         g.drawLine((float)keyWidth, 0.0f, (float)keyWidth, (float)overlayHeight, 1.0f);
+    }
+
+    void paintRulerOverlay(juce::Graphics& g, int viewX, int overlayWidth)
+    {
+        g.saveState();
+        g.reduceClipRegion(0, 0, overlayWidth, headerH);
+        g.addTransform(juce::AffineTransform::translation((float)-viewX, 0.0f));
+        drawRuler(g);
+        g.restoreState();
+    }
+
+    void selectStartStepFromContentX(int contentX)
+    {
+        if (pattern == nullptr)
+            return;
+
+        const float beat = juce::jmax(0.0f, beatFromX(contentX));
+        const int step = clampStartStep((int)std::floor(beat / 0.25f));
+        selectedStartBeat = (float)step * 0.25f;
+        hoverStepBeat = selectedStartBeat;
+        if (onStartStepSelected)
+            onStartStepSelected(step);
+        repaint();
     }
 
     void previewPitchAtVisibleY(int visibleY, int viewY)
@@ -428,13 +451,7 @@ public:
         // Ruler click selects pattern playback start step.
         if (pos.x >= keyWidth && pos.y >= 0 && pos.y < headerH)
         {
-            const float beat = juce::jmax(0.0f, beatFromX(pos.x));
-            const int step = clampStartStep((int)std::floor(beat / 0.25f));
-            selectedStartBeat = (float)step * 0.25f;
-            hoverStepBeat = selectedStartBeat;
-            if (onStartStepSelected)
-                onStartStepSelected(step);
-            repaint();
+            selectStartStepFromContentX(pos.x);
             return;
         }
 
@@ -2406,13 +2423,53 @@ class PianoRollWindow : public juce::DocumentWindow
         int viewY = 0;
     };
 
+    struct RulerOverlay : public juce::Component,
+                          private juce::Timer
+    {
+        explicit RulerOverlay(PianoRollComponent& owner) : pianoRoll(owner)
+        {
+            startTimerHz(30);
+        }
+
+        void setViewX(int newViewX)
+        {
+            if (viewX != newViewX)
+            {
+                viewX = newViewX;
+                repaint();
+            }
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            pianoRoll.paintRulerOverlay(g, viewX, getWidth());
+        }
+
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            pianoRoll.selectStartStepFromContentX(e.getPosition().x + viewX);
+        }
+
+    private:
+        void timerCallback() override
+        {
+            repaint();
+        }
+
+        PianoRollComponent& pianoRoll;
+        int viewX = 0;
+    };
+
     struct ContentPane : public juce::Component,
                          private juce::Timer
     {
         PianoRollComponent pianoRoll;
         PianoRollViewport  viewport;
         KeyboardOverlay    keyboardOverlay { pianoRoll };
+        RulerOverlay       rulerOverlay    { pianoRoll };
         juce::ComboBox     snapBox;
+        juce::Slider       stepCountSlider;
+        juce::Slider       bpmSlider;
         juce::TextButton   recBtn        { "REC" };
         juce::TextButton   selectBtn     { "Sel" };
         juce::Label        kbRangeLabel;
@@ -2438,6 +2495,8 @@ class PianoRollWindow : public juce::DocumentWindow
         juce::TextButton   alignBtn      { "Align" };
 
         std::function<void(const KeySignature&)> onKeySignatureChanged;
+        std::function<void(int)> onStepCountChanged;
+        std::function<void(double)> onBPMChanged;
         std::function<void()> onImportMidi;
         std::function<void()> onExportMidi;
         std::function<int()> onEnsureBassChannel;
@@ -2455,9 +2514,11 @@ class PianoRollWindow : public juce::DocumentWindow
             viewport.setScrollBarThickness(8);
             addAndMakeVisible(viewport);
             addAndMakeVisible(keyboardOverlay);
+            addAndMakeVisible(rulerOverlay);
             viewport.onVisibleAreaChanged = [this](const juce::Rectangle<int>& area)
             {
                 keyboardOverlay.setViewY(area.getY());
+                rulerOverlay.setViewX(area.getX());
             };
 
             // ---- Edit snap box (left of REC) --------------------------------
@@ -2479,6 +2540,38 @@ class PianoRollWindow : public juce::DocumentWindow
                     pianoRoll.setSnapBeats(beats[idx]);
             };
             addAndMakeVisible(snapBox);
+
+            addAndMakeVisible(stepCountSlider);
+            stepCountSlider.setRange(1, Pattern::kMaxSteps, 1);
+            stepCountSlider.setValue(16, juce::dontSendNotification);
+            stepCountSlider.setSliderStyle(juce::Slider::IncDecButtons);
+            stepCountSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 40, 24);
+            stepCountSlider.setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
+            stepCountSlider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff1c1c1e));
+            stepCountSlider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff0f3460));
+            stepCountSlider.onValueChange = [this]
+            {
+                const int newCount = (int)stepCountSlider.getValue();
+                if (onStepCountChanged)
+                    onStepCountChanged(newCount);
+                pianoRoll.grabKeyboardFocus();
+            };
+
+            addAndMakeVisible(bpmSlider);
+            bpmSlider.setRange(60.0, 200.0, 1.0);
+            bpmSlider.setValue(70.0, juce::dontSendNotification);
+            bpmSlider.setSliderStyle(juce::Slider::IncDecButtons);
+            bpmSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 44, 24);
+            bpmSlider.setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
+            bpmSlider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff1c1c1e));
+            bpmSlider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colour(0xff0f3460));
+            bpmSlider.setTooltip("Project BPM");
+            bpmSlider.onValueChange = [this]
+            {
+                if (onBPMChanged)
+                    onBPMChanged(bpmSlider.getValue());
+                pianoRoll.grabKeyboardFocus();
+            };
 
             // ---- REC button -------------------------------------------------
             recBtn.setClickingTogglesState(true);
@@ -2804,8 +2897,16 @@ class PianoRollWindow : public juce::DocumentWindow
         void setPattern(Pattern* pat, int ch, double bpmValue)
         {
             pianoRoll.setPattern(pat, ch, bpmValue);
+            bpmSlider.setValue(bpmValue, juce::dontSendNotification);
+            if (pat != nullptr)
+                stepCountSlider.setValue(pat->stepCount, juce::dontSendNotification);
             refreshProgressionOptions();
             refreshBassTargetOptions();
+        }
+
+        void setBPM(double bpmValue)
+        {
+            bpmSlider.setValue(bpmValue, juce::dontSendNotification);
         }
 
         void setStartStep(int stepZeroBased)
@@ -2815,7 +2916,7 @@ class PianoRollWindow : public juce::DocumentWindow
 
         void resized() override
         {
-            const int rowH = 26;
+            const int rowH = 30;
 
             // Row 1: tonal helpers
             quantizeBtn.setBounds(4, 1, 28, rowH - 2);
@@ -2830,6 +2931,8 @@ class PianoRollWindow : public juce::DocumentWindow
             // Row 2: right-side (compute rightX so bass section knows its boundary)
             int rightX = getWidth();
             snapBox    .setBounds(rightX - 84, rowH, 84, rowH); rightX -= 88;
+            stepCountSlider.setBounds(rightX - 100, rowH, 100, rowH); rightX -= 104;
+            bpmSlider  .setBounds(rightX - 104, rowH, 104, rowH); rightX -= 108;
             recBtn     .setBounds(rightX - 44, rowH, 44, rowH); rightX -= 48;
             selectBtn  .setBounds(rightX - 42, rowH, 42, rowH); rightX -= 46;
             clearBtn   .setBounds(rightX - 44, rowH, 44, rowH); rightX -= 48;
@@ -2856,8 +2959,11 @@ class PianoRollWindow : public juce::DocumentWindow
             }
 
             const int keyboardW = pianoRoll.getKeyboardWidth();
-            keyboardOverlay.setBounds(0, rowH * 2, keyboardW, getHeight() - rowH * 2);
-            viewport.setBounds(keyboardW, rowH * 2, getWidth() - keyboardW, getHeight() - rowH * 2);
+            const int contentY = rowH * 2;
+            const int headerH = pianoRoll.getHeaderHeight();
+            keyboardOverlay.setBounds(0, contentY, keyboardW, getHeight() - contentY);
+            rulerOverlay.setBounds(keyboardW, contentY, getWidth() - keyboardW, headerH);
+            viewport.setBounds(keyboardW, contentY + headerH, getWidth() - keyboardW, getHeight() - contentY - headerH);
 
             const int cw = juce::jmax(viewport.getWidth(),  pianoRoll.getNeededWidth());
             const int ch = juce::jmax(viewport.getHeight(), pianoRoll.getNeededHeight());
@@ -2865,6 +2971,7 @@ class PianoRollWindow : public juce::DocumentWindow
             if (viewport.getViewPositionX() < keyboardW)
                 viewport.setViewPosition(keyboardW, viewport.getViewPositionY());
             keyboardOverlay.setViewY(viewport.getViewPositionY());
+            rulerOverlay.setViewX(viewport.getViewPositionX());
         }
 
         // --- Timer: drives armed blink ---
@@ -3094,8 +3201,8 @@ public:
     {
         setContentNonOwned(&content, false);
         setResizable(true, false);
-        setResizeLimits(1100, 440, 4000, 4000);
-        setSize(1400, 560);
+        setResizeLimits(1280, 560, 4000, 4000);
+        setSize(1520, 700);
     }
 
     void closeButtonPressed() override { setVisible(false); }
