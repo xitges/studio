@@ -76,7 +76,7 @@ public:
                           bool selected) override
     {
         if (row < 0 || row >= (int)filtered.size()) return;
-        const auto& desc = *filtered[(size_t)row];
+        const auto& desc = filtered[(size_t)row];
 
         g.fillAll(selected ? juce::Colour(0xff3a3a50)
                            : (row % 2 == 0 ? juce::Colour(0xff222228)
@@ -103,7 +103,7 @@ private:
     juce::TextButton scanBtn, loadBtn;
     juce::Label      statusLabel;
 
-    std::vector<const juce::PluginDescription*> filtered;
+    std::vector<juce::PluginDescription> filtered;   // copies, not pointers
 
     void refreshList()
     {
@@ -112,10 +112,12 @@ private:
 
         for (const auto& desc : PluginManager::getInstance().getKnownPlugins().getTypes())
         {
+            if (desc.name.isEmpty()) continue;        // skip corrupted entries
+            if (!desc.isInstrument) continue;          // only show instrument plugins
             if (filter.isEmpty()
                 || desc.name.containsIgnoreCase(filter)
                 || desc.manufacturerName.containsIgnoreCase(filter))
-                filtered.push_back(&desc);
+                filtered.push_back(desc);
         }
 
         pluginList.updateContent();
@@ -151,7 +153,7 @@ private:
     {
         if (row < 0 || row >= (int)filtered.size()) return;
         if (onPluginSelected)
-            onPluginSelected(*filtered[(size_t)row]);
+            onPluginSelected(filtered[(size_t)row]);
     }
 };
 

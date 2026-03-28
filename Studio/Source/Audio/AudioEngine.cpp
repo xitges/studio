@@ -746,6 +746,24 @@ void AudioEngine::previewNote(int ch, int midiPitch)
                                                        : sampleChannelVolume_[(size_t)ch].load(std::memory_order_relaxed);
     const float  pan             = snap.patternId >= 0 ? snap.channelPan[(size_t)ch]
                                                        : sampleChannelPan_[(size_t)ch].load(std::memory_order_relaxed);
+    // M8 — route to plugin if loaded (via midiCollector for thread safety)
+    if (instrumentPlugins[(size_t)ch] != nullptr)
+    {
+        const int safePitch = juce::jlimit(0, 127, midiPitch);
+        // Encode target channel in MIDI channel (1-based: ch+1) so the audio
+        // thread routes it to the correct plugin instead of midiTargetChannel.
+        auto noteOn = juce::MidiMessage::noteOn(ch + 1, safePitch, 0.8f);
+        noteOn.setTimeStamp(juce::Time::getMillisecondCounterHiRes() * 0.001);
+        midiCollector.addMessageToQueue(noteOn);
+
+        // Schedule note-off
+        auto noteOff = juce::MidiMessage::noteOff(ch + 1, safePitch);
+        noteOff.setTimeStamp(juce::Time::getMillisecondCounterHiRes() * 0.001
+                             + noteLenSamples / sampleRate);
+        midiCollector.addMessageToQueue(noteOff);
+        return;
+    }
+
     const ChannelSourceType srcType = snap.channelSourceTypes[(size_t)ch];
     const bool hasSynth = snap.patternId >= 0 && snap.synthParams[(size_t)ch].enabled;
 
@@ -1049,6 +1067,23 @@ void AudioEngine::triggerChannel(int channelIndex, int step, int offsetInBuffer)
     const int   baseLen  = juce::jmax(1, (int)(0.25 * sampleRate * 60.0 / bpm.load(std::memory_order_relaxed)));
     const int   noteLen  = juce::jmax(1, (int)(baseLen * sp.gate));
 
+    // M8 — route to VST/AU plugin if one is loaded on this channel
+    if (instrumentPlugins[(size_t)channelIndex] != nullptr)
+    {
+        const int midiPitch = juce::jlimit(0, 127,
+            60 + (int)std::round(channelBasePitch[(size_t)channelIndex].load(std::memory_order_relaxed))
+               + sp.pitchOffset);
+        instrumentMidiBuffers[channelIndex].addEvent(
+            juce::MidiMessage::noteOn(1, midiPitch, stepVel), offsetInBuffer);
+
+        // Schedule note-off after gate length
+        const double samplesPerBeat = sampleRate * 60.0 / bpm.load(std::memory_order_relaxed);
+        const double noteEndBeat = patternBeatPos + (double)offsetInBuffer / samplesPerBeat
+                                   + sp.gate * 0.25;
+        activePluginNotes[channelIndex].push({ noteEndBeat, midiPitch });
+        return;
+    }
+
     // If a synth is enabled on this channel, trigger a synth voice at the
     // pitch-slider note (channelBasePitch semitone offset from C4=60).
     // This lets Drum-mode channels use the synth engine with the step grid.
@@ -1324,11 +1359,19 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         incomingMidiBuffer_.clear();
         midiCollector.removeNextBlockOfMessages(incomingMidiBuffer_, numSamples);
 
-        const int ch = juce::jlimit(0, 15, midiTargetChannel);
+        const int defaultCh = juce::jlimit(0, 15, midiTargetChannel);
 
         for (const auto meta : incomingMidiBuffer_)
         {
             const auto msg = meta.getMessage();
+
+            // Determine target channel: MIDI channel 1 = default (midiTargetChannel),
+            // MIDI channels 2-16 = explicit channel routing (used by previewNote)
+            const int midiChan = msg.getChannel();  // 1-based
+            const int ch = (midiChan >= 2 && midiChan <= 16)
+                           ? (midiChan - 1)   // explicit: MIDI ch 2 → DAW ch 1, etc.
+                           : defaultCh;        // default: use midiTargetChannel
+
             if (msg.isNoteOn())
             {
                 const int   pitch = msg.getNoteNumber();

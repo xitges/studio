@@ -64,7 +64,21 @@ void PluginManager::loadList()
     if (auto* pf = props.getUserSettings())
     {
         if (auto xml = pf->getXmlValue("knownPlugins"))
-            knownPlugins.recreateFromXml(*xml);
+        {
+            juce::KnownPluginList tempList;
+            tempList.recreateFromXml(*xml);
+
+            // Only keep entries with a valid name — discard corrupted ones
+            bool skipped = false;
+            for (const auto& desc : tempList.getTypes())
+            {
+                if (desc.name.isEmpty()) { skipped = true; continue; }
+                knownPlugins.addType(desc);
+            }
+
+            // Persist cleaned list if we dropped bad entries
+            if (skipped) saveList();
+        }
     }
 }
 
