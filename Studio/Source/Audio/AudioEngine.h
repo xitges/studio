@@ -47,6 +47,7 @@ struct PlaybackSnapshot
     float             channelPan        [kCh] = {};
     float             channelPitch      [kCh] = {};
     int               channelMixerRouting[kCh]= {};
+    bool              pluginSlotEnabled  [kCh]= {};  // per-pattern plugin flag
 };
 
 class AudioEngine : public juce::AudioIODeviceCallback,
@@ -308,6 +309,8 @@ public:
     void savePluginStatesToSlots(std::array<PluginSlot, 16>& slots);
     // Restore plugins from PluginSlot array (unloads mismatched, loads missing)
     void restorePluginsFromSlots(const std::array<PluginSlot, 16>& slots);
+    // Ensure plugins needed by song mode clips are loaded (union of all patterns' plugins)
+    void ensureSongPluginsLoaded();
 
     // Snapshot current project state into the runtime double-buffer so the
     // audio thread sees it lock-free.  Light-weight (no sample cache rebuild).
@@ -677,6 +680,7 @@ private:
         }
     };
     std::array<ActivePluginNoteQueue, 16> activePluginNotes;
+    std::array<std::atomic<bool>, 16>    pendingPluginAllNotesOff_ {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };

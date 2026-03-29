@@ -1530,6 +1530,8 @@ MainComponent::MainComponent()
 
         audioEngine.unloadPlugin(ch);
         project.channelInstrumentPlugins[(size_t)ch] = {};
+        if (auto* pat = findPattern(activePatternId))
+            pat->pluginSlots[(size_t)ch] = PluginSlot{};
         channelRack.setChannelHasPlugin(ch, false);
         markDirty();
     };
@@ -1693,6 +1695,11 @@ MainComponent::MainComponent()
                         pat.variations[v].steps[last][st] = false;
                     pat.variations[v].notes[last].clear();
                 }
+                // Shift per-pattern plugin slots
+                for (int i = ch; i < project.channelCount - 1; ++i)
+                    pat.pluginSlots[(size_t)i] = pat.pluginSlots[(size_t)(i + 1)];
+                pat.pluginSlots[(size_t)(project.channelCount - 1)] = PluginSlot{};
+
                 pat.channelCount = juce::jmax(1, project.channelCount - 1);
             }
 
@@ -1701,6 +1708,7 @@ MainComponent::MainComponent()
             project.channelInstrumentPlugins[(size_t)(project.channelCount - 1)] = {};
 
             project.channelCount--;
+            for (auto& w : pluginEditorWindows) w.reset();
             reloadProjectIntoUI();
             audioEngine.updatePatternSnapshot();
             markDirty();
@@ -2113,6 +2121,9 @@ void MainComponent::selectPattern(int id)
     project.activePatternId = id;
     markDirty();
 
+    // Close all plugin editor windows before swapping plugins
+    for (auto& w : pluginEditorWindows) w.reset();
+
     // Load new pattern into channel rack, samples, and sync steps to engine immediately
     if (auto* newPat = findPattern(activePatternId))
     {
@@ -2122,10 +2133,18 @@ void MainComponent::selectPattern(int id)
         channelRack.resetToChannelCount(patChCount, newPat->channelNames);
         channelRack.loadPattern(*newPat);
 
-        // Restore per-pattern plugins
-        audioEngine.restorePluginsFromSlots(newPat->pluginSlots);
-        for (int ch = 0; ch < patChCount; ++ch)
-            channelRack.setChannelHasPlugin(ch, audioEngine.hasPlugin(ch));
+        // Restore per-pattern plugins.
+        // In song mode, load the union of all plugins needed by clips (so switching
+        // patterns doesn't kill song playback).  In pattern mode, load only the
+        // new pattern's plugins.
+        if (toolbar.getPlayMode() == PlayMode::Song)
+            audioEngine.ensureSongPluginsLoaded();
+        else
+            audioEngine.restorePluginsFromSlots(newPat->pluginSlots);
+
+        // Badge reflects what the current pattern has, not the audio engine union
+        for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
+            channelRack.setChannelHasPlugin(ch, newPat->pluginSlots[(size_t)ch].enabled);
 
         for (int ch = 0; ch < Pattern::kMaxChannels; ++ch)
         {
