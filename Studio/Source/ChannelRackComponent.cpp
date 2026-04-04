@@ -608,13 +608,37 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
     for (int i = 0; i < (int)channels.size(); ++i)
     {
         const int y = HEADER_HEIGHT + i * ROW_HEIGHT;
+        const bool isSelected = (i == selectedMidiChannel);
+        const bool hasMidi    = (midiActivityMask_ >> i) & 1;
 
         // Row background
-        if (i == dragHoverChannel)
+        if (isSelected)
+            g.setColour(juce::Colour(0xff1a3a1a));   // selected: dark green tint
+        else if (i == dragHoverChannel)
             g.setColour(juce::Colour(0xffb0b0b8).withAlpha(0.15f));
         else
             g.setColour(i % 2 == 0 ? juce::Colour(0xff2c2c2e) : juce::Colour(0xff161618));
         g.fillRect(0, y, LABEL_WIDTH, ROW_HEIGHT);
+
+        // Selected channel: left accent bar
+        if (isSelected)
+        {
+            g.setColour(juce::Colour(0xff44cc44));
+            g.fillRect(0, y, 3, ROW_HEIGHT);
+        }
+
+        // MIDI activity dot (top-right of label area)
+        if (hasMidi)
+        {
+            g.setColour(juce::Colour(0xff44ff44));
+            g.fillEllipse((float)(LABEL_WIDTH - 14), (float)(y + 4), 8.0f, 8.0f);
+        }
+        else if (isSelected)
+        {
+            // Dim dot when selected but no note active
+            g.setColour(juce::Colour(0xff226622));
+            g.fillEllipse((float)(LABEL_WIDTH - 14), (float)(y + 4), 8.0f, 8.0f);
+        }
 
         // Channel name (top half, left area)
         g.setColour(juce::Colours::white);
@@ -763,6 +787,16 @@ void ChannelRackComponent::mouseDown(const juce::MouseEvent& e)
     if (y < 0) return;
 
     const int ch = y / ROW_HEIGHT;
+
+    // Left-click on label area → select this channel as MIDI target
+    if (e.mods.isLeftButtonDown() && x < stepAreaX
+        && ch >= 0 && ch < (int)channels.size())
+    {
+        selectedMidiChannel = ch;
+        repaint();
+        if (onChannelSelected) onChannelSelected(ch);
+        return;
+    }
 
     // Right-click on label area → channel context menu (M3)
     if (e.mods.isRightButtonDown() && x < stepAreaX

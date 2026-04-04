@@ -89,6 +89,12 @@ public:
     // Trackpad multitouch controller toggle
     std::function<void()>  onToggleTrackpad;
 
+    // Live Performance mode toggle
+    std::function<void()>  onToggleLiveMode;
+
+    // Update LIVE button appearance to reflect current mode state
+    void setLiveModeActive(bool active);
+
     // Recording — single toggle: start/stop recording
     std::function<void()>  onRecordStart;
     std::function<void()>  onRecordStop;
@@ -145,6 +151,9 @@ private:
 
     // Trackpad multitouch button
     juce::TextButton trackpadBtn      { "Touch" };
+
+    // Live Performance mode indicator button
+    juce::TextButton liveModeBtn_     { "LIVE" };
 
     bool     playing          = false;
     bool     recordingActive_ = false;

@@ -255,6 +255,16 @@ public:
     bool     isRecording()  const { return recording_; }
     RecState getRecState()  const { return currentRecState; }
 
+    // Called from the message thread when an external MIDI note-on is detected
+    // while in Armed state (i.e., the trigger-wait waiting for first note).
+    void triggerFromExternalMidi()
+    {
+        if (currentRecState != RecState::Armed) return;
+        startRecording();
+        playheadBeat = 0.0;
+        if (onStartTransport) onStartTransport();
+    }
+
     void setTriggerEnabled(bool t) { triggerEnabled = t; }
     bool isTriggerEnabled()  const { return triggerEnabled; }
 
@@ -1146,6 +1156,25 @@ private:
 
     bool  heldKeyState[256] = {};
     bool  keyboardHeldPitch[128] = {};
+    bool  externalMidiHeld[128]  = {};   // external MIDI keyboard (separate from PC keyboard)
+
+public:
+    void setExternalHeldPitches(const std::array<bool, 128>& held)
+    {
+        bool changed = false;
+        for (int i = 0; i < 128; ++i)
+        {
+            if (externalMidiHeld[i] != held[(size_t)i])
+            {
+                externalMidiHeld[i] = held[(size_t)i];
+                changed = true;
+            }
+        }
+        if (changed)
+            repaint();
+    }
+
+private:
 
     // Keyboard cursor for note entry (arrow key navigation)
     float cursorBeat  = 0.0f;
@@ -1804,7 +1833,7 @@ private:
             const bool inScale = isScalePitch(pitch);
 
             const bool hovered  = (pitch == hoverPitch);
-            const bool kbActive = (pitch >= 0 && pitch < 128 && keyboardHeldPitch[pitch]);
+            const bool kbActive = (pitch >= 0 && pitch < 128 && (keyboardHeldPitch[pitch] || externalMidiHeld[pitch]));
             g.setColour(kbActive        ? juce::Colour(0xffff9500)
                         : hovered       ? juce::Colour(0xff3498db)
                         : inScale       ? (black ? juce::Colour(0xff2d3658)

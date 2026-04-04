@@ -87,6 +87,21 @@ public:
     // M-Phase3 — mixer routing
     std::function<void(int ch, int trackIdx)> onChannelRoutingChanged;
 
+    // MIDI target channel selection (left-click on label area)
+    std::function<void(int ch)> onChannelSelected;
+
+    void setSelectedMidiChannel(int ch)
+    {
+        selectedMidiChannel = ch;
+        repaint();
+    }
+
+    // MIDI activity indicators (bitmask per channel: bit set = note active)
+    void setMidiActivityMask(uint16_t mask)
+    {
+        if (midiActivityMask_ != mask) { midiActivityMask_ = mask; repaint(); }
+    }
+
     // Pattern Variation (A/B/C/D)
     int activeVariation = 0;  // 0=A 1=B 2=C 3=D
     std::function<void(int, int)> onVariationChanged;  // fires when user clicks A/B/C/D tab (prevIdx, newIdx)
@@ -232,7 +247,9 @@ private:
     juce::TextButton varBtnA { "A" }, varBtnB { "B" }, varBtnC { "C" }, varBtnD { "D" };
     void updateVariationButtonStates();
 
-    int dragHoverChannel = -1;
+    int dragHoverChannel    = -1;
+    int selectedMidiChannel = -1;   // highlighted as MIDI input target (-1 = none)
+    uint16_t midiActivityMask_ = 0; // bitmask: bit i = channel i has active note
     int currentPlayStep  = -1;
     int stepCount        = 16;
     int patternStartStep = 0;

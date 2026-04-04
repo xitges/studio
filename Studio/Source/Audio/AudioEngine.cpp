@@ -73,10 +73,123 @@ AudioEngine::AudioEngine()
         channelBasePitch[(size_t)i].store(0.0f, std::memory_order_relaxed);
         channelMuted[(size_t)i].store(false, std::memory_order_relaxed);
         channelSoloed[(size_t)i].store(false, std::memory_order_relaxed);
+        channelPatternOverride_  [i] = -1;
+        channelVariationOverride_[i] = 0;
+        // CC real-time params: volume = 1.0 (no attenuation), pan = 0.5 (centre)
+        ccVol_[i].setTarget(1.0f);  ccVol_[i].smoothed = 1.0f;
+        ccPan_[i].setTarget(0.5f);  ccPan_[i].smoothed = 0.5f;
     }
 
     resetSongChannelMixState();
     resetMixProcessingState();
+
+    for (auto& ch : midiHeldNotes_)
+        for (auto& n : ch)
+            n.store(0, std::memory_order_relaxed);
+
+    // Wire LiveLoopEngine playback callbacks into the synth/plugin chain
+    liveLoopEngine_.onNoteOn = [this](int ch, int pitch, float vel) noexcept
+    {
+        if (ch < 0 || ch >= 16) return;
+        const PlaybackSnapshot& snap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
+
+        // Plugin path: inject NoteOn into plugin MIDI buffer
+        if (snap.pluginSlotEnabled[(size_t)ch] && instrumentPlugins[(size_t)ch] != nullptr)
+        {
+            const int v = juce::jlimit(0, 127, (int)(vel * 127.0f));
+            instrumentMidiBuffers[ch].addEvent(
+                juce::MidiMessage::noteOn(1, pitch, (uint8_t)v), 0);
+            return;
+        }
+
+        const ChannelSourceType srcType = snap.channelSourceTypes[(size_t)ch];
+        SynthParams sp = snap.synthParams[(size_t)ch];
+        const bool hasSynth = sp.enabled;
+        const int  mixer    = juce::jlimit(0, 7,
+            snap.patternId >= 0 ? snap.channelMixerRouting[(size_t)ch] : 0);
+        const float vol = snap.patternId >= 0
+                          ? snap.channelVolume[(size_t)ch]
+                          : sampleChannelVolume_[(size_t)ch].load(std::memory_order_relaxed);
+        const float pan = snap.patternId >= 0
+                          ? snap.channelPan[(size_t)ch]
+                          : sampleChannelPan_[(size_t)ch].load(std::memory_order_relaxed);
+
+        // ── polySynth Sampler path (ChannelSourceType::Sampler) ───────────────
+        if (srcType == ChannelSourceType::Sampler)
+        {
+            auto samplerBuf = getSamplerSourceBuffer(ch);
+            if (samplerBuf)
+            {
+                const int timbreLen = juce::jmax(1,
+                    (int)(0.25 * sampleRate * 60.0 / bpm.load(std::memory_order_relaxed)));
+                const int sustainLen = (int)(sampleRate * 60.0);
+                const auto noteParams = makeNoteSynthParams(sp, pitch, vel, timbreLen);
+                polySynths[(size_t)ch].noteOnSampler(pitch, vel, sampleRate,
+                                                     noteParams,
+                                                     snap.samplerParams[(size_t)ch],
+                                                     std::move(samplerBuf),
+                                                     sustainLen,
+                                                     vol, pan, mixer);
+                return;
+            }
+        }
+
+        // ── Synth path ────────────────────────────────────────────────────────
+        if (hasSynth)
+        {
+            const int timbreLen = juce::jmax(1,
+                (int)(0.25 * sampleRate * 60.0 / bpm.load(std::memory_order_relaxed)));
+            const int sustainLen = (int)(sampleRate * 60.0);
+            const auto noteParams = makeNoteSynthParams(sp, pitch, vel, timbreLen);
+            polySynths[(size_t)ch].noteOn(pitch, vel, sampleRate, noteParams,
+                                          sustainLen, vol, pan, mixer);
+            return;
+        }
+
+        // ── Channel source buffer path (drag-dropped samples, old-style) ─────
+        {
+            auto sourceBuffer = getChannelSourceBufferShared(ch);
+            if (sourceBuffer != nullptr)
+            {
+                const float pitchShift = channelBasePitch[(size_t)ch].load(std::memory_order_relaxed)
+                                         + (float)(pitch - 60);
+                scheduleSampleTrigger(ch, 0, mixer,
+                                      sourceBuffer.get(), sourceBuffer,
+                                      vol, pan, pitchShift, 1.0f);
+                return;
+            }
+        }
+
+        // ── Ultimate fallback: basic saw so the loop is never silent ──────────
+        {
+            SynthParams fbSp{};
+            fbSp.enabled  = true;
+            fbSp.waveform = 1;
+            fbSp.attack   = 10.0f;
+            fbSp.release  = 300.0f;
+            const int timbreLen  = juce::jmax(1,
+                (int)(0.25 * sampleRate * 60.0 / bpm.load(std::memory_order_relaxed)));
+            const int sustainLen = (int)(sampleRate * 60.0);
+            const auto np = makeNoteSynthParams(fbSp, pitch, vel, timbreLen);
+            polySynths[(size_t)ch].noteOn(pitch, vel, sampleRate, np,
+                                          sustainLen, vol, pan, mixer);
+        }
+    };
+    liveLoopEngine_.onNoteOff = [this](int ch, int pitch) noexcept
+    {
+        if (ch < 0 || ch >= 16) return;
+        const PlaybackSnapshot& snap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
+
+        // Plugin path: inject NoteOff into plugin MIDI buffer
+        if (snap.pluginSlotEnabled[(size_t)ch] && instrumentPlugins[(size_t)ch] != nullptr)
+        {
+            instrumentMidiBuffers[ch].addEvent(juce::MidiMessage::noteOff(1, pitch), 0);
+            return;
+        }
+
+        // Synth + Sampler voices both live in polySynths[ch]
+        polySynths[(size_t)ch].noteOff(pitch);
+    };
 }
 
 AudioEngine::~AudioEngine()
@@ -244,6 +357,7 @@ void AudioEngine::stop()
             cacheLoader_->signalThreadShouldExit();
     }
     resetAudioClipTriggers();
+    // Note: liveLoopEngine_ is NOT reset on transport stop — loops are independent of transport.
 }
 
 // --- Recording ----------------------------------------------------------
@@ -524,6 +638,32 @@ void AudioEngine::setChannelPan(int ch, float pan)
         sampleChannelPan_[(size_t)ch].store(juce::jlimit(-1.0f, 1.0f, pan), std::memory_order_relaxed);
 }
 
+// ── CC Real-Time Parameter Control ──────────────────────────────────────────
+
+void AudioEngine::setCcChannelVolume(int ch, float normalised01)
+{
+    if (ch >= 0 && ch < 16)
+        ccVol_[(size_t)ch].setTarget(juce::jlimit(0.0f, 1.0f, normalised01));
+}
+
+void AudioEngine::setCcChannelPan(int ch, float normalised01)
+{
+    if (ch >= 0 && ch < 16)
+        ccPan_[(size_t)ch].setTarget(juce::jlimit(0.0f, 1.0f, normalised01));
+}
+
+float AudioEngine::getCcChannelVolume(int ch) const noexcept
+{
+    if (ch < 0 || ch >= 16) return 1.0f;
+    return ccVol_[(size_t)ch].target.load(std::memory_order_relaxed);
+}
+
+float AudioEngine::getCcChannelPan(int ch) const noexcept
+{
+    if (ch < 0 || ch >= 16) return 0.5f;
+    return ccPan_[(size_t)ch].target.load(std::memory_order_relaxed);
+}
+
 // ---- M1.2 Pitch --------------------------------------------------------
 
 void AudioEngine::setChannelPitch(int ch, float semitones)
@@ -559,6 +699,16 @@ void AudioEngine::setActiveVariation(int idx)
     activeVariationIdx_.store(juce::jlimit(0, 3, idx), std::memory_order_relaxed);
 }
 
+void AudioEngine::setChannelPattern(int channel, int patternId, int variationIdx)
+{
+    if (channel < 0 || channel >= 16) return;
+    channelPatternOverride_  [channel] = patternId;           // -1 = revert to global
+    channelVariationOverride_[channel] = juce::jlimit(0, 3, variationIdx);
+
+    // Rebuild snapshot so the audio thread picks up the change immediately.
+    updatePatternSnapshot();
+}
+
 void AudioEngine::updatePatternSnapshot()
 {
     const int nextIdx = 1 - activeSnapshotIdx_.load(std::memory_order_relaxed);
@@ -591,24 +741,54 @@ void AudioEngine::updatePatternSnapshot()
     const int varIdx = activeVariationIdx_.load(std::memory_order_relaxed);
     for (int ch = 0; ch < PlaybackSnapshot::kCh; ++ch)
     {
-        for (int s = 0; s < PlaybackSnapshot::kSteps; ++s)
+        // Live Performance: per-channel pattern override takes priority over global.
+        const int chPatId  = channelPatternOverride_[ch];
+        const int chVarIdx = (chPatId >= 0) ? channelVariationOverride_[ch] : varIdx;
+        const Pattern* chPat = (chPatId >= 0) ? findPatternById(chPatId) : pat;
+
+        snap.channelPatternId   [ch] = chPatId;
+        snap.channelVariationIdx[ch] = chVarIdx;
+
+        // Use the resolved per-channel pattern for steps/notes/params
+        const Pattern* srcPat = (chPat != nullptr) ? chPat : pat;
+        if (srcPat == nullptr)
         {
-            snap.steps     [ch][s] = pat->variations[varIdx].steps     [ch][s];
-            snap.stepParams[ch][s] = pat->variations[varIdx].stepParams[ch][s];
+            snap.channelTypes      [ch] = {};
+            snap.synthParams       [ch] = {};
+            snap.channelSourceTypes[ch] = {};
+            snap.samplerParams     [ch] = {};
+            snap.channelVolume     [ch] = 0.8f;
+            snap.channelPan        [ch] = 0.0f;
+            snap.channelPitch      [ch] = 0.0f;
+            snap.channelMixerRouting[ch]= 0;
+            snap.pluginSlotEnabled [ch] = false;
+            snap.noteSlots[ch].count    = 0;
+            for (int s = 0; s < PlaybackSnapshot::kSteps; ++s)
+            {
+                snap.steps     [ch][s] = false;
+                snap.stepParams[ch][s] = {};
+            }
+            continue;
         }
 
-        snap.channelTypes      [ch] = pat->channelTypes[ch];
-        snap.synthParams       [ch] = pat->synthParams[ch];
-        snap.channelSourceTypes[ch] = pat->channelSourceTypes[ch];
-        snap.samplerParams     [ch] = pat->samplerParams[ch];
-        snap.channelVolume     [ch] = pat->channelVolume[ch];
-        snap.channelPan        [ch] = pat->channelPan[ch];
-        snap.channelPitch      [ch] = pat->channelPitch[ch];
-        snap.channelMixerRouting[ch]= pat->channelMixerRouting[ch];
-        snap.pluginSlotEnabled [ch]= pat->pluginSlots[(size_t)ch].enabled;
+        for (int s = 0; s < PlaybackSnapshot::kSteps; ++s)
+        {
+            snap.steps     [ch][s] = srcPat->variations[chVarIdx].steps     [ch][s];
+            snap.stepParams[ch][s] = srcPat->variations[chVarIdx].stepParams[ch][s];
+        }
+
+        snap.channelTypes      [ch] = srcPat->channelTypes[ch];
+        snap.synthParams       [ch] = srcPat->synthParams[ch];
+        snap.channelSourceTypes[ch] = srcPat->channelSourceTypes[ch];
+        snap.samplerParams     [ch] = srcPat->samplerParams[ch];
+        snap.channelVolume     [ch] = srcPat->channelVolume[ch];
+        snap.channelPan        [ch] = srcPat->channelPan[ch];
+        snap.channelPitch      [ch] = srcPat->channelPitch[ch];
+        snap.channelMixerRouting[ch]= srcPat->channelMixerRouting[ch];
+        snap.pluginSlotEnabled [ch] = srcPat->pluginSlots[(size_t)ch].enabled;
 
         auto& slot = snap.noteSlots[ch];
-        const auto& src = pat->variations[varIdx].notes[ch];
+        const auto& src = srcPat->variations[chVarIdx].notes[ch];
         slot.count = (int)juce::jmin((int)src.size(), PlaybackSnapshot::kNotes);
         for (int n = 0; n < slot.count; ++n)
             slot.notes[n] = src[(size_t)n];
@@ -795,8 +975,19 @@ void AudioEngine::previewNote(int ch, int midiPitch)
     else
     {
         auto sourceBuffer = getChannelSourceBufferShared(ch);
-        triggerSampleVoiceNow(ch, 0, mixerTrack, sourceBuffer.get(), sourceBuffer, volume, pan,
-                              channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + (float)(midiPitch - 60), 1.0f);
+        if (sourceBuffer != nullptr)
+        {
+            triggerSampleVoiceNow(ch, 0, mixerTrack, sourceBuffer.get(), sourceBuffer, volume, pan,
+                                  channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + (float)(midiPitch - 60), 1.0f);
+        }
+        else
+        {
+            // No sample loaded — fall back to built-in synth so clicking piano keys always produces sound
+            SynthParams sp;
+            sp.enabled = true;
+            dispatchVoiceNote(ch, midiPitch, 0.8f, noteLenSamples, volume, pan, mixerTrack,
+                              sp, ChannelSourceType::Synth, SamplerParams{}, nullptr);
+        }
     }
 }
 
@@ -1287,34 +1478,230 @@ juce::Array<juce::MidiDeviceInfo> AudioEngine::getMidiInputDevices() const
 void AudioEngine::openMidiDevice(const juce::String& deviceId)
 {
     closeMidiDevice();
-    midiInput = juce::MidiInput::openDevice(deviceId, this);
-    if (midiInput != nullptr)
-        midiInput->start();
+    if (deviceId.isEmpty())
+        return;
+
+    const auto dmDevices = juce::MidiInput::getAvailableDevices();
+
+    juce::String resolvedId = deviceId;
+    bool idFound = false;
+    for (const auto& d : dmDevices)
+    {
+        if (d.identifier == resolvedId)
+        {
+            idFound = true;
+            break;
+        }
+    }
+
+    if (!idFound)
+    {
+        // Fallback: resolve by name in case identifier format differs between APIs.
+        for (const auto& d : dmDevices)
+        {
+            if (d.name == deviceId)
+            {
+                resolvedId = d.identifier;
+                idFound = true;
+                break;
+            }
+        }
+    }
+
+    if (!idFound)
+    {
+        DBG("MIDI open failed: device not found for id/name = " << deviceId);
+        return;
+    }
+
+    // Register as "all enabled MIDI inputs" listener to avoid identifier-specific
+    // routing misses across virtual/aggregate ports.
+    deviceManager.addMidiInputDeviceCallback({}, this);
+    midiInputCallbackRegistered_ = true;
+    deviceManager.setMidiInputDeviceEnabled(resolvedId, true);
+    openMidiDeviceId_ = resolvedId;
+    DBG("MIDI opened: " << resolvedId);
 }
 
 void AudioEngine::closeMidiDevice()
 {
-    if (midiInput != nullptr)
+    if (midiInputCallbackRegistered_)
     {
-        midiInput->stop();
-        midiInput.reset();
+        deviceManager.removeMidiInputDeviceCallback({}, this);
+        midiInputCallbackRegistered_ = false;
+    }
+
+    if (openMidiDeviceId_.isNotEmpty())
+    {
+        deviceManager.setMidiInputDeviceEnabled(openMidiDeviceId_, false);
+        DBG("MIDI closed: " << openMidiDeviceId_);
+        openMidiDeviceId_.clear();
     }
 }
 
 void AudioEngine::setMidiTargetChannel(int ch)
 {
     midiTargetChannel = juce::jlimit(0, 15, ch);
+    midiRouter_.setDefaultInstrumentChannel(midiTargetChannel);
 }
 
 juce::String AudioEngine::getOpenMidiDeviceId() const
 {
-    return midiInput != nullptr ? midiInput->getIdentifier() : juce::String{};
+    return openMidiDeviceId_;
 }
+
+void AudioEngine::getMidiHeldNotesForChannel(int ch, std::array<bool, 128>& out) const
+{
+    out.fill(false);
+    if (ch < 0 || ch >= 16)
+        return;
+
+    for (int note = 0; note < 128; ++note)
+        out[(size_t)note] = midiHeldNotes_[(size_t)ch][(size_t)note].load(std::memory_order_relaxed) != 0;
+}
+
+// ---- Loop MIDI Recording -----------------------------------------------
+
+void AudioEngine::setLoopMarkers(double startBeat, double endBeat)
+{
+    loopMarkers_.startBeat = juce::jmax(0.0, startBeat);
+    loopMarkers_.endBeat   = juce::jmax(loopMarkers_.startBeat + 0.0625, endBeat);
+}
+
+void AudioEngine::enableLoopRecord(bool shouldEnable)
+{
+    loopRecordEnabled_ = shouldEnable;
+    if (!shouldEnable)
+        for (auto& row : liveNotes_)
+            for (auto& n : row)
+                n.active = false;
+}
+
+void AudioEngine::injectFirstLoopNotes(int ch) noexcept
+{
+    if (ch < 0 || ch >= 16) return;
+    // Read currently-held pitches + velocities (stored in midiHeldNotes_ as 1-127)
+    pendingInjection_.channel = ch;
+    for (int i = 0; i < 128; ++i)
+        pendingInjection_.velocities[i] = midiHeldNotes_[(size_t)ch][(size_t)i].load(std::memory_order_relaxed);
+    hasPendingInjection_.store(true, std::memory_order_release);
+}
+
+bool AudioEngine::drainCommittedNote(CommittedNote& out) noexcept
+{
+    int s1, bs1, s2, bs2;
+    commitFifo_.prepareToRead(1, s1, bs1, s2, bs2);
+    if (bs1 == 0) return false;
+    out = commitQueue_[(size_t)s1];
+    commitFifo_.finishedRead(bs1);
+    return true;
+}
+
+void AudioEngine::commitNote(int ch, int pitch, double startBeat, float lengthBeats, float velocity)
+{
+    int s1, bs1, s2, bs2;
+    commitFifo_.prepareToWrite(1, s1, bs1, s2, bs2);
+    if (bs1 == 0) return;   // queue full — drop rather than block
+    auto& slot            = commitQueue_[(size_t)s1];
+    slot.channel          = ch;
+    slot.variation        = activeVariationIdx_.load(std::memory_order_relaxed);
+    slot.note.pitch       = pitch;
+    slot.note.startBeat   = (float)startBeat;
+    slot.note.lengthBeats = juce::jmax(0.0625f, lengthBeats);
+    slot.note.velocity    = velocity;
+    commitFifo_.finishedWrite(bs1);
+}
+
+void AudioEngine::processLoopRecordEvent(const juce::MidiMessage& msg, int ch, double beatPos)
+{
+    const double loopLen = loopMarkers_.endBeat - loopMarkers_.startBeat;
+    if (loopLen <= 0.0) return;
+
+    // Position relative to loop start, wrapped within loop
+    double relBeat = std::fmod(beatPos - loopMarkers_.startBeat, loopLen);
+    if (relBeat < 0.0) relBeat += loopLen;
+
+    const int pitch = juce::jlimit(0, 127, msg.getNoteNumber());
+
+    if (msg.isNoteOn())
+    {
+        liveNotes_[ch][pitch] = { true, relBeat, msg.getFloatVelocity() };
+    }
+    else if (msg.isNoteOff())
+    {
+        auto& ln = liveNotes_[ch][pitch];
+        if (!ln.active) return;
+
+        double len = relBeat - ln.startBeat;
+        if (len <= 0.0) len += loopLen;   // note crossed loop boundary while held
+
+        commitNote(ch, pitch,
+                   ln.startBeat + loopMarkers_.startBeat,
+                   (float)juce::jmax(0.0625, len),
+                   ln.velocity);
+        ln.active = false;
+    }
+}
+
+void AudioEngine::commitHangingNotes()
+{
+    const double loopLen = loopMarkers_.endBeat - loopMarkers_.startBeat;
+    for (int ch = 0; ch < 16; ++ch)
+    {
+        for (int pitch = 0; pitch < 128; ++pitch)
+        {
+            auto& ln = liveNotes_[ch][pitch];
+            if (!ln.active) continue;
+
+            // Commit note extending to loop end
+            const double len = juce::jmax(0.0625, loopLen - ln.startBeat);
+            commitNote(ch, pitch,
+                       ln.startBeat + loopMarkers_.startBeat,
+                       (float)len,
+                       ln.velocity);
+            ln.active = false;
+
+            // Stop the sound at loop boundary
+            polySynths[(size_t)ch].noteOff(pitch);
+            if (instrumentPlugins[(size_t)ch] != nullptr)
+                pendingPluginAllNotesOff_[ch].store(true, std::memory_order_release);
+        }
+    }
+
+    // Notify message thread that a loop wrap occurred
+    juce::MessageManager::callAsync([this] { if (onLoopWrap) onLoopWrap(); });
+}
+
+// ── Live Performance Loop Recording ─────────────────────────────────────────
+
+// ── Live Loop Engine — public API wrappers ────────────────────────────────────
+void AudioEngine::liveLoopArm(int ch) noexcept         { liveLoopEngine_.arm(ch); }
+void AudioEngine::liveLoopStop(int ch) noexcept        { liveLoopEngine_.stop(ch); }
+void AudioEngine::liveLoopResetAll() noexcept          { liveLoopEngine_.resetAll(); }
+void AudioEngine::liveLoopSetLength(double b) noexcept { liveLoopEngine_.setLoopLengthBeats(b); }
+void AudioEngine::liveLoopSetQuantize(double s) noexcept { liveLoopEngine_.setQuantize(s); }
+LiveLoopEngine::State AudioEngine::liveLoopGetState(int ch) const noexcept { return liveLoopEngine_.getState(ch); }
+double AudioEngine::liveLoopGetLength() const noexcept { return liveLoopEngine_.getLoopLengthBeats(); }
+int    AudioEngine::liveLoopGetNotesForDisplay(int ch, LiveLoopEngine::NoteDisplayItem* out, int max) const noexcept
+       { return liveLoopEngine_.getNotesForDisplay(ch, out, max); }
+double AudioEngine::liveLoopGetPhase(int ch) const noexcept         { return liveLoopEngine_.getLoopPhase(ch); }
+double AudioEngine::liveLoopGetChannelLength(int ch) const noexcept { return liveLoopEngine_.getChannelLoopLength(ch); }
 
 void AudioEngine::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& msg)
 {
-    // Called on the MIDI thread — push into thread-safe collector
-    midiCollector.addMessageToQueue(msg);
+    DBG("MIDI IN raw: ch=" << msg.getChannel() << " note=" << msg.getNoteNumber()
+        << " on=" << (msg.isNoteOn() ? 1 : 0) << " off=" << (msg.isNoteOff() ? 1 : 0));
+
+    // Called on the MIDI thread — push into thread-safe collector.
+    // Normalize external hardware input to MIDI channel 1 so live keyboards
+    // always follow midiTargetChannel. Internal engine-generated MIDI events
+    // still use explicit channel routing (ch+1) when queued directly.
+    auto normalized = msg;
+    const int incomingChannel = normalized.getChannel();
+    if (incomingChannel >= 1 && incomingChannel <= 16)
+        normalized.setChannel(1);
+
+    midiCollector.addMessageToQueue(normalized);
 }
 
 // ---- Audio callbacks ---------------------------------------------------
@@ -1376,6 +1763,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     for (auto& mb : instrumentMidiBuffers)
         mb.clear();
 
+    // LiveLoopEngine: always advance (transport-independent)
+    {
+        const double bpmVal = bpm.load(std::memory_order_relaxed);
+        if (bpmVal > 0.0)
+            liveLoopEngine_.processBlock(numSamples, bpmVal, sampleRate);
+    }
+
     // Flush pending all-notes-off from message thread (set by allSynthNotesOff)
     for (int ch = 0; ch < 16; ++ch)
     {
@@ -1391,23 +1785,89 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         incomingMidiBuffer_.clear();
         midiCollector.removeNextBlockOfMessages(incomingMidiBuffer_, numSamples);
 
+        // First-note injection: seed liveNotes_ with notes held at recording trigger time
+        if (hasPendingInjection_.load(std::memory_order_acquire))
+        {
+            hasPendingInjection_.store(false, std::memory_order_relaxed);
+            if (loopRecordEnabled_)
+            {
+                const int injCh = pendingInjection_.channel;
+                if (injCh >= 0 && injCh < 16)
+                {
+                    for (int pitch = 0; pitch < 128; ++pitch)
+                    {
+                        const uint8_t vel = pendingInjection_.velocities[pitch];
+                        if (vel > 0)
+                            liveNotes_[injCh][pitch] = { true, 0.0,
+                                                         vel / 127.0f };
+                    }
+                }
+            }
+        }
+
         const int defaultCh = juce::jlimit(0, 15, midiTargetChannel);
 
         for (const auto meta : incomingMidiBuffer_)
         {
             const auto msg = meta.getMessage();
 
-            // Determine target channel: MIDI channel 1 = default (midiTargetChannel),
-            // MIDI channels 2-16 = explicit channel routing (used by previewNote)
+            // ── MIDI channel routing ─────────────────────────────────────────
+            // Messages on MIDI channels 2-16 are engine-generated (previewNote,
+            // per-channel playback). They bypass MidiRouter and use the explicit
+            // channel number directly.
+            // Messages on MIDI channel 1 are from the external keyboard/controller
+            // and go through MidiRouter for classification.
             const int midiChan = msg.getChannel();  // 1-based
-            const int ch = (midiChan >= 2 && midiChan <= 16)
-                           ? (midiChan - 1)   // explicit: MIDI ch 2 → DAW ch 1, etc.
-                           : defaultCh;        // default: use midiTargetChannel
+            const bool isExternalMidi = (midiChan == 1);
+
+            // ── CC handling (external MIDI only) ────────────────────────────
+            if (isExternalMidi && msg.isController())
+            {
+                CcEvent cc;
+                cc.ccNumber   = (uint8_t)msg.getControllerNumber();
+                cc.value      = (uint8_t)msg.getControllerValue();
+                cc.dawChannel = defaultCh;
+                midiRouter_.enqueueCc(cc);
+                continue;   // CC does not go to instrument or loop recorder
+            }
+
+            // ── Determine target DAW channel + routing type ──────────────────
+            int ch = defaultCh;
+            bool isClipTrigger = false;
+
+            if (!isExternalMidi)
+            {
+                // Engine-generated: explicit channel (MIDI ch 2 → DAW ch 1, etc.)
+                ch = juce::jlimit(0, 15, midiChan - 1);
+            }
+            else if (msg.isNoteOn() || msg.isNoteOff())
+            {
+                const auto route = midiRouter_.classifyNote(msg.getNoteNumber());
+                if (route.type == MidiRoutingType::ClipTrigger)
+                {
+                    // Capture pad event for message thread (ClipLauncher etc.)
+                    ClipTriggerEvent ev;
+                    ev.note     = (uint8_t)msg.getNoteNumber();
+                    ev.velocity = (uint8_t)msg.getVelocity();
+                    ev.padIndex = route.padIndex;
+                    midiRouter_.enqueueClipTrigger(ev);
+                    isClipTrigger = true;
+                }
+                else
+                {
+                    ch = route.dawChannel;
+                }
+            }
 
             if (msg.isNoteOn())
             {
+                // ClipTrigger notes don't play instruments — already queued above
+                if (isClipTrigger) continue;
+
                 const int   pitch = msg.getNoteNumber();
                 const float vel   = msg.getFloatVelocity();
+                midiHeldNotes_[(size_t)ch][(size_t)juce::jlimit(0, 127, pitch)].store(
+                    (uint8_t)juce::jlimit(1, 127, (int)msg.getVelocity()), std::memory_order_relaxed);
 
                 // M8 — route to VST/AU plugin if one is loaded AND enabled for current pattern
                 const PlaybackSnapshot& midiSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
@@ -1440,15 +1900,32 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                     else
                     {
                         auto sourceBuffer = getChannelSourceBufferShared(ch);
-                        scheduleSampleTrigger(ch, meta.samplePosition, midiMixer,
-                                              sourceBuffer.get(), sourceBuffer,
-                                              midiVol, midiPan,
-                                              channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + (float)(pitch - 60), 1.0f);
+                        if (sourceBuffer != nullptr)
+                        {
+                            scheduleSampleTrigger(ch, meta.samplePosition, midiMixer,
+                                                  sourceBuffer.get(), sourceBuffer,
+                                                  midiVol, midiPan,
+                                                  channelBasePitch[(size_t)ch].load(std::memory_order_relaxed) + (float)(pitch - 60), 1.0f);
+                        }
+                        else
+                        {
+                            // No sample loaded — fall back to built-in synth for MIDI input feedback
+                            SynthParams sp;
+                            sp.enabled = true;
+                            dispatchVoiceNote(ch, pitch, vel, 0, midiVol, midiPan, midiMixer,
+                                              sp, ChannelSourceType::Synth, SamplerParams{}, nullptr);
+                        }
                     }
                 }
             }
             else if (msg.isNoteOff())
             {
+                // ClipTrigger note-off already enqueued above; no instrument to notify
+                if (isClipTrigger) continue;
+
+                const int pitch = juce::jlimit(0, 127, msg.getNoteNumber());
+                midiHeldNotes_[(size_t)ch][(size_t)pitch].store(0, std::memory_order_relaxed);
+
                 // M8 — route note-off to plugin if loaded AND enabled for current pattern
                 const PlaybackSnapshot& offSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
                 const bool offPluginActive = offSnap.pluginSlotEnabled[ch]
@@ -1456,16 +1933,19 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 if (offPluginActive)
                 {
                     instrumentMidiBuffers[ch].addEvent(
-                        juce::MidiMessage::noteOff(1, msg.getNoteNumber()),
+                        juce::MidiMessage::noteOff(1, pitch),
                         meta.samplePosition);
                 }
                 else
                 {
-                    polySynths[(size_t)ch].noteOff(msg.getNoteNumber());
+                    polySynths[(size_t)ch].noteOff(pitch);
                 }
             }
             else if (msg.isAllNotesOff() || msg.isAllSoundOff())
             {
+                for (auto& n : midiHeldNotes_[(size_t)ch])
+                    n.store(0, std::memory_order_relaxed);
+
                 const PlaybackSnapshot& allSnap = snapshots_[activeSnapshotIdx_.load(std::memory_order_acquire)];
                 if (allSnap.pluginSlotEnabled[ch] && instrumentPlugins[(size_t)ch] != nullptr)
                     instrumentMidiBuffers[ch].addEvent(
@@ -1473,6 +1953,19 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 else
                     polySynths[(size_t)ch].allNotesOff();
             }
+
+            // Loop recording: capture note on/off with beat timestamp
+            if (loopRecordEnabled_ && sequencer.isPlaying() && playMode == PlayMode::Pattern
+                && (msg.isNoteOn() || msg.isNoteOff()))
+            {
+                const double beatsPerSample = bpm.load(std::memory_order_relaxed) / (60.0 * sampleRate);
+                const double beatPos = patternBeatPos + meta.samplePosition * beatsPerSample;
+                processLoopRecordEvent(msg, ch, beatPos);
+            }
+
+            // Live performance: route MIDI events to LiveLoopEngine
+            if (msg.isNoteOn() || msg.isNoteOff())
+                liveLoopEngine_.processMidiEvent(msg, ch);
         }
     }
 
@@ -1780,30 +2273,41 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
 
     if (sequencer.isPlaying() && snap.patternId >= 0 && sampleRate > 0.0)
     {
-        const double samplesPerBeat = sampleRate * 60.0 / bpm.load(std::memory_order_relaxed);
-        const double patternBeats   = snap.stepCount * 0.25;  // 1 step = 1/16 note
+        const double samplesPerBeat  = sampleRate * 60.0 / bpm.load(std::memory_order_relaxed);
+        const double globalPatBeats  = snap.stepCount * 0.25;  // global pattern length in beats
 
-        if (patternBeats > 0.0)
+        if (globalPatBeats > 0.0)
         {
             const double startBeat = patternBeatPos;
             const double endBeat   = startBeat + numSamples / samplesPerBeat;
 
-            const double loopStart = std::fmod(startBeat, patternBeats);
-            const double loopEnd   = std::fmod(endBeat,   patternBeats);
-            const auto beatsFromBlockStart = [loopStart, loopEnd, patternBeats](double loopBeat) -> double
-            {
-                if (loopEnd < loopStart)
-                {
-                    if (loopBeat >= loopStart)
-                        return loopBeat - loopStart;
-                    return (patternBeats - loopStart) + loopBeat;
-                }
-                return loopBeat - loopStart;
-            };
-
             for (int ch = 0; ch < PlaybackSnapshot::kCh; ++ch)
             {
-                if (snap.channelTypes[ch] != ChannelType::Melodic) continue;
+                // Per-channel loop may have its own length (live performance recording).
+                // If a channel-override pattern exists, use its stepCount; else use global.
+                const int chPatId = snap.channelPatternId[ch];
+                double patternBeats = globalPatBeats;
+                if (chPatId >= 0)
+                {
+                    if (const Pattern* chPat = findPatternById(chPatId))
+                        patternBeats = juce::jmax(0.25, chPat->stepCount * 0.25);
+                }
+
+                // Only Melodic channels OR channels with a live-performance override play notes.
+                if (snap.channelTypes[ch] != ChannelType::Melodic && chPatId < 0) continue;
+
+                const double loopStart = std::fmod(startBeat, patternBeats);
+                const double loopEnd   = std::fmod(endBeat,   patternBeats);
+                const auto beatsFromBlockStart = [loopStart, loopEnd, patternBeats](double loopBeat) -> double
+                {
+                    if (loopEnd < loopStart)
+                    {
+                        if (loopBeat >= loopStart)
+                            return loopBeat - loopStart;
+                        return (patternBeats - loopStart) + loopBeat;
+                    }
+                    return loopBeat - loopStart;
+                };
 
                 // M8 — flush pending note-offs for plugin channels
                 // Only process plugin path if the CURRENT pattern has plugin enabled
@@ -1884,7 +2388,19 @@ void AudioEngine::processPatternMode(juce::AudioBuffer<float>& buffer,
                 }
             }
 
-            patternBeatPos += numSamples / samplesPerBeat;
+            // Advance beat position, wrapping to loop start when loop recording is active
+            const double nextBeatPos = patternBeatPos + numSamples / samplesPerBeat;
+            if (loopRecordEnabled_
+                && patternBeatPos < loopMarkers_.endBeat
+                && nextBeatPos  >= loopMarkers_.endBeat)
+            {
+                commitHangingNotes();
+                patternBeatPos = loopMarkers_.startBeat + (nextBeatPos - loopMarkers_.endBeat);
+            }
+            else
+            {
+                patternBeatPos = nextBeatPos;
+            }
         }
     }
 
@@ -2328,6 +2844,22 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
     // audioDeviceAboutToStart. If the driver delivers a smaller block, clamp.
     const int safe = juce::jmin(numSamples, stagingBuf.getNumSamples());
 
+    // ── CC Real-Time Parameter Smoothing ─────────────────────────────────────
+    // One exponential step per block toward the target set by the message thread.
+    // tau ≈ 20 ms gives smooth transitions without audible lag at knob speed.
+    {
+        const float tau     = 0.020f;  // 20 ms smoothing time constant
+        const float coeff   = (sampleRate > 0.0)
+                            ? (1.0f - std::exp(-(float)safe / ((float)sampleRate * tau)))
+                            : 1.0f;
+        for (int ch = 0; ch < 16; ++ch)
+        {
+            ccVol_[ch].tick(coeff);
+            ccPan_[ch].tick(coeff);
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Clear mixer track buses
     for (auto& tb : mixerTrackBufs)
         tb.clear();
@@ -2386,12 +2918,22 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
 
         if (usePlugin || useSynth)
         {
-            const float channelVolume = (playMode == PlayMode::Song)
-                                      ? songChannelVolume_[(size_t)ch]
-                                      : ((mixSnap.patternId >= 0) ? mixSnap.channelVolume[(size_t)ch] : 0.8f);
-            const float channelPan = (playMode == PlayMode::Song)
+            // Pattern / Song base volume & pan
+            const float baseVolume = (playMode == PlayMode::Song)
+                                   ? songChannelVolume_[(size_t)ch]
+                                   : ((mixSnap.patternId >= 0) ? mixSnap.channelVolume[(size_t)ch] : 0.8f);
+            const float basePan    = (playMode == PlayMode::Song)
                                    ? songChannelPan_[(size_t)ch]
                                    : ((mixSnap.patternId >= 0) ? mixSnap.channelPan[(size_t)ch] : 0.0f);
+
+            // CC real-time multipliers (smoothed this block, range [0,1] and [0,1]→[-1,+1])
+            const float ccVol      = ccVol_[(size_t)ch].get();
+            const float ccPanNorm  = ccPan_[(size_t)ch].get();          // 0.0–1.0
+            const float ccPanBip   = (ccPanNorm * 2.0f) - 1.0f;       // normalise → [-1, +1]
+
+            const float channelVolume = baseVolume * ccVol;
+            const float channelPan    = juce::jlimit(-1.0f, 1.0f, basePan + ccPanBip * 0.5f);
+
             const float panAngle = (channelPan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
             const float gainL = channelVolume * std::cos(panAngle);
             const float gainR = channelVolume * std::sin(panAngle);

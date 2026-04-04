@@ -169,11 +169,35 @@ ToolbarComponent::ToolbarComponent()
     trackpadBtn.setClickingTogglesState(true);
     trackpadBtn.onClick = [this] { if (onToggleTrackpad) onToggleTrackpad(); };
 
+    // ---- LIVE mode indicator button
+    addAndMakeVisible(liveModeBtn_);
+    liveModeBtn_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff323232));
+    liveModeBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff888888));
+    liveModeBtn_.setTooltip("Toggle Live Performance Mode");
+    liveModeBtn_.onClick = [this] { if (onToggleLiveMode) onToggleLiveMode(); };
+
     // Start timer for blinking and level meter updates
     startTimerHz(15);
 }
 
 ToolbarComponent::~ToolbarComponent() {}
+
+void ToolbarComponent::setLiveModeActive(bool active)
+{
+    if (active)
+    {
+        liveModeBtn_.setButtonText("LIVE ON");
+        liveModeBtn_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff8b0000));
+        liveModeBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffff4444));
+    }
+    else
+    {
+        liveModeBtn_.setButtonText("LIVE");
+        liveModeBtn_.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff323232));
+        liveModeBtn_.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff888888));
+    }
+    liveModeBtn_.repaint();
+}
 
 void ToolbarComponent::setRecordingActive(bool active)
 {
@@ -318,6 +342,8 @@ void ToolbarComponent::resized()
         launchpadBtn.setBounds(row.removeFromLeft(44).reduced(2));
         row.removeFromLeft(4);
         trackpadBtn .setBounds(row.removeFromLeft(52).reduced(2));
+        row.removeFromLeft(4);
+        liveModeBtn_.setBounds(row.removeFromLeft(56).reduced(2));
 
         titleLabel.setBounds(row);
     }

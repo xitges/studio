@@ -17,6 +17,9 @@
 #include "PluginBrowserComponent.h"
 #include "DynamicEQComponent.h"
 #include "TrackpadController.h"
+#include "LivePerformance/ClipLauncher.h"
+#include "LivePerformance/LivePerformanceComponent.h"
+#include "LivePerformance/LiveLoopWindow.h"
 
 class MainComponent : public juce::Component,
                       public juce::Timer,
@@ -130,6 +133,14 @@ private:
     std::shared_ptr<juce::FileChooser> fileChooser;
 
     bool recordTransitioning_ = false;
+    bool loopRecordEnabled_   = false;   // mirrors audioEngine.isLoopRecording() for message thread
+    bool liveMode_            = false;   // Live Performance Mode active state
+
+    ClipLauncher clipLauncher_;          // Live Performance clip launch state (message thread)
+
+    // Live Performance debug window
+    std::unique_ptr<LivePerformanceWindow> liveDebugWindow_;
+    std::unique_ptr<LiveLoopWindow>        liveLoopWindow_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

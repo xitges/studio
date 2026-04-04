@@ -192,7 +192,20 @@ MainComponent::MainComponent()
         if (recordTransitioning_) return;
         recordTransitioning_ = true;
 
-        // Build recording file path
+        // Live Performance Mode: arm current channel for loop recording
+        if (liveMode_)
+        {
+            const int ch = audioEngine.getMidiTargetChannel();
+            if (audioEngine.liveLoopGetState(ch) == LiveLoopEngine::State::Idle)
+            {
+                audioEngine.liveLoopArm(ch);
+                toolbar.setRecordingActive(true);
+            }
+            recordTransitioning_ = false;
+            return;
+        }
+
+        // Normal mode: WAV file recording
         juce::File recDir;
         if (currentFile.existsAsFile())
             recDir = currentFile.getParentDirectory().getChildFile("Recordings");
@@ -205,7 +218,6 @@ MainComponent::MainComponent()
         auto filename = "Recording_" + now.formatted("%Y%m%d_%H%M%S") + ".wav";
         auto recFile = recDir.getChildFile(filename);
 
-        // Enable input monitoring automatically
         audioEngine.setInputMonitoring(true);
 
         if (audioEngine.startRecording(recFile))
@@ -218,6 +230,16 @@ MainComponent::MainComponent()
     {
         if (recordTransitioning_) return;
         recordTransitioning_ = true;
+
+        if (liveMode_)
+        {
+            // Stop live loop recording on current channel
+            const int ch = audioEngine.getMidiTargetChannel();
+            audioEngine.liveLoopStop(ch);
+            toolbar.setRecordingActive(false);
+            recordTransitioning_ = false;
+            return;
+        }
 
         audioEngine.setInputMonitoring(false);
         audioEngine.stopRecording();
@@ -594,6 +616,12 @@ MainComponent::MainComponent()
             pat->samplePaths[ch] = file.getFullPathName();
         markDirty();
         audioEngine.refreshSongCacheAsync();
+    };
+
+    channelRack.onChannelSelected = [this](int ch)
+    {
+        audioEngine.setMidiTargetChannel(ch);
+        channelRack.setSelectedMidiChannel(ch);
     };
 
     channelRack.onMuteChanged = [this](int ch, bool muted)
@@ -1099,6 +1127,7 @@ MainComponent::MainComponent()
     {
         switchToPatternModeForEditing();
         pianoRollChannel = ch;
+        audioEngine.setMidiTargetChannel(ch);
 
         if (pianoRollWindow == nullptr)
         {
@@ -1215,6 +1244,51 @@ MainComponent::MainComponent()
             };
             pianoRollWindow->content.onExportMidi = [this] { exportCurrentPianoRollToMidi(); };
             pianoRollWindow->content.onImportMidi = [this] { importCurrentPianoRollFromMidi(); };
+
+            // Loop MIDI recording: enable/disable engine recording when REC state changes
+            pianoRollWindow->content.pianoRoll.onRecordingStateChanged = [this]
+            {
+                if (pianoRollWindow == nullptr) return;
+                const bool nowRecording = pianoRollWindow->content.pianoRoll.getRecState()
+                                          == PianoRollComponent::RecState::Recording;
+                loopRecordEnabled_ = nowRecording;
+
+                if (nowRecording)
+                {
+                    if (auto* pat = findPattern(activePatternId))
+                        audioEngine.setLoopMarkers(0.0, pat->stepCount * 0.25);
+                    audioEngine.enableLoopRecord(true);
+                    // Preserve the triggering note: inject currently-held pitches
+                    // into liveNotes_ at beat 0 so the first note is not lost.
+                    audioEngine.injectFirstLoopNotes(pianoRollChannel);
+                }
+                else
+                {
+                    audioEngine.enableLoopRecord(false);
+                    loopRecordEnabled_ = false;
+
+                    // Drain any remaining committed PianoRoll notes immediately
+                    AudioEngine::CommittedNote cn;
+                    bool anyAdded = false;
+                    while (audioEngine.drainCommittedNote(cn))
+                    {
+                        const int targetPatId = (cn.patternId >= 0) ? cn.patternId : activePatternId;
+                        if (auto* pat = findPattern(targetPatId))
+                        {
+                            const int varIdx = juce::jlimit(0, Pattern::kMaxVariations - 1, cn.variation);
+                            pat->variations[(size_t)varIdx].notes[(size_t)cn.channel].push_back(cn.note);
+                            anyAdded = true;
+                        }
+                    }
+                    if (anyAdded)
+                    {
+                        audioEngine.updatePatternSnapshot();
+                        if (pianoRollWindow != nullptr)
+                            pianoRollWindow->content.pianoRoll.repaint();
+                        markDirty();
+                    }
+                }
+            };
         }
 
         pianoRollWindow->setVisible(true);
@@ -1499,6 +1573,7 @@ MainComponent::MainComponent()
                     desc.createIdentifierString();
                 project.channelInstrumentPlugins[(size_t)targetCh].enabled = true;
                 channelRack.setChannelHasPlugin(targetCh, true);
+                audioEngine.updatePatternSnapshot();
                 markDirty();
             };
         }
@@ -1533,6 +1608,7 @@ MainComponent::MainComponent()
         if (auto* pat = findPattern(activePatternId))
             pat->pluginSlots[(size_t)ch] = PluginSlot{};
         channelRack.setChannelHasPlugin(ch, false);
+        audioEngine.updatePatternSnapshot();
         markDirty();
     };
 
@@ -2024,6 +2100,7 @@ MainComponent::MainComponent()
                 else if (result >= 200 && result < 216)
                 {
                     audioEngine.setMidiTargetChannel(result - 200);
+                    audioEngine.updatePatternSnapshot();
                 }
             });
     };
@@ -2060,6 +2137,133 @@ MainComponent::MainComponent()
     audioEngine.setActivePattern(activePatternId);
     audioEngine.updatePatternSnapshot();
 
+    // ── Live Performance: ClipLauncher wiring ────────────────────────────────
+    clipLauncher_.setQuantizeBeats(4.0);  // 1 bar quantize by default
+
+    // Default pad→channel mapping: pad N → channel N (first 16 pads)
+    if (!project.patterns.empty())
+    {
+        const int firstPatId = project.patterns.front().id;
+        for (int pad = 0; pad < 16 && pad < (int)project.patterns.size(); ++pad)
+            clipLauncher_.setClip(pad, pad, project.patterns[(size_t)pad].id, 0);
+        (void)firstPatId;
+    }
+
+    clipLauncher_.onClipLaunched = [this](int channel, int patternId, int variationIdx)
+    {
+        // Stop synth voices on this channel cleanly before switching its pattern
+        audioEngine.allSynthNotesOff();
+        audioEngine.setChannelPattern(channel, patternId, variationIdx);
+    };
+
+    clipLauncher_.onClipStopped = [this](int channel)
+    {
+        audioEngine.liveLoopStop(channel);
+        audioEngine.setChannelPattern(channel, -1, 0);
+    };
+
+    // When a pad is queued: arm that channel for live loop recording
+    clipLauncher_.onClipQueued = [this](int channel)
+    {
+        audioEngine.setMidiTargetChannel(channel);
+        if (audioEngine.liveLoopGetState(channel) == LiveLoopEngine::State::Idle)
+            audioEngine.liveLoopArm(channel);
+    };
+
+    // Pads are NOT intercepted as clip triggers — they play drum sounds normally.
+    // (setPadRange disabled: no pad range set, so all notes go to instrument routing)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Live Loop Window setup ───────────────────────────────────────────────
+    liveLoopWindow_ = std::make_unique<LiveLoopWindow>(audioEngine);
+    auto& lw = liveLoopWindow_->content;
+
+    lw.getSelectedChannel = [this]() { return audioEngine.getMidiTargetChannel(); };
+
+    lw.getChannelName = [](int ch) -> juce::String
+    {
+        return "Track " + juce::String(ch + 1);
+    };
+
+    lw.getInstrumentName = [this](int ch) -> juce::String
+    {
+        // Use CC volume as a proxy indicator
+        const float vol = audioEngine.getCcChannelVolume(ch);
+        return "vol: " + juce::String(vol, 2);
+    };
+
+    lw.getCurrentBeat = [this]() { return audioEngine.getPatternBeatPos(); };
+    lw.getBpm         = [this]() { return audioEngine.getBPM(); };
+
+    lw.onChannelSelected = [this](int ch)
+    {
+        audioEngine.setMidiTargetChannel(ch);
+        channelRack.setSelectedMidiChannel(ch);
+    };
+
+    lw.onArmChannel = [this](int ch)
+    {
+        audioEngine.liveLoopSetLength(16.0);  // default; updated by lenBtns
+        audioEngine.liveLoopArm(ch);
+    };
+
+    lw.onStopChannel = [this](int ch)
+    {
+        audioEngine.liveLoopStop(ch);
+    };
+
+    lw.onSetLoopLength = [this](int /*ch*/, double beats)
+    {
+        audioEngine.liveLoopSetLength(beats);
+    };
+
+    lw.onStopAll = [this]
+    {
+        audioEngine.liveLoopResetAll();
+    };
+
+    lw.onBpmChanged = [this](double bpm)
+    {
+        audioEngine.setBPM(bpm);
+    };
+
+    lw.onQuantizeChanged = [this](double stepBeats)
+    {
+        audioEngine.liveLoopSetQuantize(stepBeats);
+    };
+
+    // Apply the default 1/16 quantize to the engine immediately
+    audioEngine.liveLoopSetQuantize(0.25);
+
+    lw.onEditInstrument = [this](int ch)
+    {
+        // Open the existing synth editor for this channel
+        audioEngine.setMidiTargetChannel(ch);
+        channelRack.setSelectedMidiChannel(ch);
+        // Fire channel-select to trigger the existing piano roll / synth edit flow
+        if (channelRack.onChannelSelected)
+            channelRack.onChannelSelected(ch);
+    };
+
+    // ── Live Performance Mode toggle (wired to toolbar LIVE button) ─────────
+    toolbar.onToggleLiveMode = [this]
+    {
+        liveMode_ = !liveMode_;
+        toolbar.setLiveModeActive(liveMode_);
+
+        if (liveMode_)
+        {
+            liveLoopWindow_->setVisible(true);
+            liveLoopWindow_->toFront(true);
+        }
+        else
+        {
+            liveLoopWindow_->setVisible(false);
+            audioEngine.liveLoopResetAll();
+        }
+    };
+    // ─────────────────────────────────────────────────────────────────────────
+
     startTimerHz(30);
     setSize(1600, 900);
 }
@@ -2084,6 +2288,8 @@ MainComponent::~MainComponent()
     fxEditorWindow.reset();
     synthEditorWindow.reset();
     pianoRollWindow.reset();
+    liveDebugWindow_.reset();
+    liveLoopWindow_.reset();
 
     juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
     audioEngine.shutdown();
@@ -2768,6 +2974,8 @@ int MainComponent::ensureAutoBassChannel()
 void MainComponent::focusPianoRollChannel(int channelIndex)
 {
     pianoRollChannel = channelIndex;
+    // Auto-route MIDI input to the channel being viewed in the piano roll
+    audioEngine.setMidiTargetChannel(channelIndex);
     if (pianoRollWindow == nullptr)
         return;
 
@@ -3127,6 +3335,126 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    // ── Live Performance: drain pad triggers → ClipLauncher ──────────────────
+    {
+        ClipTriggerEvent ev;
+        while (audioEngine.drainClipTrigger(ev))
+            clipLauncher_.triggerClip(ev.padIndex, ev.velocity);
+
+        const double beatPos = audioEngine.getPatternBeatPos();
+        if (beatPos >= 0.0)
+            clipLauncher_.processQuantizedLaunch(beatPos);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── MIDI CC → Real-Time Parameter Control ─────────────────────────────────
+    // Drain CC events captured on the audio thread and apply the default mapping.
+    //
+    // Default mapping (MPK Mini / standard layout — all adjustable later):
+    //   CC 70–77 → channel 0–7 volume  (normalised 0-127 → 0.0–1.0)
+    //   CC 10    → global pan (unused for now)
+    //   Any unmapped CC is discarded silently.
+    {
+        CcEvent cc;
+        while (audioEngine.drainCcEvent(cc))
+        {
+            const float norm = cc.value / 127.0f;   // 0.0–1.0
+
+            // Volume mapping: CC 70-77 → channel 0-7
+            if (cc.ccNumber >= 70 && cc.ccNumber <= 77)
+            {
+                const int ch = cc.ccNumber - 70;
+                audioEngine.setCcChannelVolume(ch, norm);
+            }
+            // Loop length: CC 1 (mod wheel) → 1/2/4/8 bars
+            // 0-31 → 1 bar (4 beats), 32-63 → 2 bars (8), 64-95 → 4 bars (16), 96-127 → 8 bars (32)
+            else if (cc.ccNumber == 1)
+            {
+                const double lengths[] = { 4.0, 8.0, 16.0, 32.0 };
+                const int idx = juce::jlimit(0, 3, cc.value * 4 / 128);
+                audioEngine.liveLoopSetLength(lengths[idx]);
+            }
+            // Pan mapping: CC 10 → channel determined by dawChannel field
+            else if (cc.ccNumber == 10)
+            {
+                const int ch = (cc.dawChannel >= 0 && cc.dawChannel < 16)
+                               ? cc.dawChannel : 0;
+                audioEngine.setCcChannelPan(ch, norm);
+            }
+            // Extend mappings here as needed (MIDI learn, user map, etc.)
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    if (pianoRollWindow != nullptr && pianoRollWindow->isVisible() && pianoRollChannel >= 0 && pianoRollChannel < 16)
+    {
+        std::array<bool, 128> held {};
+        audioEngine.getMidiHeldNotesForChannel(pianoRollChannel, held);
+        pianoRollWindow->content.pianoRoll.setExternalHeldPitches(held);
+
+        // External MIDI trigger: if Armed and any note is held, fire Armed→Recording
+        auto& pr = pianoRollWindow->content.pianoRoll;
+        if (pr.getRecState() == PianoRollComponent::RecState::Armed)
+        {
+            for (int i = 0; i < 128; ++i)
+            {
+                if (held[i])
+                {
+                    pr.triggerFromExternalMidi();
+                    break;
+                }
+            }
+        }
+    }
+
+    // ── MIDI activity indicator: update ChannelRack dots ─────────────────────
+    {
+        uint16_t mask = 0;
+        for (int ch = 0; ch < 16; ++ch)
+        {
+            std::array<bool, 128> held {};
+            audioEngine.getMidiHeldNotesForChannel(ch, held);
+            for (int n = 0; n < 128; ++n)
+            {
+                if (held[n]) { mask |= (uint16_t)(1 << ch); break; }
+            }
+        }
+        channelRack.setMidiActivityMask(mask);
+    }
+
+    // ── Drain all committed notes (PianoRoll loop recording + Live Performance overdub) ──
+    {
+        AudioEngine::CommittedNote cn;
+        bool anyPianoRoll = false;
+        bool anyLivePerf  = false;
+        while (audioEngine.drainCommittedNote(cn))
+        {
+            // patternId == -1 → PianoRoll path (write to activePatternId)
+            // patternId >= 0  → Live Performance path (write to specific pattern)
+            const int targetPatId = (cn.patternId >= 0) ? cn.patternId : activePatternId;
+            if (auto* pat = findPattern(targetPatId))
+            {
+                const int varIdx = juce::jlimit(0, Pattern::kMaxVariations - 1, cn.variation);
+                pat->variations[(size_t)varIdx].notes[(size_t)cn.channel].push_back(cn.note);
+                if (cn.patternId < 0) anyPianoRoll = true;
+                else                  anyLivePerf  = true;
+            }
+        }
+        if (anyPianoRoll && loopRecordEnabled_)
+        {
+            audioEngine.updatePatternSnapshot();
+            if (pianoRollWindow != nullptr)
+                pianoRollWindow->content.pianoRoll.repaint();
+            markDirty();
+        }
+        if (anyLivePerf)
+        {
+            // Overdub notes: rebuild snapshot so the audio thread plays them next cycle
+            audioEngine.updatePatternSnapshot();
+            markDirty();
+        }
+    }
+
     // --- Input level metering (always active) ---
     toolbar.setInputLevels(audioEngine.getInputLevelL(), audioEngine.getInputLevelR());
 
