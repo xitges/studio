@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>FIELDLAB / TR-1 — Tabletop DAW</title>
+<meta name="viewport" content="width=1440" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=VT323&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* defaults — overridden by Tweaks */
+    --chassis: #e6dec9;
+    --chassis-2: #ddd3ba;
+    --chassis-shadow: #b9ad8c;
+    --ink: #1a1612;
+    --ink-soft: #4a4338;
+    --ink-faint: #8c8170;
+    --panel: #f3ecda;
+    --panel-rim: #c7bb9a;
+    --accent: #d8412a;       /* saturated red */
+    --accent-2: #f06b54;
+    --display-bg: #0d1410;
+    --display-fg: #b9ff66;
+    --led-off: #6e624a;
+    --led-red: #ff4233;
+    --led-amber: #ffb020;
+    --led-green: #6cff6c;
+    --line: rgba(0,0,0,0.18);
+    --rule: rgba(0,0,0,0.08);
+    --metal: linear-gradient(180deg,#cfc7b1 0%,#aea58c 50%,#928975 100%);
+    --metal-dark: linear-gradient(180deg,#3a342a 0%,#23201a 100%);
+    --pad: #2a251e;
+  }
+  html,body { margin:0; padding:0; background:#1a1612; font-family:"JetBrains Mono",ui-monospace,monospace; color:var(--ink); -webkit-font-smoothing:antialiased; }
+  body {
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:
+      radial-gradient(1200px 600px at 50% 0%, rgba(255,255,255,0.04), transparent 60%),
+      #161310;
+    padding:24px;
+    box-sizing:border-box;
+  }
+  #root { width:100%; max-width:1392px; }
+
+  /* Hide scrollbars on inner scrollers but keep them functional */
+  .scroll::-webkit-scrollbar { height:6px; width:6px; }
+  .scroll::-webkit-scrollbar-thumb { background:rgba(0,0,0,0.25); border-radius:3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="src/atoms.jsx"></script>
+<script type="text/babel" src="src/transport.jsx"></script>
+<script type="text/babel" src="src/synth.jsx"></script>
+<script type="text/babel" src="src/timeline.jsx"></script>
+<script type="text/babel" src="src/mixer.jsx"></script>
+<script type="text/babel" src="src/sequencer.jsx"></script>
+<script type="text/babel" src="src/browser.jsx"></script>
+<script type="text/babel" src="src/app.jsx"></script>
+</body>
+</html>

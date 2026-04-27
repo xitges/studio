@@ -12,6 +12,7 @@
 
 #include <JuceHeader.h>
 #include "ProjectModel.h"
+#include "StudioLookAndFeel.h"
 
 class PlaylistComponent : public juce::Component,
                           public juce::FileDragAndDropTarget,
@@ -157,14 +158,14 @@ private:
 
     std::vector<PlaylistClip> localDemoClips;
 
-    static constexpr int headerHeight  = 24;
-    static constexpr int trackHeight   = 56;
-    static constexpr int trackGap      = 4;
-    static constexpr int trackHeaderWidth = 80;
+    static constexpr int headerHeight  = 22;
+    static constexpr int trackHeight   = 62;
+    static constexpr int trackGap      = 0;
+    static constexpr int trackHeaderWidth = 160;
     static constexpr int resizeHotspot = 10; // px from right edge = resize handle
     static constexpr int autoLaneHeight = 60; // M9 — height of each automation lane
 
-    int barWidth = 64;  // M11 zoom: pixels per bar (variable)
+    int barWidth = 44;  // matches the HTML reference timeline scale
 
     // ---------------------------------------------------------------------------
     // Clip waveform cache — built from step/note data, invalidated on zoom change
@@ -568,20 +569,32 @@ inline void PlaylistComponent::paint(juce::Graphics& g)
 
 inline void PlaylistComponent::drawBackground(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff0f0f0f));
-    g.setColour(juce::Colour(0xff1c1c1e));
+    using LF = StudioLookAndFeel;
+
+    juce::ColourGradient bg(juce::Colour(LF::kDisplayBg), 0.0f, 0.0f,
+                            juce::Colour(0xff151d18), 0.0f, (float)getHeight(), false);
+    g.setGradientFill(bg);
+    g.fillAll();
+
+    juce::ColourGradient ruler(juce::Colour(LF::kChassis2), 0.0f, 0.0f,
+                               juce::Colour(LF::kChassis), 0.0f, (float)headerHeight, false);
+    g.setGradientFill(ruler);
     g.fillRect(0, 0, getWidth(), headerHeight);
+
+    g.setColour(juce::Colour(LF::kPanelRim));
+    g.drawLine(0.0f, (float)headerHeight - 1.0f, (float)getWidth(), (float)headerHeight - 1.0f, 1.0f);
 }
 
 inline void PlaylistComponent::drawTimeRuler(juce::Graphics& g)
 {
-    g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
+    using LF = StudioLookAndFeel;
+    g.setFont(StudioLookAndFeel::displayFont(13.0f));
     const int totalBars = juce::jmax(getWidth() / barWidth + 1, 32);
 
     // Sub-bar grid lines
     if (snapDivisor > 1)
     {
-        g.setColour(juce::Colour(0xffb0b0b8).withAlpha(0.08f));
+        g.setColour(juce::Colour(LF::kDisplayFg).withAlpha(0.08f));
         for (int bar = 0; bar < totalBars; ++bar)
             for (int sub = 1; sub < snapDivisor; ++sub)
             {
@@ -593,55 +606,69 @@ inline void PlaylistComponent::drawTimeRuler(juce::Graphics& g)
     for (int bar = 0; bar < totalBars; ++bar)
     {
         const int x = trackHeaderWidth + bar * barWidth;
-        g.setColour(bar % 4 == 0 ? juce::Colour(0xffb0b0b8).withAlpha(0.2f)
-                                  : juce::Colour(0xff383838).withAlpha(0.8f));
+        g.setColour(bar % 4 == 0 ? juce::Colour(LF::kDisplayFg).withAlpha(0.22f)
+                                  : juce::Colour(0xff243128).withAlpha(0.9f));
         g.drawLine((float)x, 0.0f, (float)x, (float)getHeight(), 1.0f);
 
-        g.setColour(bar % 4 == 0 ? juce::Colour(0xfff0f0f2) : juce::Colour(0xff888892));
-        g.drawText(juce::String(bar + 1), x + 2, 0, barWidth - 4, headerHeight,
+        g.setColour(bar % 4 == 0 ? juce::Colour(LF::kDisplayFg) : juce::Colour(LF::kDisplayFg).withAlpha(0.45f));
+        g.drawText(juce::String(bar + 1).paddedLeft('0', 2), x + 4, 0, barWidth - 6, headerHeight,
                    juce::Justification::centredLeft);
     }
 }
 
 inline void PlaylistComponent::drawTracks(juce::Graphics& g)
 {
+    using LF = StudioLookAndFeel;
     const int count = getTrackCount();
     for (int t = 0; t < count; ++t)
     {
         const int trackY = headerHeight + t * (trackHeight + trackGap);
 
-        g.setColour(t % 2 == 0 ? juce::Colour(0xff1c1c1e) : juce::Colour(0xff161618));
+        g.setColour(t % 2 == 0 ? juce::Colour(0xff121a15) : juce::Colour(0xff0f1512));
         g.fillRect(0, trackY, getWidth(), trackHeight);
 
         // Track header label area — slightly elevated
-        g.setColour(juce::Colour(0xff2c2c2e));
+        juce::ColourGradient hdr(juce::Colour(LF::kPanel), 0.0f, (float)trackY,
+                                 juce::Colour(LF::kChassis), 0.0f, (float)(trackY + trackHeight), false);
+        g.setGradientFill(hdr);
         g.fillRect(0, trackY, trackHeaderWidth, trackHeight);
         // Right separator line
-        g.setColour(juce::Colours::white.withAlpha(0.06f));
-        g.drawLine(79.5f, (float)trackY, 79.5f, (float)(trackY + trackHeight), 1.0f);
+        g.setColour(juce::Colour(LF::kPanelRim).withAlpha(0.8f));
+        g.drawLine((float)trackHeaderWidth - 0.5f, (float)trackY,
+                   (float)trackHeaderWidth - 0.5f, (float)(trackY + trackHeight), 1.0f);
 
         const juce::String name = (project != nullptr && t < (int)project->playlistTracks.size())
                                   ? project->playlistTracks[(size_t)t].name
                                   : ("Track " + juce::String(t + 1));
 
-        g.setColour(juce::Colours::white.withAlpha(0.8f));
-        g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
-        g.drawText(name, 6, trackY, 72, trackHeight, juce::Justification::centredLeft);
+        g.setColour(juce::Colour(LF::kText));
+        g.setFont(StudioLookAndFeel::monoFont(11.0f, juce::Font::bold));
+        g.drawText(juce::String(t + 1), 8, trackY + 6, 20, 14, juce::Justification::centred);
+        g.drawText(name, 34, trackY + 4, trackHeaderWidth - 56, 18, juce::Justification::centredLeft);
+
+        g.setColour(juce::Colour(LF::kTextFaint));
+        g.setFont(StudioLookAndFeel::monoFont(8.0f, juce::Font::bold));
+        g.drawText((project != nullptr && t < (int)project->playlistTracks.size()
+                    ? "SAMPLER"
+                    : "TRACK"),
+                   34, trackY + 22, trackHeaderWidth - 56, 10, juce::Justification::centredLeft);
 
         // Subtle right-click hint (three dots)
-        g.setColour(juce::Colours::white.withAlpha(0.25f));
+        g.setColour(juce::Colour(LF::kTextFaint));
         for (int d = 0; d < 3; ++d)
-            g.fillEllipse(66.0f + d * 4.0f, (float)(trackY + trackHeight / 2 - 1), 2.0f, 2.0f);
+            g.fillEllipse((float)(trackHeaderWidth - 18 + d * 4), (float)(trackY + trackHeight / 2 - 1), 2.0f, 2.0f);
     }
 }
 
 inline void PlaylistComponent::drawClips(juce::Graphics& g)
 {
     // Colour palette: cycle per patternId so different patterns look distinct
+    using LF = StudioLookAndFeel;
+
     static const juce::Colour palette[] = {
-        juce::Colour(0xff5c7090), juce::Colour(0xff4e6888),
-        juce::Colour(0xff6870a0), juce::Colour(0xff527080),
-        juce::Colour(0xff486890), juce::Colour(0xff687898),
+        juce::Colour(0xffd8412a), juce::Colour(0xffb64b2c),
+        juce::Colour(0xffc77632), juce::Colour(0xff8b6a2d),
+        juce::Colour(0xff587345), juce::Colour(0xff45726e),
     };
     constexpr int paletteSize = (int)(sizeof(palette) / sizeof(palette[0]));
 
@@ -664,15 +691,15 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
 
         // Audio clips: teal/green tone to distinguish from pattern clips
         const juce::Colour fill = isAudioClip
-            ? juce::Colour(0xff2d6b5a)
+            ? juce::Colour(0xff5a7a56)
             : (hasPattern ? palette[(clip.patternId - 1) % paletteSize]
-                          : juce::Colour(0xff3a3a46));
+                          : juce::Colour(0xff766b59));
         // Slip-editing: bright white-gold outline to signal active slip
         const juce::Colour border = isSlipTarget
             ? juce::Colour(0xffffd080)
             : (isAudioClip
-               ? juce::Colour(0xff4db896)
-               : (hasPattern ? fill.brighter(0.4f) : juce::Colour(0xff9090a8)));
+               ? juce::Colour(0xffa9d796)
+               : (hasPattern ? fill.brighter(0.35f) : juce::Colour(LF::kPanelRim)));
 
         const float baseAlpha = clip.id == draggingClipId ? 0.6f : 0.85f;
         g.setColour(fill.withAlpha(clip.muted ? baseAlpha * 0.35f : baseAlpha));
@@ -736,7 +763,7 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
 
                     // === Centre line (midline) ===
                     // Visible axis: always drawn, indicates ±0 baseline
-                    g.setColour(fill.brighter(0.5f).withAlpha(0.40f));
+                    g.setColour(fill.brighter(0.8f).withAlpha(0.35f));
                     g.drawHorizontalLine((int)std::round(centerY),
                                         (float)previewX, (float)(previewX + previewW));
 
@@ -889,7 +916,7 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
             const float halfH    = (float)waveH * 0.5f - 1.0f;
 
             // Centre line
-            g.setColour(border.withAlpha(0.35f));
+            g.setColour(border.withAlpha(0.4f));
             g.drawHorizontalLine((int)std::round(centerY),
                                  (float)previewX, (float)(previewX + previewW));
 
@@ -1054,7 +1081,7 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
             }
         }
 
-        g.setColour(juce::Colours::white);
+        g.setColour(juce::Colour(0xfff7f1e2));
         g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
         juce::String clipLabel;
         if (isAudioClip)

@@ -161,7 +161,11 @@ private:
     float    inputLevelL_     = 0.0f;
     float    inputLevelR_     = 0.0f;
     double   recElapsedSec_   = 0.0;
+    float    reelAngle_       = 0.0f;   // tape reel rotation (degrees)
     PlayMode playMode = PlayMode::Pattern;
+
+    // Draw a decorative tape reel at (cx, cy) with radius r
+    void drawTapeReel(juce::Graphics& g, float cx, float cy, float r) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ToolbarComponent)
 };

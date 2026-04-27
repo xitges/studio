@@ -150,6 +150,13 @@ MainComponent::MainComponent()
 
     // ---- Toolbar
     addAndMakeVisible(toolbar);
+    addAndMakeVisible(inspectorTabBar_);
+    inspectorTabBar_.onTabChanged = [this](int t)
+    {
+        inspectorTab_ = t;
+        showMixer = (t == 1);
+        resized();
+    };
 
     toolbar.updatePatternList(project.patterns, activePatternId);
     channelRack.setPatternStartStep(patternStartStep);
@@ -553,8 +560,8 @@ MainComponent::MainComponent()
 
     // Reopen tab -- shown only when browser is closed, at the left edge
     browserCollapseBtn.setButtonText(">");
-    browserCollapseBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff2a2a3a));
-    browserCollapseBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffb0b0c8));
+    browserCollapseBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(StudioLookAndFeel::kChassis));
+    browserCollapseBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(StudioLookAndFeel::kTextDim));
     browserCollapseBtn.onClick = [this]
     {
         isBrowserOpen = true;
@@ -1930,7 +1937,13 @@ MainComponent::MainComponent()
         dynEQWindows[(size_t)idx]->toFront(true);
     };
 
-    toolbar.onToggleMixer = [this] { showMixer = !showMixer; resized(); };
+    toolbar.onToggleMixer = [this]
+    {
+        showMixer    = !showMixer;
+        inspectorTab_ = showMixer ? 1 : 0;
+        inspectorTabBar_.setTab(inspectorTab_);
+        resized();
+    };
 
     // Launchpad -- inline panel callbacks (wired once at construction)
     launchpadPanel.setProject(&project);
@@ -2320,7 +2333,7 @@ MainComponent::MainComponent()
     // -------------------------------------------------------------------------
 
     startTimerHz(30);
-    setSize(1600, 900);
+    setSize(1392, 860);
 }
 
 MainComponent::~MainComponent()
@@ -3323,17 +3336,48 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff1a1a2e));
+    using LF = StudioLookAndFeel;
+
+    juce::ColourGradient bodyGrad(juce::Colour(LF::kChassis), 0.0f, 0.0f,
+                                  juce::Colour(LF::kChassis2), 0.0f, (float)getHeight(),
+                                  false);
+    g.setGradientFill(bodyGrad);
+    g.fillAll();
+
+    const int footerH = 22;
+    auto footer = getLocalBounds().removeFromBottom(footerH).reduced(8, 0);
+
+    g.setColour(juce::Colour(0xffffffff).withAlpha(0.12f));
+    g.drawLine((float)footer.getX(), (float)footer.getY(),
+               (float)footer.getRight(), (float)footer.getY(), 1.0f);
+
+    g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f).withStyle("Bold")));
+    g.setColour(juce::Colour(LF::kTextFaint));
+    g.drawText("fieldlab instruments  .  made in original spirit  .  serial 02-1184-1",
+               footer.removeFromLeft(620), juce::Justification::centredLeft, true);
+
+    g.drawText("USB-C  .  MIDI 5P  .  CV 1/8\" x 4  .  v 2.4.1",
+               footer, juce::Justification::centredRight, true);
 }
 
 void MainComponent::resized()
 {
-    auto area = getLocalBounds();
+    constexpr int kPad = 14;
+    constexpr int kGap = 12;
+    constexpr int kFooterH = 22;
+    constexpr int kToolbarH = 104;
+    constexpr int kTabH = 36;
 
-    // Toolbar is now 80px (two rows)
-    toolbar.setBounds(area.removeFromTop(80));
+    auto area = getLocalBounds().reduced(kPad);
 
-    // Launchpad -- right panel, toolbar 바로 아래 풀 높이
+    toolbar.setBounds(area.removeFromTop(kToolbarH));
+    area.removeFromTop(kGap);
+
+    auto footerArea = area.removeFromBottom(kFooterH);
+    juce::ignoreUnused(footerArea);
+    area.removeFromBottom(kGap);
+
+    // Launchpad — right panel, full height below toolbar
     launchpadPanel.setVisible(showLaunchpad);
     if (showLaunchpad)
     {
@@ -3341,54 +3385,65 @@ void MainComponent::resized()
         launchpadPanel.setBounds(area.removeFromRight(padW));
     }
 
-    // M5 -- Mixer panel anchored at bottom, visible only when toggled
-    mixer.setVisible(showMixer);
-    if (showMixer)
-        mixer.setBounds(area.removeFromBottom(160));
-
-    // M15 -- sample browser: left panel, collapsible
-    constexpr int kBrowserW  = 220;
-    constexpr int kReopenW   = 22;
-    constexpr int kReopenH   = 32;
+    // M15 — sample browser: left panel, collapsible
+    constexpr int kBrowserW = 300;
+    constexpr int kReopenW  = 22;
+    constexpr int kReopenH  = 32;
 
     browserViewport.setVisible(isBrowserOpen);
     if (isBrowserOpen)
     {
-        // Collapse button is INSIDE the browser header -- hide the external tab
         browserCollapseBtn.setVisible(false);
-
         auto browserArea = area.removeFromLeft(kBrowserW);
         browserViewport.setBounds(browserArea);
         sampleBrowser.setSize(kBrowserW, juce::jmax(browserArea.getHeight(), 800));
+        area.removeFromLeft(kGap);
     }
     else
     {
-        // Show the reopen ">" tab at the top-left, flush with toolbar bottom
         browserCollapseBtn.setVisible(true);
-        browserCollapseBtn.setBounds(0, area.getY(), kReopenW, kReopenH);
+        browserCollapseBtn.setBounds(kPad, area.getY(), kReopenW, kReopenH);
         browserCollapseBtn.toFront(false);
     }
 
-    const int playlistHeight = (int)(area.getHeight() * 0.38f);
+    // Playlist — top 60% of remaining area, matching the reference arrangement-first layout
+    const int playlistHeight = juce::jmax(260, (int)std::round(area.getHeight() * 0.60f));
     auto playlistArea = area.removeFromTop(playlistHeight);
 
-    // Snap + zoom controls anchored to top-right, outside the scrollable area
     const int ctrlY = playlistArea.getY() + 2;
     const int ctrlR = playlistArea.getRight() - 2;
-    playlistSnapBox    .setBounds(ctrlR - 114,       ctrlY, 112, 20);
-    playlistZoomInBtn  .setBounds(ctrlR - 114 - 46,  ctrlY,  22, 20);
-    playlistZoomOutBtn .setBounds(ctrlR - 114 - 70,  ctrlY,  22, 20);
+    playlistSnapBox    .setBounds(ctrlR - 114,      ctrlY, 112, 20);
+    playlistZoomInBtn  .setBounds(ctrlR - 114 - 46, ctrlY,  22, 20);
+    playlistZoomOutBtn .setBounds(ctrlR - 114 - 70, ctrlY,  22, 20);
 
     playlistViewport.setBounds(playlistArea);
     playlist.setSize(juce::jmax(playlistArea.getWidth(),  playlist.getNeededWidth()),
                      juce::jmax(playlistArea.getHeight(), playlist.getNeededHeight()));
 
-    channelRackViewport.setBounds(area);
+    area.removeFromTop(kGap);
 
-    const int viewW = area.getWidth();
-    const int viewH = area.getHeight();
-    if (channelRack.getWidth() != viewW)
-        channelRack.setSize(viewW, juce::jmax(viewH, channelRack.getNeededHeight()));
+    // Inspector tab bar — 36px strip between playlist and inspector content
+    inspectorTabBar_.setBounds(area.removeFromTop(kTabH));
+
+    // Inspector content — channel rack (tab 0) or mixer (tab 1) or empty (tab 2)
+    const bool showSeq  = (inspectorTab_ == 0);
+    const bool showMix  = (inspectorTab_ == 1);
+
+    channelRackViewport.setVisible(showSeq);
+    mixer.setVisible(showMix);
+
+    if (showSeq)
+    {
+        channelRackViewport.setBounds(area);
+        const int viewW = area.getWidth();
+        const int viewH = area.getHeight();
+        if (channelRack.getWidth() != viewW)
+            channelRack.setSize(viewW, juce::jmax(viewH, channelRack.getNeededHeight()));
+    }
+    else if (showMix)
+    {
+        mixer.setBounds(area);
+    }
 }
 
 void MainComponent::timerCallback()

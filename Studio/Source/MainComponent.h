@@ -21,6 +21,81 @@
 #include "LivePerformance/LivePerformanceComponent.h"
 #include "LivePerformance/LiveLoopWindow.h"
 
+// Tab bar that switches between SEQUENCER / MIXER / INSTRUMENT inspector panels
+class InspectorTabBar : public juce::Component
+{
+public:
+    std::function<void(int)> onTabChanged;
+
+    void setTab(int t) { activeTab_ = t; repaint(); }
+    int  getTab() const { return activeTab_; }
+
+    void paint(juce::Graphics& g) override
+    {
+        using LF = StudioLookAndFeel;
+        juce::ColourGradient bg(juce::Colour(LF::kChassis2), 0.0f, 0.0f,
+                                juce::Colour(LF::kChassis), 0.0f, (float)getHeight(), false);
+        g.setGradientFill(bg);
+        g.fillAll();
+
+        const int n = 3;
+        const int tw = getWidth() / n;
+        const char* names[] = { "SEQUENCER", "MIXER", "INSTRUMENT" };
+        const char* subs[]  = { "PATTERN A", "6 CH  2 BUS", "POLY-6 MK2" };
+
+        for (int i = 0; i < n; ++i)
+        {
+            juce::Rectangle<int> tab(i * tw, 0, tw, getHeight());
+            if (i == activeTab_)
+            {
+                g.setColour(juce::Colour(LF::kPanel));
+                g.fillRoundedRectangle(tab.toFloat().reduced(2.0f, 0.0f), 4.0f);
+                g.setColour(juce::Colour(LF::kAccent));
+                g.fillRect(tab.withHeight(2).reduced(3, 0));
+                g.setColour(juce::Colour(LF::kText));
+            }
+            else
+            {
+                g.setColour(juce::Colour(LF::kTextDim));
+            }
+            auto top = tab.removeFromTop(18);
+            g.setFont(StudioLookAndFeel::monoFont(10.0f, juce::Font::bold));
+            g.drawText(names[i], top, juce::Justification::centred);
+            g.setColour(i == activeTab_ ? juce::Colour(LF::kAccent) : juce::Colour(LF::kTextFaint));
+            g.setFont(StudioLookAndFeel::monoFont(8.0f, juce::Font::bold));
+            g.drawText(subs[i], tab.removeFromTop(12), juce::Justification::centred);
+        }
+
+        auto tag = juce::Rectangle<int>(getWidth() - 150, 7, 138, getHeight() - 14);
+        g.setColour(juce::Colour(LF::kChassis));
+        g.fillRoundedRectangle(tag.toFloat(), 4.0f);
+        g.setColour(juce::Colour(LF::kPanelRim));
+        g.drawRoundedRectangle(tag.toFloat(), 4.0f, 1.0f);
+        g.setColour(juce::Colour(LF::kTextFaint));
+        g.setFont(StudioLookAndFeel::monoFont(8.0f, juce::Font::bold));
+        g.drawText("INSPECTOR  TRACK 03", tag, juce::Justification::centred);
+
+        // Separator line at bottom
+        g.setColour(juce::Colour(LF::kPanelRim));
+        g.drawLine(0.0f, (float)(getHeight() - 1), (float)getWidth(), (float)(getHeight() - 1), 1.0f);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int tw = getWidth() / 3;
+        const int t  = juce::jlimit(0, 2, e.x / tw);
+        if (t != activeTab_)
+        {
+            activeTab_ = t;
+            repaint();
+            if (onTabChanged) onTabChanged(activeTab_);
+        }
+    }
+
+private:
+    int activeTab_ = 0;
+};
+
 class MainComponent : public juce::Component,
                       public juce::Timer,
                       public juce::DragAndDropContainer
@@ -69,6 +144,10 @@ private:
     int autoTuneEditorTrack = -1;
     int synthEditorChannel = -1;
     int fxEditorTrack      = -1;
+
+    // Inspector tab bar (SEQUENCER / MIXER / INSTRUMENT)
+    InspectorTabBar  inspectorTabBar_;
+    int              inspectorTab_ = 0;   // 0=sequencer, 1=mixer, 2=instrument
 
     // Launchpad — inline right panel (toggled)
     LaunchpadPanel   launchpadPanel;
