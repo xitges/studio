@@ -44,6 +44,9 @@ public:
     static juce::Colour displayFg() { return juce::Colour(kDisplayFg); }
     static juce::Colour topLight()  { return juce::Colours::white.withAlpha(0.5f); }
     static juce::Colour rimLight()  { return juce::Colours::white.withAlpha(0.3f); }
+    // Global font scale — increase to make all native UI text larger
+    static constexpr float kFontScale = 1.25f;
+
     static juce::Font monoFont(float height, int styleFlags = juce::Font::plain)
     {
         const bool bold = (styleFlags & juce::Font::bold) != 0;
@@ -51,17 +54,17 @@ public:
             BinaryData::JetBrainsMonoRegular_ttf, (size_t)BinaryData::JetBrainsMonoRegular_ttfSize);
         static auto boldFace = juce::Typeface::createSystemTypefaceFor(
             BinaryData::JetBrainsMonoBold_ttf, (size_t)BinaryData::JetBrainsMonoBold_ttfSize);
-        return juce::Font(juce::FontOptions(bold ? boldFace : regularFace).withHeight(height));
+        return juce::Font(juce::FontOptions(bold ? boldFace : regularFace).withHeight(height * kFontScale));
     }
     static juce::Font brandFont(float height, int styleFlags = juce::Font::plain)
     {
-        return monoFont(height, styleFlags);   // fallback: JetBrains Mono
+        return monoFont(height, styleFlags);
     }
     static juce::Font displayFont(float height, int styleFlags = juce::Font::plain)
     {
         static auto face = juce::Typeface::createSystemTypefaceFor(
             BinaryData::VT323Regular_ttf, (size_t)BinaryData::VT323Regular_ttfSize);
-        return juce::Font(juce::FontOptions(face).withHeight(height));
+        return juce::Font(juce::FontOptions(face).withHeight(height * kFontScale));
     }
 
     StudioLookAndFeel()
@@ -130,62 +133,23 @@ public:
 
         if (isOn)
         {
-            // Active: radial gradient with per-button LED color (reference style)
-            const float cx = b.getX() + b.getWidth() * 0.3f;
-            const float cy = b.getY() + b.getHeight() * 0.25f;
-            juce::ColourGradient grad(onCol.withAlpha(0.85f), cx, cy,
-                                      onCol.withAlpha(0.55f), b.getRight(), b.getBottom(), true);
-            g.setGradientFill(grad);
+            g.setColour(onCol);
             g.fillRoundedRectangle(b, r);
-
-            // Inset top highlight
-            g.setColour(juce::Colours::white.withAlpha(0.35f));
-            g.drawLine(b.getX() + r, b.getY() + 1.0f, b.getRight() - r, b.getY() + 1.0f, 1.0f);
-            // Inner bottom shadow
-            g.setColour(juce::Colours::black.withAlpha(0.22f));
-            g.drawLine(b.getX() + r, b.getBottom() - 1.5f, b.getRight() - r, b.getBottom() - 1.5f, 1.5f);
-
-            // Outer glow ring (simulate box-shadow glow)
-            g.setColour(onCol.withAlpha(0.32f));
-            g.drawRoundedRectangle(b.expanded(1.5f), r + 1.5f, 2.0f);
-            g.setColour(onCol.withAlpha(0.14f));
-            g.drawRoundedRectangle(b.expanded(3.0f), r + 3.0f, 2.5f);
         }
         else if (isButtonDown)
         {
-            // Pressed: darker cream, inset shadow
-            juce::ColourGradient grad(juce::Colour(kPanelRim), 0.0f, b.getY(),
-                                      juce::Colour(kChassis2), 0.0f, b.getBottom(), false);
-            g.setGradientFill(grad);
+            g.setColour(juce::Colour(kPanelRim));
             g.fillRoundedRectangle(b, r);
-            g.setColour(juce::Colours::black.withAlpha(0.2f));
-            g.fillRoundedRectangle(b.withHeight(5.0f), r);
         }
         else
         {
-            // Normal: cream gradient (reference: #f3ecda → #c7bb9a 60% → #8d8268)
-            juce::ColourGradient grad(juce::Colour(kPanel).brighter(0.06f), 0.0f, b.getY(),
-                                      juce::Colour(0xff8d8268),             0.0f, b.getBottom(), false);
-            grad.addColour(0.6, juce::Colour(kPanelRim));
-            g.setGradientFill(grad);
+            g.setColour(isMouseOver ? juce::Colour(kPanel).brighter(0.04f)
+                                    : juce::Colour(kPanel));
             g.fillRoundedRectangle(b, r);
-
-            // Top specular
-            g.setColour(juce::Colours::white.withAlpha(0.55f));
-            g.drawLine(b.getX() + r, b.getY() + 1.0f, b.getRight() - r, b.getY() + 1.0f, 1.0f);
-            // Bottom shadow
-            g.setColour(juce::Colours::black.withAlpha(0.38f));
-            g.drawLine(b.getX() + r, b.getBottom() + 0.5f, b.getRight() - r, b.getBottom() + 0.5f, 1.5f);
-
-            if (isMouseOver)
-            {
-                g.setColour(juce::Colours::white.withAlpha(0.12f));
-                g.fillRoundedRectangle(b, r);
-            }
         }
 
-        // Outer rim (1px dark border)
-        g.setColour(juce::Colour(0x80000000));
+        // 1px border
+        g.setColour(juce::Colour(isOn ? 0x70000000u : 0x38000000u));
         g.drawRoundedRectangle(b, r, 1.0f);
     }
 
@@ -213,32 +177,30 @@ public:
             if (text == "PLAY")
             {
                 juce::Path p;
-                p.addTriangle(cx - W*0.22f, cy - H*0.30f,
-                              cx + W*0.30f, cy,
-                              cx - W*0.22f, cy + H*0.30f);
+                p.addTriangle(cx - W*0.16f, cy - H*0.22f,
+                              cx + W*0.22f, cy,
+                              cx - W*0.16f, cy + H*0.22f);
                 g.fillPath(p);
             }
             else if (text == "PAUSE")
             {
-                const float bw = W * 0.15f, bh = H * 0.52f;
-                g.fillRect(cx - W*0.22f, cy - bh*0.5f, bw, bh);
-                g.fillRect(cx + W*0.07f, cy - bh*0.5f, bw, bh);
+                const float bw = W * 0.11f, bh = H * 0.38f;
+                g.fillRect(cx - W*0.17f, cy - bh*0.5f, bw, bh);
+                g.fillRect(cx + W*0.06f, cy - bh*0.5f, bw, bh);
             }
             else if (text == "STOP")
             {
-                const float s = juce::jmin(W, H) * 0.44f;
+                const float s = juce::jmin(W, H) * 0.32f;
                 g.fillRoundedRectangle(cx - s*0.5f, cy - s*0.5f, s, s, 1.5f);
             }
             else if (text == "REC")
             {
-                const float rr = juce::jmin(W, H) * 0.28f;
+                const float rr = juce::jmin(W, H) * 0.20f;
                 g.fillEllipse(cx - rr, cy - rr, rr*2.0f, rr*2.0f);
             }
             else if (text == "REW")
             {
-                // Reference: one left-pointing triangle + vertical bar on left
-                // SVG: polygon(11,2 5,7 11,12) + rect(3,2 w2 h10) in 14x14 viewBox
-                const float sc = juce::jmin(W, H) / 14.0f;
+                const float sc = juce::jmin(W, H) / 14.0f * 0.72f;
                 const float ox = cx - 7.0f * sc, oy = cy - 7.0f * sc;
                 juce::Path p;
                 p.addTriangle(ox + 11*sc, oy + 2*sc,
@@ -249,9 +211,7 @@ public:
             }
             else if (text == "FF")
             {
-                // Reference: one right-pointing triangle + vertical bar on right
-                // SVG: polygon(3,2 9,7 3,12) + rect(9,2 w2 h10) in 14x14 viewBox
-                const float sc = juce::jmin(W, H) / 14.0f;
+                const float sc = juce::jmin(W, H) / 14.0f * 0.72f;
                 const float ox = cx - 7.0f * sc, oy = cy - 7.0f * sc;
                 juce::Path p;
                 p.addTriangle(ox + 3*sc, oy + 2*sc,
@@ -262,10 +222,7 @@ public:
             }
             else if (text == "LOOP")
             {
-                // Reference: arc M2 7 a5 5 0 1 1 5 5 in 14x14 viewBox
-                // Center (7,7), start (2,7)=left, end (7,12)=bottom, ~270° clockwise arc
-                // Arrowhead polyline: (5,11)→(7,12)→(8,10)
-                const float sc  = juce::jmin(W, H) / 14.0f;
+                const float sc  = juce::jmin(W, H) / 14.0f * 0.72f;
                 const float ox  = cx - 7.0f * sc, oy = cy - 7.0f * sc;
                 const float rr  = 5.0f * sc;
                 const float acx = ox + 7*sc, acy = oy + 7*sc;  // arc circle center

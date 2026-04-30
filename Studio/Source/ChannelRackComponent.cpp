@@ -352,31 +352,18 @@ void ChannelRackComponent::openInspector(int ch, int step)
     inspectorCh   = ch;
     inspectorStep = step;
     refreshInspector();
-    inspectorLabel   .setVisible(true);
-    inspVelSlider    .setVisible(true);
-    inspGateSlider   .setVisible(true);
-    inspProbSlider   .setVisible(true);
-    inspPitchSlider  .setVisible(true);
-    inspCutoffSlider .setVisible(true);
-    inspStartOffSlider.setVisible(true);
-    inspTimingSlider .setVisible(true);
-    inspResetBtn     .setVisible(true);
-    layoutInspector();
+    if (onInspectorOpened)
+    {
+        const juce::String chName = (ch < (int)channels.size()) ? channels[(size_t)ch].name : "Ch";
+        onInspectorOpened(ch, step, chName, stepParamsStore[ch][step]);
+    }
     repaint();
 }
 
 void ChannelRackComponent::closeInspector()
 {
     inspectorCh = inspectorStep = -1;
-    inspectorLabel   .setVisible(false);
-    inspVelSlider    .setVisible(false);
-    inspGateSlider   .setVisible(false);
-    inspProbSlider   .setVisible(false);
-    inspPitchSlider  .setVisible(false);
-    inspCutoffSlider .setVisible(false);
-    inspStartOffSlider.setVisible(false);
-    inspTimingSlider .setVisible(false);
-    inspResetBtn     .setVisible(false);
+    if (onInspectorClosed) onInspectorClosed();
     repaint();
 }
 
@@ -400,106 +387,12 @@ void ChannelRackComponent::refreshInspector()
 
 void ChannelRackComponent::layoutInspector()
 {
-    const int baseY = HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50;
-    const int iy    = baseY + 4;
-
-    inspectorLabel.setBounds(10, iy - 4, 240, 16);
-
-    // Four sliders arranged in two rows, labels provided by drawInspector
-    const int slW  = (getWidth() - 30) / 2;
-    const int slH  = 18;
-    const int col2 = 15 + slW + 8;
-
-    inspVelSlider    .setBounds(15,   iy + 22, slW, slH);
-    inspGateSlider   .setBounds(col2, iy + 22, slW, slH);
-    inspProbSlider   .setBounds(15,   iy + 48, slW, slH);
-    inspPitchSlider  .setBounds(col2, iy + 48, slW, slH);
-    inspCutoffSlider .setBounds(15,   iy + 74, slW, slH);
-    inspStartOffSlider.setBounds(col2, iy + 74, slW, slH);
-    inspTimingSlider .setBounds(15,   iy + 100, slW, slH);
-    inspResetBtn     .setBounds(getWidth() - 70, iy, 60, 20);
+    // Bottom inspector removed — StepInspectorStrip in MainComponent handles this now
 }
 
-void ChannelRackComponent::drawInspector(juce::Graphics& g)
+void ChannelRackComponent::drawInspector(juce::Graphics&)
 {
-    using LF = StudioLookAndFeel;
-    if (inspectorCh < 0) return;
-
-    const int baseY = HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50;
-    const int W     = getWidth();
-
-    // Background: chassis gradient
-    {
-        juce::ColourGradient gr(juce::Colour(LF::kChassis),  0.0f, (float)baseY,
-                                juce::Colour(LF::kChassis2), 0.0f, (float)(baseY + INSPECTOR_HEIGHT), false);
-        g.setGradientFill(gr);
-        g.fillRect(0, baseY, W, INSPECTOR_HEIGHT);
-    }
-
-    // Accent left strip
-    g.setColour(juce::Colour(LF::kAccent));
-    g.fillRect(0, baseY, 2, INSPECTOR_HEIGHT);
-
-    // Top separator
-    g.setColour(juce::Colour(LF::kPanelRim));
-    g.drawLine(0.0f, (float)baseY, (float)W, (float)baseY, 0.8f);
-
-    // Header row: "STEP INSPECTOR" + "● S{n}"
-    g.setFont(LF::monoFont(8.5f, juce::Font::bold));
-    g.setColour(juce::Colour(LF::kText));
-    g.drawText("STEP INSPECTOR", 10, baseY + 4, 140, 14, juce::Justification::centredLeft);
-
-    if (inspectorStep >= 0)
-    {
-        g.setFont(LF::monoFont(8.0f, juce::Font::bold));
-        g.setColour(juce::Colour(LF::kAccent));
-        g.drawText(juce::String::fromUTF8("\xe2\x97\x8f") + " S" + juce::String(inspectorStep + 1),
-                   W - 50, baseY + 4, 44, 14, juce::Justification::centredRight);
-    }
-
-    // Params: 2-column × 3-row grid
-    const juce::String paramKeys[] = { "VEL", "GATE", "PROB", "PITCH", "CUT", "START" };
-    const int iy   = baseY + 22;
-    const int slW  = (W - 30) / 2;
-    const int col2 = 15 + slW + 8;
-    const int rowH = 26;
-    for (int p = 0; p < 6; ++p)
-    {
-        const int px = (p % 2 == 0) ? 15  : col2;
-        const int py = iy + (p / 2) * rowH;
-
-        // Param cell bg
-        g.setColour(juce::Colour(0x0a000000));
-        g.fillRoundedRectangle((float)px - 2, (float)py - 1, (float)slW, (float)(rowH - 2), 2.0f);
-
-        // Key label (7px)
-        g.setFont(LF::monoFont(7.0f, juce::Font::bold));
-        g.setColour(juce::Colour(LF::kTextFaint));
-        g.drawText(paramKeys[p], px, py, 36, 10, juce::Justification::centredLeft);
-
-        // Value display — VT323 11px, accent colour
-        float val = 0.0f;
-        juce::String valStr;
-        if (inspectorCh >= 0 && inspectorStep >= 0)
-        {
-            const auto& sp = stepParamsStore[inspectorCh][inspectorStep];
-            switch (p) {
-                case 0: val = sp.velocity;          valStr = juce::String(val, 2); break;
-                case 1: val = sp.gate;              valStr = juce::String(val * 100.0f, 0) + "%"; break;
-                case 2: val = sp.probability;       valStr = juce::String(val * 100.0f, 0) + "%"; break;
-                case 3: val = (float)sp.pitchOffset; valStr = (val >= 0 ? "+" : "") + juce::String((int)val) + "st"; break;
-                case 4: val = sp.cutoffMod;         valStr = (val >= 0 ? "+" : "") + juce::String(val, 2); break;
-                case 5: val = sp.startOffsetFrac;   valStr = juce::String(val * 100.0f, 0) + "%"; break;
-            }
-        }
-        g.setFont(LF::displayFont(11.0f));
-        g.setColour(juce::Colour(LF::kAccent));
-        g.drawText(valStr, px + 36, py, slW - 40, 10, juce::Justification::centredRight);
-
-        // Small separator under each label row
-        g.setColour(juce::Colour(LF::kPanelRim));
-        g.drawLine((float)px, (float)(py + 12), (float)(px + slW - 4), (float)(py + 12), 0.5f);
-    }
+    // Bottom inspector removed — StepInspectorStrip in MainComponent handles this now
 }
 
 // ---------------------------------------------------------------------------
@@ -862,6 +755,16 @@ void ChannelRackComponent::drawStepGrid(juce::Graphics& g)
         g.drawLine((float)stepAreaX, (float)(y + ROW_HEIGHT - 1),
                    (float)getWidth(), (float)(y + ROW_HEIGHT - 1), 0.6f);
 
+        // 4-step group shading bands (alternating subtle tint behind cells)
+        for (int grp = 0; grp < (stepCount + 3) / 4; ++grp)
+        {
+            if (grp % 2 == 0) continue;
+            const int gx = stepAreaX + (int)(grp * 4 * stepW);
+            const int gw = (int)(4 * stepW);
+            g.setColour(juce::Colour(0x0b000000));
+            g.fillRect(gx, y, gw, ROW_HEIGHT);
+        }
+
         for (int s = 0; s < stepCount; ++s)
         {
             const int cellX      = stepAreaX + (int)(s * stepW) + 1;
@@ -870,45 +773,63 @@ void ChannelRackComponent::drawStepGrid(juce::Graphics& g)
             const bool isCurrent = (s == currentPlayStep);
             const bool isSelected = (ch == inspectorCh && s == inspectorStep);
             const bool hasCustom  = !stepParamsStore[ch][s].isDefault();
-            const bool isQuarter  = (s % 4 == 0);
             const bool isHalfBar  = (s % 8 == 0);
+
+            // 4-step group separator line at every group boundary
+            if (s % 4 == 0 && s > 0)
+            {
+                g.setColour(juce::Colour(LF::kPanelRim).withAlpha(0.55f));
+                g.drawLine((float)(cellX - 1), (float)(y + 3),
+                           (float)(cellX - 1), (float)(y + ROW_HEIGHT - 3), 0.8f);
+            }
 
             if (isStep)
             {
-                // ON step — channel colour gradient
-                juce::ColourGradient gr(col.brighter(0.10f), 0.0f, (float)cellY,
-                                        col.darker(0.15f),   0.0f, (float)(cellY + kCellH), false);
+                // ON step — vivid channel colour gradient (high saturation)
+                juce::ColourGradient gr(col.brighter(0.28f), 0.0f, (float)cellY,
+                                        col.darker(0.22f),   0.0f, (float)(cellY + kCellH), false);
                 g.setGradientFill(gr);
                 g.fillRoundedRectangle((float)cellX, (float)cellY, (float)cellW, (float)kCellH, 3.0f);
 
-                // Specular top edge
-                g.setColour(juce::Colours::white.withAlpha(0.30f));
+                // Strong specular top edge (backlit key feel)
+                g.setColour(juce::Colours::white.withAlpha(0.50f));
                 g.drawLine((float)(cellX + 2), (float)(cellY + 1),
-                           (float)(cellX + cellW - 2), (float)(cellY + 1), 1.0f);
+                           (float)(cellX + cellW - 2), (float)(cellY + 1), 1.5f);
 
-                // Velocity bar (bottom strip, white 55%)
+                // Inner bottom shadow
+                g.setColour(juce::Colours::black.withAlpha(0.22f));
+                g.drawLine((float)(cellX + 2), (float)(cellY + kCellH - 2),
+                           (float)(cellX + cellW - 2), (float)(cellY + kCellH - 2), 1.0f);
+
+                // Velocity bar (bottom strip, bright white)
                 const float vel = juce::jlimit(0.0f, 1.0f, stepParamsStore[ch][s].velocity);
                 const float velH = juce::jmax(2.0f, vel * (float)(kCellH - 5));
-                g.setColour(juce::Colours::white.withAlpha(0.55f));
+                g.setColour(juce::Colours::white.withAlpha(0.70f));
                 g.fillRoundedRectangle((float)(cellX + 1), (float)(cellY + kCellH - 1) - velH,
                                        (float)(cellW - 2), velH, 1.0f);
 
-                // Glow if on current step
+                // Glow halo if on current step
                 if (isCurrent)
                 {
-                    g.setColour(col.withAlpha(0.35f));
-                    g.fillRoundedRectangle((float)(cellX - 1), (float)(cellY - 1),
-                                           (float)(cellW + 4), (float)(kCellH + 2), 4.0f);
+                    g.setColour(col.withAlpha(0.42f));
+                    g.fillRoundedRectangle((float)(cellX - 2), (float)(cellY - 2),
+                                           (float)(cellW + 4), (float)(kCellH + 4), 5.0f);
                 }
             }
             else
             {
-                // OFF step — dark pad, half-bar stronger
-                const float alpha = isHalfBar ? 0.16f : (isQuarter ? 0.10f : 0.05f);
-                g.setColour(juce::Colour(0xff000000).withAlpha(alpha));
+                // OFF step — dark inset pad (half-bar boundary = darker)
+                const float alpha = isHalfBar ? 0.20f : 0.11f;
+                g.setColour(juce::Colour(LF::kDark).withAlpha(alpha));
                 g.fillRoundedRectangle((float)cellX, (float)cellY, (float)cellW, (float)kCellH, 3.0f);
-                const float borderA = isHalfBar ? 0.35f : 0.18f;
-                g.setColour(juce::Colour(0xff000000).withAlpha(borderA));
+
+                // Subtle inset top highlight
+                g.setColour(juce::Colours::white.withAlpha(0.06f));
+                g.drawLine((float)(cellX + 2), (float)(cellY + 1),
+                           (float)(cellX + cellW - 2), (float)(cellY + 1), 0.8f);
+
+                // Border
+                g.setColour(juce::Colour(0xff000000).withAlpha(isHalfBar ? 0.30f : 0.18f));
                 g.drawRoundedRectangle((float)cellX, (float)cellY, (float)cellW, (float)kCellH, 3.0f, 0.8f);
             }
 

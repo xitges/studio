@@ -40,14 +40,16 @@ public:
     void setPlayMode(PlayMode mode)
     {
         playMode = mode;
-        playModeBox.setSelectedId((int)playMode + 1, juce::dontSendNotification);
+        patModeBtn_ .setToggleState(mode == PlayMode::Pattern, juce::dontSendNotification);
+        songModeBtn_.setToggleState(mode == PlayMode::Song,    juce::dontSendNotification);
     }
 
     // Toggle Song ↔ Pattern mode and fire onPlayModeChanged
     void togglePlayMode()
     {
         playMode = (playMode == PlayMode::Pattern) ? PlayMode::Song : PlayMode::Pattern;
-        playModeBox.setSelectedId((int)playMode + 1, juce::dontSendNotification);
+        patModeBtn_ .setToggleState(playMode == PlayMode::Pattern, juce::dontSendNotification);
+        songModeBtn_.setToggleState(playMode == PlayMode::Song,    juce::dontSendNotification);
         if (onPlayModeChanged) onPlayModeChanged(playMode);
     }
 
@@ -134,7 +136,8 @@ private:
     juce::TextButton recordButton { "REC"  };
     juce::TextButton ffBtn_       { "FF"   };
     juce::TextButton loopBtn_     { "LOOP" };
-    juce::ComboBox   playModeBox;
+    juce::TextButton patModeBtn_  { "PAT"  };
+    juce::TextButton songModeBtn_ { "SONG" };
     juce::Slider     bpmSlider;
     juce::Label      bpmLabel;
     juce::Label      titleLabel;

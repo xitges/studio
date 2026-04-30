@@ -169,7 +169,7 @@ public:
     // M1.4 — expose needed height so Viewport can be sized correctly
     int getNeededHeight() const
     {
-        return HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50 + INSPECTOR_HEIGHT;
+        return HEADER_HEIGHT + (int)channels.size() * ROW_HEIGHT + 50;
     }
 
     // Step inspector — call from MainComponent to push model state to inspector
@@ -215,6 +215,10 @@ public:
 
     // Callback fired when user edits step params in the inspector
     std::function<void(int ch, int step, const StepParams&)> onStepParamsChanged;
+
+    // Callbacks for step selection (drives the top StepInspectorStrip in MainComponent)
+    std::function<void(int ch, int step, const juce::String& chName, const StepParams&)> onInspectorOpened;
+    std::function<void()> onInspectorClosed;
 
     // M2.1 — Pattern load / save (-1 = use activeVariation)
     void loadPattern(const Pattern& pat, int varIdx = -1);

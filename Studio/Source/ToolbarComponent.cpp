@@ -68,15 +68,36 @@ ToolbarComponent::ToolbarComponent()
     recTimeLabel.setFont(LF::displayFont(14.0f));
     recTimeLabel.setJustificationType(juce::Justification::centredLeft);
 
-    // ---- Row 1: Play mode combo
-    addAndMakeVisible(playModeBox);
-    playModeBox.addItem("Pattern", (int)PlayMode::Pattern + 1);
-    playModeBox.addItem("Song",    (int)PlayMode::Song    + 1);
-    playModeBox.setSelectedId((int)PlayMode::Pattern + 1, juce::dontSendNotification);
-    playModeBox.addListener(this);
-    playModeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(StudioLookAndFeel::kChassis2));
-    playModeBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(StudioLookAndFeel::kPanelRim));
-    playModeBox.setColour(juce::ComboBox::textColourId,       juce::Colour(StudioLookAndFeel::kText));
+    // ---- Row 1: Play mode selector (PAT | SONG segmented buttons)
+    addAndMakeVisible(patModeBtn_);
+    patModeBtn_.setClickingTogglesState(false);
+    patModeBtn_.setToggleState(true, juce::dontSendNotification);
+    patModeBtn_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(LF::kAccent));
+    patModeBtn_.onClick = [this]
+    {
+        if (playMode != PlayMode::Pattern)
+        {
+            playMode = PlayMode::Pattern;
+            patModeBtn_ .setToggleState(true,  juce::dontSendNotification);
+            songModeBtn_.setToggleState(false, juce::dontSendNotification);
+            if (onPlayModeChanged) onPlayModeChanged(playMode);
+        }
+    };
+
+    addAndMakeVisible(songModeBtn_);
+    songModeBtn_.setClickingTogglesState(false);
+    songModeBtn_.setToggleState(false, juce::dontSendNotification);
+    songModeBtn_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(LF::kAccent));
+    songModeBtn_.onClick = [this]
+    {
+        if (playMode != PlayMode::Song)
+        {
+            playMode = PlayMode::Song;
+            patModeBtn_ .setToggleState(false, juce::dontSendNotification);
+            songModeBtn_.setToggleState(true,  juce::dontSendNotification);
+            if (onPlayModeChanged) onPlayModeChanged(playMode);
+        }
+    };
 
     // ---- Row 1: BPM display + invisible slider
     addAndMakeVisible(bpmSlider);
@@ -272,7 +293,7 @@ void ToolbarComponent::timerCallback()
     {
         reelAngle_ = std::fmod(reelAngle_ + 2.5f, 360.0f);
         repaint(0, 0, 290, 92);                         // reels + brand area
-        repaint(278, 0, 130, 92);                        // position display
+        repaint(300, 0, 130, 92);                        // position display
         repaint(getWidth() - 256, 0, 256, 92);           // right section (meter + LEDs)
     }
     else
@@ -345,7 +366,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
             // "fieldlab." — Space Grotesk 20px Bold
             g.setFont(LF::brandFont(20.0f, juce::Font::bold));
             g.setColour(juce::Colour(LF::kText));
-            g.drawText("fieldlab", 14, 10, 84, 24, juce::Justification::centredLeft);
+            g.drawText("xitges", 14, 10, 84, 24, juce::Justification::centredLeft);
             g.setColour(juce::Colour(LF::kAccent));
             g.drawText(".", 96, 10, 14, 24, juce::Justification::centredLeft);
 
@@ -373,7 +394,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
             // Dashed separator after brand
             g.setColour(juce::Colour(0x28000000));
             for (float dy = 14.0f; dy < row1H - 14.0f; dy += 6.0f)
-                g.drawLine(140.0f, dy, 140.0f, dy + 3.0f, 1.0f);
+                g.drawLine(120.0f, dy, 120.0f, dy + 3.0f, 1.0f);
 
             // Tape reels — size=56px (r=28), matching reference 64px proportion
             const float reelCy = midY;
@@ -404,12 +425,12 @@ void ToolbarComponent::paint(juce::Graphics& g)
 
             // Dashed separator after reels
             for (float dy = 14.0f; dy < row1H - 14.0f; dy += 6.0f)
-                g.drawLine(270.0f, dy, 270.0f, dy + 3.0f, 1.0f);
+                g.drawLine(280.0f, dy, 280.0f, dy + 3.0f, 1.0f);
         }
 
         // ---- CENTER-LEFT: BAR.BEAT.TICK Segment Display ----------------------
         {
-            const int dispX = 280, dispY = 13, dispW = 118, dispH = 38;
+            const int dispX = 350, dispY = 25, dispW = 130, dispH = 38;
 
             g.setColour(juce::Colour(LF::kDisplayBg));
             g.fillRoundedRectangle((float)dispX, (float)dispY, (float)dispW, (float)dispH, 4.0f);
@@ -478,7 +499,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
 
         // ---- RIGHT: Status + MasterMeter + MASTER label ---------------------
         {
-            const int rightX = (int)W - 256;
+            const int rightX = (int)W - 350;
 
             // Dashed separator
             g.setColour(juce::Colour(0x28000000));
@@ -540,7 +561,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
                 const float padX = 8.0f, padY = 6.0f;
                 const float contW = meterW + padX * 2;                    // 34px
                 const float contH = meterH + padY * 2;                    // ≈58px (fits in 84px)
-                const float contX = (float)rightX + 130.0f;
+                const float contX = (float)rightX + 235.0f;
                 const float contY = ((float)row1H - contH) * 0.5f;
 
                 g.setColour(juce::Colour(LF::kDisplayBg));
@@ -628,37 +649,42 @@ void ToolbarComponent::resized()
         masterVolSlider.setBounds(getWidth() - kSize - 10, (row1H - kSize) / 2, kSize, kSize);
     }
 
-    // ---- Row 1: Transport + playMode + BPM (center section) -----------------
+    // ---- Row 1: Transport + mode selector + BPM (center section) ------------
     {
-        const int leftEnd  = 406;            // after painted position display
-        const int rightEnd = getWidth() - 260; // before right painted section + knob
+        const int leftEnd  = 406;
+        const int rightEnd = getWidth() - 260;
         const int avail    = juce::jmax(0, rightEnd - leftEnd);
 
-        // REW(28)+PLAY(38)+STOP(28)+REC(28)+FF(28)+LOOP(28) + 5×gap(5) = 203
-        // + gap(12) + playMode(88) + gap(12) + bpmArea(72) = 387 total
-        const int ctrlW = 203 + 12 + 88 + 12 + 72;
-        const int xOff  = leftEnd + juce::jmax(0, (avail - ctrlW) / 2);
+        // Square transport buttons: REW(28)+PLAY(38)+STOP(28)+REC(28)+FF(28)+LOOP(28) + 5×5gaps
+        // + gap(10) + PAT(38)+gap(3)+SONG(46) + gap(10) + bpmArea(72)
+        const int ctrlW = (28 + 38 + 28 + 28 + 28 + 28) + 5*5 + 10 + (38 + 3 + 46) + 10 + 72;
+        int curX = leftEnd + juce::jmax(0, (avail - ctrlW) / 2);
 
-        auto row1 = juce::Rectangle<int>(xOff, 0, ctrlW, row1H).reduced(0, 18);
-
-        rewBtn_     .setBounds(row1.removeFromLeft(28).reduced(1, 1));
-        row1.removeFromLeft(5);
-        playButton  .setBounds(row1.removeFromLeft(38).reduced(1, 1));
-        row1.removeFromLeft(5);
-        stopButton  .setBounds(row1.removeFromLeft(28).reduced(1, 1));
-        row1.removeFromLeft(5);
-        recordButton.setBounds(row1.removeFromLeft(28).reduced(1, 1));
-        row1.removeFromLeft(5);
-        ffBtn_      .setBounds(row1.removeFromLeft(28).reduced(1, 1));
-        row1.removeFromLeft(5);
-        loopBtn_    .setBounds(row1.removeFromLeft(28).reduced(1, 1));
-        row1.removeFromLeft(12);
-
-        playModeBox.setBounds(row1.removeFromLeft(88).reduced(2, 4));
-        row1.removeFromLeft(14);
-
+        // Helper: place a square button centered vertically in row1H
+        auto placeSquare = [&](juce::TextButton& btn, int w)
         {
-            auto bpmArea = row1.removeFromLeft(72).reduced(2, 4);
+            btn.setBounds(curX, (row1H - w) / 2, w, w);
+            curX += w + 5;
+        };
+
+        placeSquare(rewBtn_,      28);
+        placeSquare(playButton,   38);
+        placeSquare(stopButton,   28);
+        placeSquare(recordButton, 28);
+        placeSquare(ffBtn_,       28);
+        // loopBtn_ last — no extra gap after it
+        loopBtn_.setBounds(curX, (row1H - 28) / 2, 28, 28);
+        curX += 28 + 10;
+
+        // PAT | SONG segmented selector (28px tall, same visual weight as buttons)
+        patModeBtn_ .setBounds(curX,      (row1H - 28) / 2, 38, 28);
+        songModeBtn_.setBounds(curX + 41, (row1H - 28) / 2, 46, 28);
+        curX += 38 + 3 + 46 + 10;
+
+        // BPM display (painted bg + label overlay + invisible drag slider)
+        {
+            const int bpmH = 42;
+            juce::Rectangle<int> bpmArea(curX, (row1H - bpmH) / 2, 72, bpmH);
             bpmLabel .setBounds(bpmArea);
             bpmSlider.setBounds(bpmArea);
         }
@@ -742,15 +768,9 @@ void ToolbarComponent::sliderValueChanged(juce::Slider* slider)
     }
 }
 
-void ToolbarComponent::comboBoxChanged(juce::ComboBox* box)
+void ToolbarComponent::comboBoxChanged(juce::ComboBox* /*box*/)
 {
-    if (box == &playModeBox)
-    {
-        playMode = (playModeBox.getSelectedId() == (int)PlayMode::Song + 1)
-                   ? PlayMode::Song : PlayMode::Pattern;
-        if (onPlayModeChanged) onPlayModeChanged(playMode);
-    }
-    // patternBox uses onChange lambda — no handling needed here
+    // patternBox uses onChange lambda; no other combo boxes need listener handling
 }
 
 // ---------------------------------------------------------------------------

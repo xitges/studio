@@ -151,6 +151,8 @@ MainComponent::MainComponent()
     // ---- Toolbar
     addAndMakeVisible(toolbar);
     addAndMakeVisible(inspectorTabBar_);
+    addAndMakeVisible(stepInspector_);
+
     inspectorTabBar_.onTabChanged = [this](int t)
     {
         inspectorTab_ = t;
@@ -747,6 +749,31 @@ MainComponent::MainComponent()
     // ---- Per-step params: inspector edits -> pattern model -> engine snapshot
     channelRack.onStepParamsChanged = [this](int ch, int step, const StepParams& p)
     {
+        if (auto* pat = findPattern(activePatternId))
+        {
+            const int vi = channelRack.activeVariation;
+            pat->variations[vi].stepParams[ch][step] = p;
+            audioEngine.updatePatternSnapshot();
+            markDirty();
+        }
+        // Keep top inspector in sync when bottom sliders are edited
+        stepInspector_.updateFromExternal(p);
+    };
+
+    channelRack.onInspectorOpened = [this](int ch, int step,
+                                           const juce::String& chName, const StepParams& p)
+    {
+        stepInspector_.setStep(ch, step, chName, p);
+    };
+
+    channelRack.onInspectorClosed = [this]
+    {
+        stepInspector_.clearStep();
+    };
+
+    stepInspector_.onParamsChanged = [this](int ch, int step, const StepParams& p)
+    {
+        channelRack.setStepParams(ch, step, p);
         if (auto* pat = findPattern(activePatternId))
         {
             const int vi = channelRack.activeVariation;
@@ -3452,7 +3479,7 @@ void MainComponent::paint(juce::Graphics& g)
                (float)footer.getRight(), (float)footer.getY(), 1.0f);
     g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f).withStyle("Bold")));
     g.setColour(juce::Colour(LF::kTextFaint));
-    g.drawText(juce::String::fromUTF8("fieldlab instruments  \xc2\xb7  made in original spirit  \xc2\xb7  serial 02-1184-1"),
+    g.drawText(juce::String::fromUTF8("xitges instruments  \xc2\xb7  made in original spirit  \xc2\xb7  serial 02-1184-1"),
                footer.removeFromLeft(620), juce::Justification::centredLeft, true);
     g.drawText(juce::String::fromUTF8("USB-C  \xc2\xb7  MIDI 5P  \xc2\xb7  CV 1/8\" x4  \xc2\xb7  v2.4.1"),
                footer, juce::Justification::centredRight, true);
@@ -3464,7 +3491,7 @@ void MainComponent::resized()
     constexpr int kGap = 12;
     constexpr int kFooterH = 22;
     constexpr int kToolbarH = 132;   // 92px transport + 40px pattern strip
-    constexpr int kTabH = 36;
+    constexpr int kTabH = 78;
 
     auto area = getLocalBounds().reduced(kPad);
 
@@ -3523,8 +3550,25 @@ void MainComponent::resized()
 
     area.removeFromTop(kGap);
 
-    // Inspector tab bar — 36px strip between playlist and inspector content
-    inspectorTabBar_.setBounds(area.removeFromTop(kTabH));
+    // Inspector tab bar (left 330px) + step inspector strip (remainder)
+    {
+        auto tabStrip = area.removeFromTop(kTabH);
+        constexpr int kTabBarW = 330;
+        const int tabBarW = juce::jmin(kTabBarW, tabStrip.getWidth());
+        inspectorTabBar_.setBounds(tabStrip.getX(), tabStrip.getY(),
+                                   tabBarW, tabStrip.getHeight());
+
+        if (tabStrip.getWidth() > tabBarW + 20)
+        {
+            stepInspector_.setBounds(tabStrip.getX() + tabBarW + 2, tabStrip.getY(),
+                                     tabStrip.getWidth() - tabBarW - 2, tabStrip.getHeight());
+            stepInspector_.setVisible(true);
+        }
+        else
+        {
+            stepInspector_.setVisible(false);
+        }
+    }
     inspectorContentBounds_ = area;
 
     // Inspector content — INSTRUMENT(0) / SEQUENCER(1) / MIXER(2)
