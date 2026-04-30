@@ -329,7 +329,7 @@ public:
         setSize(460, 440);
     }
 
-    void setTrackName(const juce::String& name) { setName("FX  —  " + name); }
+    void setTrackName(const juce::String& name) { setName(juce::String::fromUTF8("FX  \xe2\x80\x94  ") + name); }
     void closeButtonPressed() override { setVisible(false); }
 
 private:

@@ -197,7 +197,7 @@ struct TrackpadController::Impl
                 {
                     // Finger just pressed
                     DBG("Trackpad touch: raw(" << x << ", " << y
-                        << ") → pad " << padIdx
+                        << juce::String::fromUTF8(") \xe2\x86\x92 pad ") << padIdx
                         << "  col=" << (padIdx % 4) << " row=" << (padIdx / 4));
                     fingerPadMap[t.fingerID] = padIdx;
                     events.push_back({ padIdx, velocity, true });

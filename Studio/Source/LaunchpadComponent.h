@@ -335,7 +335,7 @@ private:
         const bool hasHits = !recordedHits.empty();
         convertBtn.setEnabled(hasHits);
         statusLabel.setText(hasHits
-            ? "Recorded " + juce::String(recordedHits.size()) + " hits — ready to convert"
+            ? "Recorded " + juce::String(recordedHits.size()) + juce::String::fromUTF8(" hits \xe2\x80\x94 ready to convert")
             : "Recording stopped (no hits)",
             juce::dontSendNotification);
     }

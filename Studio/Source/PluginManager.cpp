@@ -133,7 +133,7 @@ bool PluginManager::autoRescanIfNeeded(std::function<void()> completeCb)
 
     if (currentFP != savedFP)
     {
-        DBG("Plugin directory changed — auto-rescanning...");
+        DBG(juce::String::fromUTF8("Plugin directory changed \xe2\x80\x94 auto-rescanning..."));
         knownPlugins.clear();
         scanPlugins(
             nullptr,

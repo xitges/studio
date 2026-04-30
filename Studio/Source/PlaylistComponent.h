@@ -744,9 +744,10 @@ inline void PlaylistComponent::drawTracks(juce::Graphics& g)
         const int trackY = headerHeight + t * (trackHeight + trackGap);
 
         // Per-track colour: from model or fallback palette
-        const juce::Colour tCol = (hasTracks && t < (int)project->playlistTracks.size())
-            ? project->playlistTracks[(size_t)t].colour
-            : juce::Colour(t % 2 == 0 ? 0xffd8412a : 0xffe89c2b);
+//        const juce::Colour tCol = (hasTracks && t < (int)project->playlistTracks.size())
+//            ? project->playlistTracks[(size_t)t].colour
+//            : juce::Colour(t % 2 == 0 ? 0xffd8412a : 0xffe89c2b);
+        const juce::Colour tCol = juce::Colour(0xffffffff);
 
         // ---- Track row bg (cream tones matching reference) ----
         {
@@ -786,7 +787,7 @@ inline void PlaylistComponent::drawTracks(juce::Graphics& g)
             g.drawRoundedRectangle((float)boxX + 0.5f, (float)boxY + 0.5f, 17.0f, 17.0f, 3.0f, 1.0f);
             // Number
             g.setFont(juce::Font(juce::FontOptions("JetBrains Mono", 9.0f, juce::Font::bold)));
-            g.setColour(juce::Colours::white.withAlpha(0.9f));
+            g.setColour(juce::Colours::black.withAlpha(0.9f));
             g.drawText(juce::String(t + 1), boxX, boxY, 18, 18, juce::Justification::centred);
         }
 
@@ -856,17 +857,15 @@ inline void PlaylistComponent::drawTracks(juce::Graphics& g)
 inline void PlaylistComponent::drawClips(juce::Graphics& g)
 {
     using LF = StudioLookAndFeel;
-    // ---- Track colour: from project model or fallback palette ----
-    auto trackCol = [&](int tidx) -> juce::Colour
-    {
-        if (project != nullptr && tidx < (int)project->playlistTracks.size())
-            return project->playlistTracks[(size_t)tidx].colour;
-        static const juce::uint32 pal[] = {
-            0xffd8412a, 0xffe89c2b, 0xff7ab87a, 0xff5fa8d8,
-            0xffb87ad6, 0xff8d7a5a, 0xff5dd8c8, 0xffb8b87a
+    // ---- Track colour: 8-color palette ----
+        auto trackCol = [&](int tidx) -> juce::Colour
+        {
+            static const juce::uint32 pal[] = {
+                0xffd8412a, 0xffe89c2b, 0xff7ab87a, 0xff5fa8d8,
+                0xffb87ad6, 0xff8d7a5a, 0xff5dd8c8, 0xffb8b87a
+            };
+            return juce::Colour(pal[(size_t)tidx % 8]);
         };
-        return juce::Colour(pal[(size_t)tidx % 8]);
-    };
 
     const int tc = getTrackCount();
     for (const auto& clip : clipList())

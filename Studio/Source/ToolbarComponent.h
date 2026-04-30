@@ -12,6 +12,7 @@
 #include <JuceHeader.h>
 #include "ProjectModel.h"
 
+
 class ToolbarComponent : public juce::Component,
                          public juce::Button::Listener,
                          public juce::Slider::Listener,
@@ -32,6 +33,8 @@ public:
     bool     isPlaying()   const { return playing; }
     PlayMode getPlayMode() const { return playMode; }
     double   getBPM()      const { return bpmSlider.getValue(); }
+    
+    
     void setBPM(double bpm)
     {
         bpmSlider.setValue(bpm, juce::dontSendNotification);

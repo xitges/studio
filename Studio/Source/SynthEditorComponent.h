@@ -26,7 +26,7 @@ namespace SynthEditorHelper
 
     inline juce::String buildHtml()
     {
-        return R"HTML(<!DOCTYPE html>
+        return juce::String::fromUTF8(R"HTML(<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <style>
 @font-face{font-family:'JBMono';font-weight:400;src:url('/font-regular.ttf') format('truetype');}
@@ -537,7 +537,7 @@ drawAdsr();
 drawWaveform();
 window.addEventListener('resize',()=>{drawAdsr();drawWaveform();});
 </script>
-</body></html>)HTML";
+</body></html>)HTML");
     }
 } // namespace SynthEditorHelper
 
@@ -936,7 +936,7 @@ public:
         setSize(470, 660);
     }
 
-    void setChannelName(const juce::String& name) { setName("Synth  \xe2\x80\x94  " + name); }
+    void setChannelName(const juce::String& name) { setName(juce::String::fromUTF8("Synth  \xe2\x80\x94  ") + name); }
     void closeButtonPressed() override { setVisible(false); }
 
 private:

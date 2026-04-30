@@ -239,7 +239,7 @@ private:
 
         g.setColour(juce::Colour(0xffb0b0c0));
         g.setFont(juce::Font(juce::FontOptions().withHeight(12.0f)).boldened());
-        g.drawText("Dynamic EQ  —  " + trackName_,
+        g.drawText(juce::String::fromUTF8("Dynamic EQ  \xe2\x80\x94  ") + trackName_,
                    80, 0, 300, kHeaderH, juce::Justification::centredLeft);
     }
 
@@ -670,7 +670,7 @@ class DynamicEQWindow : public juce::DocumentWindow
 {
 public:
     DynamicEQWindow(DynamicEQProcessor& proc, const juce::String& trackName)
-        : juce::DocumentWindow("Dynamic EQ  —  " + trackName,
+        : juce::DocumentWindow(juce::String::fromUTF8("Dynamic EQ  \xe2\x80\x94  ") + trackName,
                                juce::Colour(0xff18181c),
                                juce::DocumentWindow::closeButton)
     {
