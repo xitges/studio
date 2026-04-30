@@ -53,6 +53,14 @@
       <FILE id="PMgr02" name="PluginManager.cpp" compile="1" resource="0" file="Source/PluginManager.cpp"/>
       <FILE id="PBrw01" name="PluginBrowserComponent.h" compile="0" resource="0" file="Source/PluginBrowserComponent.h"/>
     </GROUP>
+    <GROUP id="{F0N7S001-A000-0000-0000-000000000001}" name="Resources">
+      <FILE id="FNT0001" name="JetBrainsMono-Regular.ttf" compile="0" resource="1"
+            file="Resources/fonts/JetBrainsMono-Regular.ttf"/>
+      <FILE id="FNT0002" name="JetBrainsMono-Bold.ttf" compile="0" resource="1"
+            file="Resources/fonts/JetBrainsMono-Bold.ttf"/>
+      <FILE id="FNT0003" name="VT323-Regular.ttf" compile="0" resource="1"
+            file="Resources/fonts/VT323-Regular.ttf"/>
+    </GROUP>
   </MAINGROUP>
   <MODULES>
     <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>

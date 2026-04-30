@@ -46,15 +46,22 @@ public:
     static juce::Colour rimLight()  { return juce::Colours::white.withAlpha(0.3f); }
     static juce::Font monoFont(float height, int styleFlags = juce::Font::plain)
     {
-        return juce::Font(juce::FontOptions("JetBrains Mono", height, styleFlags));
+        const bool bold = (styleFlags & juce::Font::bold) != 0;
+        static auto regularFace = juce::Typeface::createSystemTypefaceFor(
+            BinaryData::JetBrainsMonoRegular_ttf, (size_t)BinaryData::JetBrainsMonoRegular_ttfSize);
+        static auto boldFace = juce::Typeface::createSystemTypefaceFor(
+            BinaryData::JetBrainsMonoBold_ttf, (size_t)BinaryData::JetBrainsMonoBold_ttfSize);
+        return juce::Font(juce::FontOptions(bold ? boldFace : regularFace).withHeight(height));
     }
     static juce::Font brandFont(float height, int styleFlags = juce::Font::plain)
     {
-        return juce::Font(juce::FontOptions("Space Grotesk", height, styleFlags));
+        return monoFont(height, styleFlags);   // fallback: JetBrains Mono
     }
     static juce::Font displayFont(float height, int styleFlags = juce::Font::plain)
     {
-        return juce::Font(juce::FontOptions("VT323", height, styleFlags));
+        static auto face = juce::Typeface::createSystemTypefaceFor(
+            BinaryData::VT323Regular_ttf, (size_t)BinaryData::VT323Regular_ttfSize);
+        return juce::Font(juce::FontOptions(face).withHeight(height));
     }
 
     StudioLookAndFeel()

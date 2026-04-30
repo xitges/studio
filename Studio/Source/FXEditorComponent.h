@@ -1,9 +1,8 @@
 /*
   ==============================================================================
-
-    FXEditorComponent.h  — M14 FX chain editor
+    FXEditorComponent.h  — M14 FX chain editor (Phase-6 WebView)
     Floating window per mixer track: Compressor, Delay, Reverb
-
+    UI served as inline HTML via WebBrowserComponent + ResourceProvider.
   ==============================================================================
 */
 
@@ -13,190 +12,307 @@
 #include "ProjectModel.h"
 
 // ---------------------------------------------------------------------------
-// Content panel
+// Helpers
+// ---------------------------------------------------------------------------
+namespace FXEditorHelper
+{
+    inline std::vector<std::byte> toBytes(const juce::String& s)
+    {
+        const auto u = s.toStdString();
+        return { reinterpret_cast<const std::byte*>(u.data()),
+                 reinterpret_cast<const std::byte*>(u.data() + u.size()) };
+    }
+
+    inline juce::String buildHtml()
+    {
+        return R"HTML(<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+@font-face{font-family:'JBMono';font-weight:400;src:url('/font-regular.ttf') format('truetype');}
+@font-face{font-family:'JBMono';font-weight:700;src:url('/font-bold.ttf') format('truetype');}
+:root{
+  --chassis:#e6dec9;--chassis2:#ddd3ba;--panel:#f3ecda;--rim:#c7bb9a;
+  --accent:#d8412a;--ink:#1a1612;--ink-soft:#4a4338;--ink-faint:#8c8170;
+  --display-bg:#0d1410;--display-fg:#b9ff66;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{
+  font-family:'JBMono',Monaco,'Courier New',monospace;
+  background:linear-gradient(180deg,var(--chassis),var(--chassis2));
+  color:var(--ink);padding:12px;min-height:100vh;
+}
+.section{
+  background:var(--panel);border:1px solid var(--rim);
+  border-radius:6px;margin-bottom:10px;overflow:hidden;
+}
+.sec-hdr{
+  display:flex;align-items:center;gap:8px;padding:7px 12px;
+  background:linear-gradient(180deg,var(--chassis),var(--chassis2));
+  border-bottom:1px solid var(--rim);
+}
+.sec-label{
+  font-size:9px;font-weight:700;letter-spacing:.2em;
+  color:var(--ink-soft);text-transform:uppercase;flex:1;
+}
+.toggle{
+  font-family:inherit;font-size:8px;font-weight:700;letter-spacing:.15em;
+  padding:3px 10px;border-radius:3px;border:1px solid var(--rim);
+  cursor:pointer;background:var(--chassis2);color:var(--ink-faint);
+  transition:all .12s;
+}
+.toggle.on{
+  background:var(--accent);border-color:var(--accent);
+  color:#fff;box-shadow:0 0 6px rgba(216,65,42,.4);
+}
+.params{padding:10px 12px;display:flex;flex-direction:column;gap:8px;}
+.row{
+  display:grid;grid-template-columns:100px 1fr 52px;
+  align-items:center;gap:8px;
+}
+.plabel{
+  font-size:8px;font-weight:600;letter-spacing:.1em;
+  color:var(--ink-faint);text-transform:uppercase;
+}
+input[type=range]{
+  -webkit-appearance:none;appearance:none;
+  width:100%;height:4px;background:var(--chassis2);
+  border:1px solid var(--rim);border-radius:2px;outline:none;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+  background:var(--accent);cursor:pointer;
+  box-shadow:0 0 4px rgba(216,65,42,.5);border:1px solid rgba(0,0,0,.3);
+}
+.val{
+  font-size:9px;font-weight:600;color:var(--display-fg);
+  background:var(--display-bg);padding:2px 5px;border-radius:2px;
+  text-align:right;letter-spacing:.04em;white-space:nowrap;
+}
+</style></head>
+<body>
+
+<div class="section">
+  <div class="sec-hdr">
+    <span class="sec-label">COMPRESSOR</span>
+    <button class="toggle" id="cmp-en" onclick="tog('compEnabled','cmp-en')">OFF</button>
+  </div>
+  <div class="params">
+    <div class="row"><span class="plabel">THRESHOLD</span>
+      <input type="range" id="compThreshDB" min="-60" max="0" step="0.5" value="-12"
+             oninput="emit('compThreshDB',+this.value)">
+      <span class="val" id="v-compThreshDB">-12 dB</span></div>
+    <div class="row"><span class="plabel">RATIO</span>
+      <input type="range" id="compRatio" min="1" max="20" step="0.5" value="4"
+             oninput="emit('compRatio',+this.value)">
+      <span class="val" id="v-compRatio">4.0x</span></div>
+    <div class="row"><span class="plabel">ATTACK</span>
+      <input type="range" id="compAttackMs" min="1" max="500" step="1" value="10"
+             oninput="emit('compAttackMs',+this.value)">
+      <span class="val" id="v-compAttackMs">10 ms</span></div>
+    <div class="row"><span class="plabel">RELEASE</span>
+      <input type="range" id="compReleaseMs" min="5" max="2000" step="5" value="100"
+             oninput="emit('compReleaseMs',+this.value)">
+      <span class="val" id="v-compReleaseMs">100 ms</span></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-hdr">
+    <span class="sec-label">DELAY</span>
+    <button class="toggle" id="dly-en" onclick="tog('delayEnabled','dly-en')">OFF</button>
+  </div>
+  <div class="params">
+    <div class="row"><span class="plabel">TIME</span>
+      <input type="range" id="delayBeats" min="0.125" max="2" step="0.125" value="0.5"
+             oninput="emit('delayBeats',+this.value)">
+      <span class="val" id="v-delayBeats">1/2</span></div>
+    <div class="row"><span class="plabel">FEEDBACK</span>
+      <input type="range" id="delayFeedback" min="0" max="0.95" step="0.01" value="0.3"
+             oninput="emit('delayFeedback',+this.value)">
+      <span class="val" id="v-delayFeedback">0.30</span></div>
+    <div class="row"><span class="plabel">MIX</span>
+      <input type="range" id="delayMix" min="0" max="1" step="0.01" value="0.25"
+             oninput="emit('delayMix',+this.value)">
+      <span class="val" id="v-delayMix">0.25</span></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-hdr">
+    <span class="sec-label">REVERB</span>
+    <button class="toggle" id="rvb-en" onclick="tog('reverbEnabled','rvb-en')">OFF</button>
+  </div>
+  <div class="params">
+    <div class="row"><span class="plabel">ROOM SIZE</span>
+      <input type="range" id="reverbRoom" min="0" max="1" step="0.01" value="0.5"
+             oninput="emit('reverbRoom',+this.value)">
+      <span class="val" id="v-reverbRoom">0.50</span></div>
+    <div class="row"><span class="plabel">DAMPING</span>
+      <input type="range" id="reverbDamp" min="0" max="1" step="0.01" value="0.5"
+             oninput="emit('reverbDamp',+this.value)">
+      <span class="val" id="v-reverbDamp">0.50</span></div>
+    <div class="row"><span class="plabel">WET MIX</span>
+      <input type="range" id="reverbWet" min="0" max="1" step="0.01" value="0.25"
+             oninput="emit('reverbWet',+this.value)">
+      <span class="val" id="v-reverbWet">0.25</span></div>
+    <div class="row"><span class="plabel">WIDTH</span>
+      <input type="range" id="reverbWidth" min="0" max="1" step="0.01" value="1"
+             oninput="emit('reverbWidth',+this.value)">
+      <span class="val" id="v-reverbWidth">1.00</span></div>
+  </div>
+</div>
+
+<script>
+const toggleState={compEnabled:false,delayEnabled:false,reverbEnabled:false};
+
+function tog(key,btnId){
+  toggleState[key]=!toggleState[key];
+  const btn=document.getElementById(btnId);
+  if(toggleState[key]){btn.classList.add('on');btn.textContent='ON';}
+  else{btn.classList.remove('on');btn.textContent='OFF';}
+  window.__JUCE__.backend.emitEvent("fxChange",{key:key,value:toggleState[key]?1:0});
+}
+
+const fmt={
+  compThreshDB: v=>v.toFixed(1)+' dB',
+  compRatio:    v=>v.toFixed(1)+'x',
+  compAttackMs: v=>v.toFixed(0)+' ms',
+  compReleaseMs:v=>v.toFixed(0)+' ms',
+  delayBeats:   v=>{const m={0.125:'1/8',0.25:'1/4',0.5:'1/2',1:'1',2:'2'};return m[v]||v.toFixed(3)+' b';},
+  delayFeedback:v=>v.toFixed(2),
+  delayMix:     v=>v.toFixed(2),
+  reverbRoom:   v=>v.toFixed(2),
+  reverbDamp:   v=>v.toFixed(2),
+  reverbWet:    v=>v.toFixed(2),
+  reverbWidth:  v=>v.toFixed(2),
+};
+
+function emit(key,value){
+  const el=document.getElementById('v-'+key);
+  if(el&&fmt[key])el.textContent=fmt[key](value);
+  window.__JUCE__.backend.emitEvent("fxChange",{key:key,value:value});
+}
+
+function setToggleBtn(key,btnId,val){
+  toggleState[key]=Boolean(val);
+  const btn=document.getElementById(btnId);
+  if(!btn)return;
+  if(toggleState[key]){btn.classList.add('on');btn.textContent='ON';}
+  else{btn.classList.remove('on');btn.textContent='OFF';}
+}
+
+window.__JUCE__.backend.addEventListener("fxLoad",function(p){
+  const sliders=['compThreshDB','compRatio','compAttackMs','compReleaseMs',
+                 'delayBeats','delayFeedback','delayMix',
+                 'reverbRoom','reverbDamp','reverbWet','reverbWidth'];
+  for(const k of sliders){
+    const el=document.getElementById(k);
+    if(el&&p[k]!==undefined){el.value=p[k];const ve=document.getElementById('v-'+k);if(ve&&fmt[k])ve.textContent=fmt[k](p[k]);}
+  }
+  setToggleBtn('compEnabled','cmp-en',p.compEnabled);
+  setToggleBtn('delayEnabled','dly-en',p.delayEnabled);
+  setToggleBtn('reverbEnabled','rvb-en',p.reverbEnabled);
+});
+</script>
+</body></html>)HTML";
+    }
+} // namespace FXEditorHelper
+
+// ---------------------------------------------------------------------------
+// Content panel — WebBrowserComponent-based, same public API as before
 // ---------------------------------------------------------------------------
 class FXEditorPanel : public juce::Component
 {
 public:
     std::function<void()> onParamsChanged;
 
-    FXEditorPanel()
+    FXEditorPanel() : browser_(buildOptions(this))
     {
-        auto makeLabel = [this](juce::Label& lbl, const juce::String& text)
-        {
-            lbl.setText(text, juce::dontSendNotification);
-            lbl.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-            lbl.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
-            addAndMakeVisible(lbl);
-        };
-
-        auto makeSlider = [this](juce::Slider& s, double lo, double hi, double step, double val)
-        {
-            s.setRange(lo, hi, step);
-            s.setValue(val, juce::dontSendNotification);
-            s.setSliderStyle(juce::Slider::LinearHorizontal);
-            s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 52, 18);
-            s.setColour(juce::Slider::textBoxTextColourId,       juce::Colours::white);
-            s.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xff16213e));
-            s.setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xff0f3460));
-            s.setColour(juce::Slider::thumbColourId,             juce::Colour(0xff9b59b6));
-            s.setColour(juce::Slider::trackColourId,             juce::Colour(0xff9b59b6));
-            addAndMakeVisible(s);
-        };
-
-        auto makeToggle = [this](juce::TextButton& btn, const juce::String& text)
-        {
-            btn.setButtonText(text);
-            btn.setClickingTogglesState(true);
-            btn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff2c2c54));
-            btn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff8e44ad));
-            btn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
-            btn.onClick = [this] { notify(); };
-            addAndMakeVisible(btn);
-        };
-
-        // ---- Compressor
-        makeToggle(compEnableBtn, "Enable");
-        makeSlider(compThreshSl,  -60.0, 0.0,   1.0,  -12.0); compThreshSl .onValueChange = [this] { notify(); };
-        makeSlider(compRatioSl,    1.0,  20.0,  0.5,   4.0);  compRatioSl  .onValueChange = [this] { notify(); };
-        makeSlider(compAttackSl,   1.0,  500.0, 1.0,   10.0); compAttackSl .onValueChange = [this] { notify(); };
-        makeSlider(compReleaseSl,  5.0,  2000.0,5.0,   100.0);compReleaseSl.onValueChange = [this] { notify(); };
-        makeLabel(compThreshLbl,  "Threshold (dB)");
-        makeLabel(compRatioLbl,   "Ratio");
-        makeLabel(compAttackLbl,  "Attack (ms)");
-        makeLabel(compReleaseLbl, "Release (ms)");
-
-        // ---- Delay
-        makeToggle(delayEnableBtn, "Enable");
-        makeSlider(delayBeatsSl,   0.125, 2.0, 0.125, 0.5);  delayBeatsSl   .onValueChange = [this] { notify(); };
-        makeSlider(delayFeedbackSl,0.0,   0.95, 0.01, 0.3);  delayFeedbackSl.onValueChange = [this] { notify(); };
-        makeSlider(delayMixSl,     0.0,   1.0,  0.01, 0.25); delayMixSl     .onValueChange = [this] { notify(); };
-        makeLabel(delayBeatsLbl,   "Time (beats)");
-        makeLabel(delayFeedbackLbl,"Feedback");
-        makeLabel(delayMixLbl,     "Mix");
-
-        // ---- Reverb
-        makeToggle(reverbEnableBtn, "Enable");
-        makeSlider(reverbRoomSl,  0.0, 1.0, 0.01, 0.5);  reverbRoomSl .onValueChange = [this] { notify(); };
-        makeSlider(reverbDampSl,  0.0, 1.0, 0.01, 0.5);  reverbDampSl .onValueChange = [this] { notify(); };
-        makeSlider(reverbWetSl,   0.0, 1.0, 0.01, 0.25); reverbWetSl  .onValueChange = [this] { notify(); };
-        makeSlider(reverbWidthSl, 0.0, 1.0, 0.01, 1.0);  reverbWidthSl.onValueChange = [this] { notify(); };
-        makeLabel(reverbRoomLbl,  "Room Size");
-        makeLabel(reverbDampLbl,  "Damping");
-        makeLabel(reverbWetLbl,   "Wet Mix");
-        makeLabel(reverbWidthLbl, "Width");
+        addAndMakeVisible(browser_);
+        browser_.goToURL(juce::WebBrowserComponent::getResourceProviderRoot());
     }
 
     void loadParams(const FXParams& p)
     {
-        compEnableBtn.setToggleState(p.compEnabled, juce::dontSendNotification);
-        compThreshSl .setValue(p.compThreshDB,  juce::dontSendNotification);
-        compRatioSl  .setValue(p.compRatio,     juce::dontSendNotification);
-        compAttackSl .setValue(p.compAttackMs,  juce::dontSendNotification);
-        compReleaseSl.setValue(p.compReleaseMs, juce::dontSendNotification);
-
-        delayEnableBtn .setToggleState(p.delayEnabled,  juce::dontSendNotification);
-        delayBeatsSl   .setValue(p.delayBeats,    juce::dontSendNotification);
-        delayFeedbackSl.setValue(p.delayFeedback, juce::dontSendNotification);
-        delayMixSl     .setValue(p.delayMix,      juce::dontSendNotification);
-
-        reverbEnableBtn.setToggleState(p.reverbEnabled, juce::dontSendNotification);
-        reverbRoomSl .setValue(p.reverbRoom,  juce::dontSendNotification);
-        reverbDampSl .setValue(p.reverbDamp,  juce::dontSendNotification);
-        reverbWetSl  .setValue(p.reverbWet,   juce::dontSendNotification);
-        reverbWidthSl.setValue(p.reverbWidth, juce::dontSendNotification);
+        cachedParams_ = p;
+        pushToJs();
     }
 
-    void applyToParams(FXParams& p) const
-    {
-        p.compEnabled   = compEnableBtn.getToggleState();
-        p.compThreshDB  = (float)compThreshSl .getValue();
-        p.compRatio     = (float)compRatioSl  .getValue();
-        p.compAttackMs  = (float)compAttackSl .getValue();
-        p.compReleaseMs = (float)compReleaseSl.getValue();
+    void applyToParams(FXParams& p) const { p = cachedParams_; }
 
-        p.delayEnabled  = delayEnableBtn.getToggleState();
-        p.delayBeats    = (float)delayBeatsSl   .getValue();
-        p.delayFeedback = (float)delayFeedbackSl.getValue();
-        p.delayMix      = (float)delayMixSl     .getValue();
-
-        p.reverbEnabled = reverbEnableBtn.getToggleState();
-        p.reverbRoom    = (float)reverbRoomSl .getValue();
-        p.reverbDamp    = (float)reverbDampSl .getValue();
-        p.reverbWet     = (float)reverbWetSl  .getValue();
-        p.reverbWidth   = (float)reverbWidthSl.getValue();
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(juce::Colour(0xff1a1a2e));
-
-        auto sectionHeader = [&](const juce::String& text, int y)
-        {
-            g.setColour(juce::Colour(0xff9b59b6));
-            g.setFont(juce::Font(juce::FontOptions().withHeight(11.0f)));
-            g.drawText(text, 10, y, 420, 14, juce::Justification::centredLeft);
-            g.setColour(juce::Colour(0xff9b59b6).withAlpha(0.4f));
-            g.drawLine(10.0f, (float)(y + 14), 430.0f, (float)(y + 14), 1.0f);
-        };
-
-        sectionHeader("COMPRESSOR", 8);
-        sectionHeader("DELAY",      160);
-        sectionHeader("REVERB",     282);
-    }
-
-    void resized() override
-    {
-        const int lblW = 100, slW = 250, h = 22, pad = 4, btnW = 70;
-
-        // Compressor
-        int y = 26;
-        compEnableBtn.setBounds(10, y, btnW, h);
-        y += h + pad;
-        compThreshLbl .setBounds(10, y, lblW, h); compThreshSl .setBounds(110, y, slW, h); y += h + pad;
-        compRatioLbl  .setBounds(10, y, lblW, h); compRatioSl  .setBounds(110, y, slW, h); y += h + pad;
-        compAttackLbl .setBounds(10, y, lblW, h); compAttackSl .setBounds(110, y, slW, h); y += h + pad;
-        compReleaseLbl.setBounds(10, y, lblW, h); compReleaseSl.setBounds(110, y, slW, h);
-
-        // Delay
-        y = 178;
-        delayEnableBtn .setBounds(10, y, btnW, h);
-        y += h + pad;
-        delayBeatsLbl   .setBounds(10, y, lblW, h); delayBeatsSl   .setBounds(110, y, slW, h); y += h + pad;
-        delayFeedbackLbl.setBounds(10, y, lblW, h); delayFeedbackSl.setBounds(110, y, slW, h); y += h + pad;
-        delayMixLbl     .setBounds(10, y, lblW, h); delayMixSl     .setBounds(110, y, slW, h);
-
-        // Reverb
-        y = 300;
-        reverbEnableBtn.setBounds(10, y, btnW, h);
-        y += h + pad;
-        reverbRoomLbl .setBounds(10, y, lblW, h); reverbRoomSl .setBounds(110, y, slW, h); y += h + pad;
-        reverbDampLbl .setBounds(10, y, lblW, h); reverbDampSl .setBounds(110, y, slW, h); y += h + pad;
-        reverbWetLbl  .setBounds(10, y, lblW, h); reverbWetSl  .setBounds(110, y, slW, h); y += h + pad;
-        reverbWidthLbl.setBounds(10, y, lblW, h); reverbWidthSl.setBounds(110, y, slW, h);
-    }
+    void resized() override { browser_.setBounds(getLocalBounds()); }
 
 private:
-    void notify() { if (onParamsChanged) onParamsChanged(); }
+    FXParams                    cachedParams_;
+    juce::WebBrowserComponent   browser_;
 
-    // Compressor
-    juce::TextButton compEnableBtn;
-    juce::Slider compThreshSl, compRatioSl, compAttackSl, compReleaseSl;
-    juce::Label  compThreshLbl, compRatioLbl, compAttackLbl, compReleaseLbl;
+    void pushToJs()
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty("compEnabled",   cachedParams_.compEnabled   ? 1 : 0);
+        obj->setProperty("compThreshDB",  (double)cachedParams_.compThreshDB);
+        obj->setProperty("compRatio",     (double)cachedParams_.compRatio);
+        obj->setProperty("compAttackMs",  (double)cachedParams_.compAttackMs);
+        obj->setProperty("compReleaseMs", (double)cachedParams_.compReleaseMs);
+        obj->setProperty("delayEnabled",  cachedParams_.delayEnabled  ? 1 : 0);
+        obj->setProperty("delayBeats",    (double)cachedParams_.delayBeats);
+        obj->setProperty("delayFeedback", (double)cachedParams_.delayFeedback);
+        obj->setProperty("delayMix",      (double)cachedParams_.delayMix);
+        obj->setProperty("reverbEnabled", cachedParams_.reverbEnabled ? 1 : 0);
+        obj->setProperty("reverbRoom",    (double)cachedParams_.reverbRoom);
+        obj->setProperty("reverbDamp",    (double)cachedParams_.reverbDamp);
+        obj->setProperty("reverbWet",     (double)cachedParams_.reverbWet);
+        obj->setProperty("reverbWidth",   (double)cachedParams_.reverbWidth);
+        browser_.emitEventIfBrowserIsVisible("fxLoad", juce::var(obj));
+    }
 
-    // Delay
-    juce::TextButton delayEnableBtn;
-    juce::Slider delayBeatsSl, delayFeedbackSl, delayMixSl;
-    juce::Label  delayBeatsLbl, delayFeedbackLbl, delayMixLbl;
+    static juce::WebBrowserComponent::Options buildOptions(FXEditorPanel* self)
+    {
+        using WBC = juce::WebBrowserComponent;
+        return WBC::Options{}
+            .withNativeIntegrationEnabled()
+            .withKeepPageLoadedWhenBrowserIsHidden()
+            .withResourceProvider([](const juce::String& url) -> std::optional<WBC::Resource> {
+                if (url == "/" || url == "/index.html")
+                    return WBC::Resource{ FXEditorHelper::toBytes(FXEditorHelper::buildHtml()),
+                                         "text/html" };
+                if (url == "/font-regular.ttf")
+                    return WBC::Resource{ { reinterpret_cast<const std::byte*>(BinaryData::JetBrainsMonoRegular_ttf),
+                                           reinterpret_cast<const std::byte*>(BinaryData::JetBrainsMonoRegular_ttf + BinaryData::JetBrainsMonoRegular_ttfSize) },
+                                         "font/truetype" };
+                if (url == "/font-bold.ttf")
+                    return WBC::Resource{ { reinterpret_cast<const std::byte*>(BinaryData::JetBrainsMonoBold_ttf),
+                                           reinterpret_cast<const std::byte*>(BinaryData::JetBrainsMonoBold_ttf + BinaryData::JetBrainsMonoBold_ttfSize) },
+                                         "font/truetype" };
+                return std::nullopt;
+            })
+            .withEventListener("fxChange", [self](const juce::var& d) {
+                const auto key = d["key"].toString();
+                const auto val = (float)(double)d["value"];
+                auto& p = self->cachedParams_;
+                if      (key == "compEnabled")   p.compEnabled   = val > 0.5f;
+                else if (key == "compThreshDB")  p.compThreshDB  = val;
+                else if (key == "compRatio")     p.compRatio     = val;
+                else if (key == "compAttackMs")  p.compAttackMs  = val;
+                else if (key == "compReleaseMs") p.compReleaseMs = val;
+                else if (key == "delayEnabled")  p.delayEnabled  = val > 0.5f;
+                else if (key == "delayBeats")    p.delayBeats    = val;
+                else if (key == "delayFeedback") p.delayFeedback = val;
+                else if (key == "delayMix")      p.delayMix      = val;
+                else if (key == "reverbEnabled") p.reverbEnabled = val > 0.5f;
+                else if (key == "reverbRoom")    p.reverbRoom    = val;
+                else if (key == "reverbDamp")    p.reverbDamp    = val;
+                else if (key == "reverbWet")     p.reverbWet     = val;
+                else if (key == "reverbWidth")   p.reverbWidth   = val;
+                if (self->onParamsChanged) self->onParamsChanged();
+            });
+    }
 
-    // Reverb
-    juce::TextButton reverbEnableBtn;
-    juce::Slider reverbRoomSl, reverbDampSl, reverbWetSl, reverbWidthSl;
-    juce::Label  reverbRoomLbl, reverbDampLbl, reverbWetLbl, reverbWidthLbl;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FXEditorPanel)
 };
 
 // ---------------------------------------------------------------------------
-// Floating DocumentWindow
+// Floating window — unchanged API
 // ---------------------------------------------------------------------------
 class FXEditorWindow : public juce::DocumentWindow
 {
@@ -205,19 +321,15 @@ public:
 
     FXEditorWindow()
         : juce::DocumentWindow("FX Editor",
-                               juce::Colour(0xff16213e),
+                               juce::Colour(0xff2a2218),
                                juce::DocumentWindow::closeButton)
     {
         setContentNonOwned(&panel, false);
-        setResizable(false, false);
-        setSize(440, 420);
+        setResizable(true, false);
+        setSize(460, 440);
     }
 
-    void setTrackName(const juce::String& name)
-    {
-        setName("FX - " + name);
-    }
-
+    void setTrackName(const juce::String& name) { setName("FX  —  " + name); }
     void closeButtonPressed() override { setVisible(false); }
 
 private:
