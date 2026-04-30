@@ -50,14 +50,17 @@ public:
         const int W = getWidth();
         const int H = getHeight();
 
-        // Chassis gradient background
-        juce::ColourGradient bg(juce::Colour(LF::kChassis2), 0.0f, 0.0f,
-                                juce::Colour(LF::kChassis),  0.0f, (float)H, false);
+        juce::Colour topWhite (0xfffafafa);
+            juce::Colour bottomGrey (0xfff0f0f0);
+
+            // 2. 그라데이션 설정 (0.0f에서 전체 높이 H까지)
+        juce::ColourGradient bg (topWhite,   0.0f, 0.0f,
+                                 bottomGrey, 0.0f, (float)H, false);
         g.setGradientFill(bg);
         g.fillAll();
 
         // Top + bottom hairlines
-        g.setColour(juce::Colour(LF::kPanelRim));
+        g.setColour(juce::Colour(0xffdcdcdc));
         g.drawLine(0.0f, 0.5f, (float)W, 0.5f, 1.0f);
         g.drawLine(0.0f, (float)(H - 1), (float)W, (float)(H - 1), 1.0f);
 
@@ -77,24 +80,37 @@ public:
 
             if (on)
             {
-                g.setColour(juce::Colour(LF::kPanel));
+                // 3. 선택된 탭 배경: 순백색으로 강조
+                g.setColour(juce::Colours::white);
                 g.fillRect(tab.reduced(1, 0));
-                g.setColour(juce::Colour(LF::kPanelRim));
-                g.drawLine((float)(tab.getX() + 1), 0.0f, (float)(tab.getX() + 1), (float)H, 0.8f);
-                g.drawLine((float)(tab.getRight() - 1), 0.0f, (float)(tab.getRight() - 1), (float)H, 0.8f);
+
+                // 4. 선택된 탭 좌우 경계선: 부드러운 회색
+                g.setColour(juce::Colour(0xffdcdcdc));
+                g.drawLine((float)(tab.getX() + 1), 0.0f, (float)(tab.getX() + 1), (float)H, 1.0f);
+                g.drawLine((float)(tab.getRight() - 1), 0.0f, (float)(tab.getRight() - 1), (float)H, 1.0f);
+
+                // 5. 상단 액센트 바 (포인트 색상)
                 g.setColour(juce::Colour(LF::kAccent));
-                g.fillRect(tab.getX() + 2, 0, tab.getWidth() - 4, 2);
+                g.fillRect(tab.getX() + 2, 0, tab.getWidth() - 4, 3); // 2px -> 3px로 살짝 두껍게
+            }
+            else
+            {
+                // 선택되지 않은 탭들 사이의 구분선 (옵션)
+                if (i < 2) {
+                    g.setColour(juce::Colour(0xffe8e8e8));
+                    g.drawLine((float)tab.getRight(), 10.0f, (float)tab.getRight(), (float)H - 10.0f, 1.0f);
+                }
             }
 
             // Main label — bigger font, centred in tall tab
             g.setFont(LF::monoFont(11.0f, juce::Font::bold));
-            g.setColour(on ? juce::Colour(LF::kText) : juce::Colour(LF::kTextDim));
+            g.setColour(on ? juce::Colour(0xff333333) : juce::Colour(0xff888888));
             g.drawText(kLabels[i], tab.getX(), H / 2 - 18, tab.getWidth(), 18,
                        juce::Justification::centred);
 
             // Sub-label
             g.setFont(LF::monoFont(8.5f, juce::Font::bold));
-            g.setColour(on ? juce::Colour(LF::kAccent) : juce::Colour(LF::kTextFaint));
+            g.setColour(on ? juce::Colour(LF::kAccent) : juce::Colour(0xffaaaaaa));
             g.drawText(kSubs[i], tab.getX() + 2, H / 2 + 2, tab.getWidth() - 4, 14,
                        juce::Justification::centred, true);
         }
@@ -235,19 +251,22 @@ public:
         using LF = StudioLookAndFeel;
         const int W = getWidth(), H = getHeight();
 
-        // Same chassis gradient as the tab bar beside it
-        juce::ColourGradient bg(juce::Colour(LF::kChassis2), 0.0f, 0.0f,
-                                juce::Colour(LF::kChassis),  0.0f, (float)H, false);
+        juce::Colour topWhite (0xfffafafa);
+        juce::Colour bottomGrey (0xfff0f0f0);
+
+        // 2. 그라데이션 설정 (상단 0.0f에서 하단 H까지)
+        juce::ColourGradient bg (topWhite,   0.0f, 0.0f,
+                                 bottomGrey, 0.0f, (float)H, false);
         g.setGradientFill(bg);
         g.fillAll();
 
         // Top + bottom hairlines (matching InspectorTabBar)
-        g.setColour(juce::Colour(LF::kPanelRim));
+        g.setColour(juce::Colour(0xffdcdcdc));
         g.drawLine(0.0f, 0.5f, (float)W, 0.5f, 1.0f);
         g.drawLine(0.0f, (float)(H - 1), (float)W, (float)(H - 1), 1.0f);
 
         // Left separator
-        g.setColour(juce::Colour(LF::kPanelRim));
+        g.setColour(juce::Colour(0xffdcdcdc));
         g.drawLine(1.0f, 4.0f, 1.0f, (float)(H - 4), 0.8f);
 
         // Header

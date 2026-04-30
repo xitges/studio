@@ -25,33 +25,33 @@ ToolbarComponent::ToolbarComponent()
     };
 
     addAndMakeVisible(rewBtn_);
-    setupTransportBtn(rewBtn_, LF::kTextDim);
-    rewBtn_.onClick = [this] { if (onRewind) onRewind(); };
+        setupTransportBtn(rewBtn_, LF::kTextDim);
+        rewBtn_.onClick = [this] { if (onRewind) onRewind(); };
 
-    addAndMakeVisible(playButton);
-    setupTransportBtn(playButton, LF::kLedGreen);
-    playButton.addListener(this);
+        addAndMakeVisible(playButton);
+        setupTransportBtn(playButton, LF::kTextDim); // 색상 통일 (원래: kLedGreen)
+        playButton.addListener(this);
 
-    addAndMakeVisible(stopButton);
-    setupTransportBtn(stopButton, LF::kTextDim);
-    stopButton.addListener(this);
+        addAndMakeVisible(stopButton);
+        setupTransportBtn(stopButton, LF::kTextDim);
+        stopButton.addListener(this);
 
-    addAndMakeVisible(recordButton);
-    setupTransportBtn(recordButton, LF::kLedRed);
-    recordButton.onClick = [this]
-    {
-        if (recordingActive_) { if (onRecordStop)  onRecordStop();  }
-        else                  { if (onRecordStart) onRecordStart(); }
-    };
+        addAndMakeVisible(recordButton);
+        setupTransportBtn(recordButton, LF::kTextDim); // 색상 통일 (원래: kLedRed)
+        recordButton.onClick = [this]
+        {
+            if (recordingActive_) { if (onRecordStop)  onRecordStop();  }
+            else                  { if (onRecordStart) onRecordStart(); }
+        };
 
-    addAndMakeVisible(ffBtn_);
-    setupTransportBtn(ffBtn_, LF::kTextDim);
-    ffBtn_.onClick = [this] { if (onFastForward) onFastForward(); };
+        addAndMakeVisible(ffBtn_);
+        setupTransportBtn(ffBtn_, LF::kTextDim);
+        ffBtn_.onClick = [this] { if (onFastForward) onFastForward(); };
 
-    addAndMakeVisible(loopBtn_);
-    setupTransportBtn(loopBtn_, LF::kLedAmber);
-    loopBtn_.setClickingTogglesState(true);
-    loopBtn_.onClick = [this] { if (onToggleLoop) onToggleLoop(); };
+        addAndMakeVisible(loopBtn_);
+        setupTransportBtn(loopBtn_, LF::kTextDim); // 색상 통일 (원래: kLedAmber)
+        loopBtn_.setClickingTogglesState(true);
+        loopBtn_.onClick = [this] { if (onToggleLoop) onToggleLoop(); };
 
     // ---- Row 1: MASTER volume knob
     addAndMakeVisible(masterVolSlider);
@@ -68,36 +68,23 @@ ToolbarComponent::ToolbarComponent()
     recTimeLabel.setFont(LF::displayFont(14.0f));
     recTimeLabel.setJustificationType(juce::Justification::centredLeft);
 
-    // ---- Row 1: Play mode selector (PAT | SONG segmented buttons)
-    addAndMakeVisible(patModeBtn_);
-    patModeBtn_.setClickingTogglesState(false);
-    patModeBtn_.setToggleState(true, juce::dontSendNotification);
-    patModeBtn_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(LF::kAccent));
-    patModeBtn_.onClick = [this]
-    {
-        if (playMode != PlayMode::Pattern)
+    // ---- Row 1: Play mode selector (PAT | SONG segmented control)
+        addAndMakeVisible(modeSelector);
+        
+        // 초기 선택 상태 동기화
+        modeSelector.selectedIndex = (playMode == PlayMode::Pattern) ? 0 : 1;
+        
+        // 클릭 시 동작 설정
+        modeSelector.onSelectionChanged = [this](int index)
         {
-            playMode = PlayMode::Pattern;
-            patModeBtn_ .setToggleState(true,  juce::dontSendNotification);
-            songModeBtn_.setToggleState(false, juce::dontSendNotification);
-            if (onPlayModeChanged) onPlayModeChanged(playMode);
-        }
-    };
-
-    addAndMakeVisible(songModeBtn_);
-    songModeBtn_.setClickingTogglesState(false);
-    songModeBtn_.setToggleState(false, juce::dontSendNotification);
-    songModeBtn_.setColour(juce::TextButton::buttonOnColourId, juce::Colour(LF::kAccent));
-    songModeBtn_.onClick = [this]
-    {
-        if (playMode != PlayMode::Song)
-        {
-            playMode = PlayMode::Song;
-            patModeBtn_ .setToggleState(false, juce::dontSendNotification);
-            songModeBtn_.setToggleState(true,  juce::dontSendNotification);
-            if (onPlayModeChanged) onPlayModeChanged(playMode);
-        }
-    };
+            auto newMode = (index == 0) ? PlayMode::Pattern : PlayMode::Song;
+            
+            if (playMode != newMode)
+            {
+                playMode = newMode;
+                if (onPlayModeChanged) onPlayModeChanged(playMode);
+            }
+        };
 
     // ---- Row 1: BPM display + invisible slider
     addAndMakeVisible(bpmSlider);
@@ -342,8 +329,8 @@ void ToolbarComponent::paint(juce::Graphics& g)
         const juce::Rectangle<float> panel(5.0f, 5.0f, W - 10.0f, row1H - 8.0f);
 
         // Panel bg gradient
-        juce::ColourGradient panelBg(juce::Colour(LF::kChassis),  0.0f, 0.0f,
-                                     juce::Colour(LF::kChassis2), 0.0f, row1H, false);
+        juce::ColourGradient panelBg(juce::Colour(0xffffffff), 0.0f, 0.0f,
+                                     juce::Colour(0xfff2f2f2), 0.0f, row1H, false);
         g.setGradientFill(panelBg);
         g.fillRoundedRectangle(panel, 12.0f);
 
@@ -626,8 +613,8 @@ void ToolbarComponent::paint(juce::Graphics& g)
         const float y2 = row1H;
         const float h2 = (float)getHeight() - y2;
 
-        juce::ColourGradient strip(juce::Colour(LF::kChassis2), 0.0f, y2,
-                                   juce::Colour(LF::kChassis),  0.0f, y2 + h2, false);
+        juce::ColourGradient strip(juce::Colour(0xfff0f0f0), 0.0f, y2,
+                                   juce::Colour(0xffe0e0e0), 0.0f, y2 + h2, false);
         g.setGradientFill(strip);
         g.fillRect(0.0f, y2, W, h2);
 
@@ -677,9 +664,12 @@ void ToolbarComponent::resized()
         curX += 28 + 10;
 
         // PAT | SONG segmented selector (28px tall, same visual weight as buttons)
-        patModeBtn_ .setBounds(curX,      (row1H - 28) / 2, 38, 28);
-        songModeBtn_.setBounds(curX + 41, (row1H - 28) / 2, 46, 28);
-        curX += 38 + 3 + 46 + 10;
+        // ---- Row 1: Play mode selector (PAT | SONG) 배치
+        // 기존 두 버튼의 너비(38+46)와 간격(3)을 합친 87을 전체 너비로 설정합니다.
+        modeSelector.setBounds(curX, (row1H - 28) / 2, 90, 28);
+        
+        // 다음 컴포넌트를 위해 curX 이동 (modeSelector 너비 87 + 우측 여백 10)
+        curX += 90 + 10;
 
         // BPM display (painted bg + label overlay + invisible drag slider)
         {

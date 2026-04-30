@@ -131,12 +131,18 @@ public:
         const float hdr = (float)kHdrH;
         const float ftr = (float)kFtrH;
 
+        // Browser-local lime green palette
+        constexpr juce::uint32 brPanel   = 0xffe8f5d6u;
+        constexpr juce::uint32 brChassis = 0xffd6ecbau;
+        constexpr juce::uint32 brChassis2= 0xffc4e0a6u;
+        constexpr juce::uint32 brRim     = 0xff8cbe68u;
+
         // ---- Container ----
         {
             const juce::Rectangle<float> bounds(0.5f, 0.5f, W - 1.0f, H - 1.0f);
-            g.setColour(juce::Colour(LF::kPanel));
+            g.setColour(juce::Colour(brPanel));
             g.fillRoundedRectangle(bounds, 8.0f);
-            g.setColour(juce::Colour(LF::kPanelRim));
+            g.setColour(juce::Colour(brRim));
             g.drawRoundedRectangle(bounds, 8.0f, 1.0f);
             g.setColour(juce::Colours::white.withAlpha(0.5f));
             g.drawLine(8.0f, 1.0f, W - 8.0f, 1.0f, 1.0f);
@@ -144,12 +150,12 @@ public:
 
         // ---- Header ----
         {
-            juce::ColourGradient hdrBg(juce::Colour(LF::kChassis),  0.0f, 0.0f,
-                                       juce::Colour(LF::kChassis2), 0.0f, hdr, false);
+            juce::ColourGradient hdrBg(juce::Colour(brChassis),  0.0f, 0.0f,
+                                       juce::Colour(brChassis2), 0.0f, hdr, false);
             g.setGradientFill(hdrBg);
             g.fillRoundedRectangle(0.5f, 0.5f, W - 1.0f, hdr, 8.0f);
             g.fillRect(0.5f, hdr * 0.5f, W - 1.0f, hdr * 0.5f);
-            g.setColour(juce::Colour(LF::kPanelRim));
+            g.setColour(juce::Colour(brRim));
             g.drawLine(1.0f, hdr, W - 1.0f, hdr, 1.0f);
 
             // Row 1: accent square + "BROWSER" + count tag
@@ -162,9 +168,9 @@ public:
             g.drawText("BROWSER", 28, by, 80, 14, juce::Justification::centredLeft);
 
             const juce::Rectangle<float> tag(114.0f, (float)by, 52.0f, 14.0f);
-            g.setColour(juce::Colour(LF::kChassis2).withAlpha(0.7f));
+            g.setColour(juce::Colour(brChassis2).withAlpha(0.7f));
             g.fillRoundedRectangle(tag, 3.0f);
-            g.setColour(juce::Colour(LF::kPanelRim));
+            g.setColour(juce::Colour(brRim));
             g.drawRoundedRectangle(tag, 3.0f, 0.5f);
             g.setFont(LF::monoFont(7.0f, juce::Font::bold));
             g.setColour(juce::Colour(LF::kTextFaint));
@@ -187,12 +193,12 @@ public:
         // ---- Footer ----
         {
             const float fy = H - ftr;
-            juce::ColourGradient ftrBg(juce::Colour(LF::kChassis2), 0.0f, fy,
-                                       juce::Colour(LF::kChassis),  0.0f, H, false);
+            juce::ColourGradient ftrBg(juce::Colour(brChassis2), 0.0f, fy,
+                                       juce::Colour(brChassis),  0.0f, H, false);
             g.setGradientFill(ftrBg);
             g.fillRoundedRectangle(0.5f, fy, W - 1.0f, ftr - 0.5f, 8.0f);
             g.fillRect(0.5f, fy, W - 1.0f, ftr * 0.5f);
-            g.setColour(juce::Colour(LF::kPanelRim));
+            g.setColour(juce::Colour(brRim));
             g.drawLine(1.0f, fy, W - 1.0f, fy, 1.0f);
 
             const int px = 10, pw = (int)W - 20;

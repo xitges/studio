@@ -32,9 +32,9 @@ namespace SynthEditorHelper
 @font-face{font-family:'JBMono';font-weight:400;src:url('/font-regular.ttf') format('truetype');}
 @font-face{font-family:'JBMono';font-weight:700;src:url('/font-bold.ttf') format('truetype');}
 :root{
-  --chassis:#e6dec9;--chassis2:#ddd3ba;--panel:#f3ecda;--rim:#c7bb9a;
-  --accent:#d8412a;--ink:#1a1612;--ink-soft:#4a4338;--ink-faint:#8c8170;
-  --display-bg:#0d1410;--display-fg:#b9ff66;
+  --chassis:#d6ebc4;--chassis2:#c8e0b4;--panel:#e6f3d8;--rim:#9ec882;
+  --accent:#4a9e3f;--ink:#1a2414;--ink-soft:#3a5230;--ink-faint:#6a8860;
+  --display-bg:#0d1a0a;--display-fg:#b9ff66;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'JBMono',Monaco,'Courier New',monospace;background:linear-gradient(180deg,var(--chassis),var(--chassis2));color:var(--ink);padding:12px;}
@@ -256,6 +256,7 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
 </div>
 
 <script>
+let _cppLoading = false;
 const S={
   enabled:false,waveform:1,pulseWidth:0.5,
   unisonVoices:1,unisonDetune:0,unisonSpread:0.5,driftDepth:0.3,
@@ -342,7 +343,7 @@ function setWave(w){
   document.getElementById('row-pw').classList.toggle('hidden',w!==4);
   document.getElementById('sec-pluck').classList.toggle('hidden',w!==7);
   document.getElementById('sec-wind').classList.toggle('hidden',w!==8);
-  window.__JUCE__.backend.emitEvent('synthChange',{key:'waveform',value:w});
+  if(!_cppLoading) window.__JUCE__.backend.emitEvent('synthChange',{key:'waveform',value:w});
 }
 
 function setFiltMode(m){
@@ -351,26 +352,26 @@ function setFiltMode(m){
   S.filterMode=m;
   document.getElementById('ft3').classList.toggle('hidden',m!==1);
   if(m===0&&S.filterType===3){setFiltType(0);return;}
-  window.__JUCE__.backend.emitEvent('synthChange',{key:'filterMode',value:m});
+  if(!_cppLoading) window.__JUCE__.backend.emitEvent('synthChange',{key:'filterMode',value:m});
 }
 function setFiltType(t){
   [0,1,2,3].forEach(i=>{const e=document.getElementById('ft'+i);if(e)e.classList.remove('on');});
   const fb=document.getElementById('ft'+t);if(fb)fb.classList.add('on');
   S.filterType=t;
-  window.__JUCE__.backend.emitEvent('synthChange',{key:'filterType',value:t});
+  if(!_cppLoading) window.__JUCE__.backend.emitEvent('synthChange',{key:'filterType',value:t});
 }
 
 function setLfoTarget(t){
   [0,1,2,3].forEach(i=>document.getElementById('lt'+i).classList.remove('on'));
   document.getElementById('lt'+t).classList.add('on');
   S.lfoTarget=t;
-  window.__JUCE__.backend.emitEvent('synthChange',{key:'lfoTarget',value:t});
+  if(!_cppLoading) window.__JUCE__.backend.emitEvent('synthChange',{key:'lfoTarget',value:t});
 }
 function setLfoWave(w){
   [0,1,2,3,4].forEach(i=>document.getElementById('lw'+i).classList.remove('on'));
   document.getElementById('lw'+w).classList.add('on');
   S.lfoWaveform=w;
-  window.__JUCE__.backend.emitEvent('synthChange',{key:'lfoWaveform',value:w});
+  if(!_cppLoading) window.__JUCE__.backend.emitEvent('synthChange',{key:'lfoWaveform',value:w});
 }
 
 function adjVoices(d){
@@ -391,7 +392,7 @@ function setSource(src){
   document.getElementById('sec-osc').classList.toggle('hidden',src==='sampler');
   document.getElementById('sec-sampler').classList.toggle('hidden',src==='synth');
   document.getElementById('canvas-lbl').textContent=src==='synth'?'WAVE PREVIEW':'SAMPLE PREVIEW';
-  window.__JUCE__.backend.emitEvent('synthAction',{action:'setSource',value:src});
+  if(!_cppLoading) window.__JUCE__.backend.emitEvent('synthAction',{action:'setSource',value:src});
 }
 
 function onPresetChange(name){
@@ -466,6 +467,8 @@ function drawWaveform(){
 
 // C++ → JS events
 window.__JUCE__.backend.addEventListener('synthLoad',function(p){
+  _cppLoading=true;
+  try{
   // Booleans via toggle sync
   if(p.enabled!==undefined){S.enabled=Boolean(p.enabled);syncToggle('enabled','btn-enable');}
   if(p.ddspEnabled!==undefined){S.ddspEnabled=Boolean(p.ddspEnabled);syncToggle('ddspEnabled','btn-ddsp');}
@@ -499,6 +502,7 @@ window.__JUCE__.backend.addEventListener('synthLoad',function(p){
     const ve=document.getElementById('v-'+k);if(ve&&fmt[k])ve.textContent=fmt[k](p[k]);
   }
   drawAdsr();
+  }finally{_cppLoading=false;}
 });
 
 window.__JUCE__.backend.addEventListener('presetsLoaded',function(p){
@@ -536,6 +540,8 @@ window.__JUCE__.backend.addEventListener('samplerInfo',function(p){
 drawAdsr();
 drawWaveform();
 window.addEventListener('resize',()=>{drawAdsr();drawWaveform();});
+// Signal C++ that the page is fully ready
+window.__JUCE__.backend.emitEvent('pageReady',{});
 </script>
 </body></html>)HTML");
     }
@@ -567,8 +573,7 @@ public:
     void loadParams(const SynthParams& p)
     {
         cachedParams_ = p;
-        pushParamsToJs();
-        pushWaveformToJs();
+        if (pageReady_) { pushParamsToJs(); pushWaveformToJs(); }
     }
 
     void applyToParams(SynthParams& p) const { p = cachedParams_; }
@@ -577,14 +582,13 @@ public:
     {
         currentSourceType_    = srcType;
         currentSamplerParams_ = sp;
-        pushParamsToJs();
-        pushWaveformToJs();
+        if (pageReady_) { pushParamsToJs(); pushWaveformToJs(); }
     }
 
     void setSamplerPreviewBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buf)
     {
         samplerPreviewBuffer_ = std::move(buf);
-        pushWaveformToJs();
+        if (pageReady_) pushWaveformToJs();
     }
 
     SamplerParams     getSamplerParams() const { return currentSamplerParams_; }
@@ -608,7 +612,7 @@ public:
         obj->setProperty("presets",      arr);
         obj->setProperty("factoryCount", factoryPresetCount_);
         obj->setProperty("selected",     selectName);
-        browser_.emitEventIfBrowserIsVisible("presetsLoaded", juce::var(obj));
+        if (pageReady_) browser_.emitEventIfBrowserIsVisible("presetsLoaded", juce::var(obj));
     }
 
     void resized() override { browser_.setBounds(getLocalBounds()); }
@@ -626,6 +630,7 @@ private:
     std::shared_ptr<const juce::AudioBuffer<float>> samplerPreviewBuffer_;
     std::shared_ptr<juce::FileChooser>              fileChooser_;
     bool previewPlaying_ = false;
+    bool pageReady_      = false;
 
     void timerCallback() override
     {
@@ -865,6 +870,27 @@ private:
                             info->setProperty("fileName", file.getFileName());
                             self->browser_.emitEventIfBrowserIsVisible("samplerInfo", juce::var(info));
                         });
+                }
+            })
+            .withEventListener("pageReady", [self](const juce::var&) {
+                self->pageReady_ = true;
+                self->pushParamsToJs();
+                self->pushWaveformToJs();
+                // push presets if they were set before page loaded
+                if (!self->availablePresets_.empty())
+                {
+                    auto* obj = new juce::DynamicObject();
+                    juce::Array<juce::var> arr;
+                    for (const auto& pr : self->availablePresets_)
+                    {
+                        auto* po = new juce::DynamicObject();
+                        po->setProperty("name", pr.name);
+                        arr.add(juce::var(po));
+                    }
+                    obj->setProperty("presets",      arr);
+                    obj->setProperty("factoryCount", self->factoryPresetCount_);
+                    obj->setProperty("selected",     self->selectedPresetName_);
+                    self->browser_.emitEventIfBrowserIsVisible("presetsLoaded", juce::var(obj));
                 }
             });
     }

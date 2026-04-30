@@ -513,7 +513,7 @@ void ChannelRackComponent::timerCallback()
 void ChannelRackComponent::paint(juce::Graphics& g)
 {
     // Cream chassis background
-    g.fillAll(juce::Colour(StudioLookAndFeel::kChassis2));
+    g.fillAll(juce::Colour(0xfff5f5f5));
     drawHeader(g);
     drawChannelLabels(g);
     drawStepGrid(g);
@@ -527,8 +527,8 @@ void ChannelRackComponent::drawHeader(juce::Graphics& g)
 
     // === Title strip (y=0..30) ===
     {
-        juce::ColourGradient gr(juce::Colour(LF::kChassis),  0.0f, 0.0f,
-                                juce::Colour(LF::kChassis2), 0.0f, 30.0f, false);
+        juce::ColourGradient gr(juce::Colour(0xffffffff), 0.0f, 0.0f,
+                                juce::Colour(0xfff0f0f0), 0.0f, 30.0f, false);
         g.setGradientFill(gr);
         g.fillRect(0, 0, W, 30);
     }
@@ -568,7 +568,7 @@ void ChannelRackComponent::drawHeader(juce::Graphics& g)
     g.drawLine(0.0f, 30.0f, (float)W, 30.0f, 0.8f);
 
     // === Ruler strip (y=30..50) ===
-    g.setColour(juce::Colour(LF::kPanel));
+    g.setColour(juce::Colour(0xffe8e8e8));
     g.fillRect(0, 30, W, 20);
 
     // Left side: header label
@@ -629,8 +629,8 @@ void ChannelRackComponent::drawChannelLabels(juce::Graphics& g)
         // Row background
         {
             const juce::Colour bg = i % 2 == 0
-                ? juce::Colour(LF::kPanel) : juce::Colour(LF::kChassis);
-            g.setColour(isSelected ? juce::Colour(LF::kAccent).withAlpha(0.07f) : bg);
+                ? juce::Colours::white : juce::Colour(0xfff5f5f5); // 밝은 톤으로 수정[cite: 9]
+            g.setColour(isSelected ? juce::Colour(LF::kAccent).withAlpha(0.1f) : bg);
             g.fillRect(0, y, LABEL_WIDTH, ROW_HEIGHT);
         }
 
@@ -747,7 +747,7 @@ void ChannelRackComponent::drawStepGrid(juce::Graphics& g)
         const juce::Colour col = channels[ch].color;
 
         // Row background (alternating cream)
-        g.setColour(ch % 2 == 0 ? juce::Colour(LF::kChassis) : juce::Colour(LF::kChassis2));
+        g.setColour(ch % 2 == 0 ? juce::Colour(0xfffafafa) : juce::Colour(0xfff0f0f0));
         g.fillRect(stepAreaX, y, getWidth() - stepAreaX, ROW_HEIGHT);
 
         // Row separator

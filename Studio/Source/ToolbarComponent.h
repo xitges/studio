@@ -12,6 +12,120 @@
 #include <JuceHeader.h>
 #include "ProjectModel.h"
 
+class PremiumTransportButton : public juce::Button
+{
+public:
+    PremiumTransportButton(const juce::String& buttonName)
+        : juce::Button(buttonName)
+    {
+    }
+
+    void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+        const float cornerSize = 4.0f;
+
+        // 1. 버튼 배경색상
+        juce::Colour baseColor = juce::Colour(0xff2a2b2e);
+        if (shouldDrawButtonAsDown)      baseColor = baseColor.darker(0.2f);
+        else if (shouldDrawButtonAsHighlighted) baseColor = baseColor.brighter(0.1f);
+
+        // 2. 배경 그라데이션
+        juce::ColourGradient bgGradient(baseColor.brighter(0.05f), 0.0f, 0.0f,
+                                        baseColor.darker(0.1f), 0.0f, bounds.getHeight(), false);
+        g.setGradientFill(bgGradient);
+        g.fillRoundedRectangle(bounds, cornerSize);
+
+        // 3. 버튼 테두리 디테일
+        g.setColour(juce::Colours::black.withAlpha(0.6f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), cornerSize, 1.0f);
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.drawRoundedRectangle(bounds.reduced(1.5f), cornerSize - 1.0f, 1.0f);
+
+        // 4. 아이콘 및 LED 상태
+        bool isActive = getToggleState();
+        juce::Colour iconColor = isActive ? themeColor : themeColor.withAlpha(0.4f);
+
+        if (isActive)
+        {
+            juce::ColourGradient glow(themeColor.withAlpha(0.4f), bounds.getCentreX(), bounds.getCentreY(),
+                                      themeColor.withAlpha(0.0f), bounds.getCentreX(), bounds.getCentreY() + bounds.getWidth() * 0.5f, true);
+            g.setGradientFill(glow);
+            g.fillEllipse(bounds.reduced(4.0f));
+        }
+
+        // 5. 텍스트 그리기
+        g.setColour(iconColor);
+        g.setFont(juce::Font(bounds.getHeight() * 0.45f).withStyle(juce::Font::bold));
+        
+        auto textBounds = shouldDrawButtonAsDown ? getLocalBounds().translated(0, 1) : getLocalBounds();
+        g.drawText(getName(), textBounds, juce::Justification::centred);
+    }
+
+private:
+    juce::Colour themeColor;
+};
+
+// ==============================================================================
+// 새로 추가된 커스텀 Segmented Control 클래스
+// ==============================================================================
+class SegmentedControl : public juce::Component
+{
+public:
+    std::function<void(int)> onSelectionChanged;
+    int selectedIndex = 0; // 0: PAT, 1: SONG
+
+    SegmentedControl() {}
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+        auto cornerSize = 6.0f;
+        
+        // LF::kAccent가 정의된 곳이 있다면 그대로 쓰시고, 만약 에러가 난다면
+        // juce::Colours::red 등으로 임시 교체하세요.
+        auto accentColor = juce::Colour(0xffc95c54);
+
+        // 1. 전체 배경 (파인 느낌의 그림자)
+        g.setColour(juce::Colours::black.withAlpha(0.2f));
+        g.fillRoundedRectangle(bounds, cornerSize);
+        g.setColour(juce::Colours::black.withAlpha(0.4f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), cornerSize, 1.0f);
+
+        // 2. 선택된 부분 하이라이트 박스
+        auto segmentWidth = bounds.getWidth() / 2.0f;
+        auto highlightArea = juce::Rectangle<float>(
+            selectedIndex * segmentWidth, 0, segmentWidth, bounds.getHeight()
+        ).reduced(2.0f);
+
+        g.setColour(accentColor);
+        g.fillRoundedRectangle(highlightArea, cornerSize - 1.0f);
+
+        // 3. 텍스트 그리기
+        g.setFont(juce::Font(juce::FontOptions("JetBrains Mono", 12.0f, juce::Font::bold)));
+        
+        // PAT
+        g.setColour(selectedIndex == 0 ? juce::Colours::white : juce::Colours::grey);
+            g.drawFittedText("PAT", bounds.withWidth(segmentWidth).toNearestInt(), juce::Justification::centred, 1);
+            
+            // SONG
+        g.setColour(selectedIndex == 1 ? juce::Colours::white : juce::Colours::grey);
+        g.drawFittedText("SONG", bounds.withWidth(segmentWidth).withX(segmentWidth).toNearestInt(), juce::Justification::centred, 1);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        int newIndex = e.x < (getWidth() / 2) ? 0 : 1;
+        if (newIndex != selectedIndex)
+        {
+            selectedIndex = newIndex;
+            if (onSelectionChanged) onSelectionChanged(selectedIndex);
+            repaint();
+        }
+    }
+};
+
+// ==============================================================================
 
 class ToolbarComponent : public juce::Component,
                          public juce::Button::Listener,
@@ -40,19 +154,22 @@ public:
         bpmSlider.setValue(bpm, juce::dontSendNotification);
         bpmLabel.setText(juce::String(bpm, 1), juce::dontSendNotification);
     }
+    
+    // [수정됨] 기존 버튼 대신 SegmentedControl을 업데이트합니다.
     void setPlayMode(PlayMode mode)
     {
         playMode = mode;
-        patModeBtn_ .setToggleState(mode == PlayMode::Pattern, juce::dontSendNotification);
-        songModeBtn_.setToggleState(mode == PlayMode::Song,    juce::dontSendNotification);
+        modeSelector.selectedIndex = (mode == PlayMode::Pattern) ? 0 : 1;
+        modeSelector.repaint(); // UI 갱신
     }
 
-    // Toggle Song ↔ Pattern mode and fire onPlayModeChanged
+    // [수정됨] 토글 로직도 SegmentedControl에 맞춰 변경했습니다.
     void togglePlayMode()
     {
         playMode = (playMode == PlayMode::Pattern) ? PlayMode::Song : PlayMode::Pattern;
-        patModeBtn_ .setToggleState(playMode == PlayMode::Pattern, juce::dontSendNotification);
-        songModeBtn_.setToggleState(playMode == PlayMode::Song,    juce::dontSendNotification);
+        modeSelector.selectedIndex = (playMode == PlayMode::Pattern) ? 0 : 1;
+        modeSelector.repaint(); // UI 갱신
+        
         if (onPlayModeChanged) onPlayModeChanged(playMode);
     }
 
@@ -139,8 +256,10 @@ private:
     juce::TextButton recordButton { "REC"  };
     juce::TextButton ffBtn_       { "FF"   };
     juce::TextButton loopBtn_     { "LOOP" };
-    juce::TextButton patModeBtn_  { "PAT"  };
-    juce::TextButton songModeBtn_ { "SONG" };
+    
+    // [수정됨] 기존 patModeBtn_ 과 songModeBtn_ 을 삭제하고 새 컨트롤을 넣었습니다.
+    SegmentedControl modeSelector;
+    
     juce::Slider     bpmSlider;
     juce::Label      bpmLabel;
     juce::Label      titleLabel;

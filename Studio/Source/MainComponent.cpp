@@ -2379,7 +2379,7 @@ MainComponent::MainComponent()
     // -------------------------------------------------------------------------
 
     startTimerHz(30);
-    setSize(1392, 860);
+    setSize(1600, 900);
 }
 
 MainComponent::~MainComponent()
@@ -3394,8 +3394,13 @@ void MainComponent::paint(juce::Graphics& g)
     using LF = StudioLookAndFeel;
 
     // 1. Chassis gradient fill
-    juce::ColourGradient bodyGrad(juce::Colour(LF::kChassis), 0.0f, 0.0f,
-                                  juce::Colour(LF::kChassis2), 0.0f, (float)getHeight(), false);
+//    juce::ColourGradient bodyGrad(juce::Colour(LF::0xfff2f2f2)), 0.0f, 0.0f,
+//                                  juce::Colour(LF::kChassis2), 0.0f, (float)getHeight(), false);
+    juce::Colour lightGreyWhite (0xfff2f2f2); // 아주 밝은 회색
+    juce::Colour softWhite (0xfffafafa);      // 거의 하얀색
+    
+    juce::ColourGradient bodyGrad(softWhite, 0.0f, 0.0f,
+                                  lightGreyWhite, 0.0f, (float)getHeight(), false);
     g.setGradientFill(bodyGrad);
     g.fillAll();
 
@@ -3430,12 +3435,12 @@ void MainComponent::paint(juce::Graphics& g)
     if (!inspectorContentBounds_.isEmpty() && inspectorTab_ != -1)
     {
         const auto r = inspectorContentBounds_.toFloat();
-        juce::ColourGradient inspGrad(juce::Colour(LF::kChassis), r.getX(), r.getY(),
-                                       juce::Colour(LF::kChassis2), r.getX(), r.getBottom(), false);
+        juce::ColourGradient inspGrad(juce::Colours::white, r.getX(), r.getY(),
+                                           juce::Colour(0xfff0f0f0), r.getX(), r.getBottom(), false);
         g.setGradientFill(inspGrad);
         g.fillRect(r);
         // bottom border
-        g.setColour(juce::Colour(LF::kPanelRim));
+        g.setColour(juce::Colour(0xffdcdcdc));
         g.drawLine(r.getX(), r.getBottom() - 0.5f, r.getRight(), r.getBottom() - 0.5f, 1.0f);
     }
 
@@ -3454,9 +3459,9 @@ void MainComponent::paint(juce::Graphics& g)
             const float x = cx[i], y = cy[i];
             // Radial gradient: light at 30%/25% of diameter from top-left, dark at edge
             juce::ColourGradient screwGrad(
-                juce::Colour(0xffd8d0bb), x - sz*0.2f, y - sz*0.25f,
-                juce::Colour(0xff4a4338), x + sz*0.35f, y + sz*0.35f, true);
-            screwGrad.addColour(0.5, juce::Colour(0xff888070));
+                juce::Colour(0xffffffff), x - sz*0.2f, y - sz*0.25f,
+                juce::Colour(0xffa0a0a0), x + sz*0.35f, y + sz*0.35f, true);
+            screwGrad.addColour(0.5, juce::Colour(0xffdcdcdc));
             g.setGradientFill(screwGrad);
             g.fillEllipse(x - sz*0.5f, y - sz*0.5f, sz, sz);
             // Border
@@ -3465,7 +3470,7 @@ void MainComponent::paint(juce::Graphics& g)
             // Slot
             const float rad = angles[i] * juce::MathConstants<float>::pi / 180.0f;
             const float len = sz * 0.32f;
-            g.setColour(juce::Colour(0x99000000));
+            g.setColour(juce::Colour(0x88000000));
             g.drawLine(x - std::cos(rad)*len, y - std::sin(rad)*len,
                        x + std::cos(rad)*len, y + std::sin(rad)*len, 1.0f);
         }
@@ -3474,7 +3479,7 @@ void MainComponent::paint(juce::Graphics& g)
     // 6. Footer
     const int footerH = 22;
     auto footer = getLocalBounds().removeFromBottom(footerH).reduced(8, 0);
-    g.setColour(juce::Colour(0xffffffff).withAlpha(0.12f));
+    g.setColour(juce::Colour(0x20000000));
     g.drawLine((float)footer.getX(), (float)footer.getY(),
                (float)footer.getRight(), (float)footer.getY(), 1.0f);
     g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f).withStyle("Bold")));

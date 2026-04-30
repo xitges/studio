@@ -575,22 +575,21 @@ inline void PlaylistComponent::drawBackground(juce::Graphics& g)
     const float W = (float)getWidth();
 
     // Full bg (track area shows through)
-    g.setColour(juce::Colour(LF::kPanel));
-    g.fillAll();
+    g.fillAll(juce::Colour(0xfff5f5f5));
 
     // ---- PLAYLIST header strip (0..kPlaylistHdrH) ----
     {
-        juce::ColourGradient hdrBg(juce::Colour(LF::kChassis),  0.0f, 0.0f,
-                                   juce::Colour(LF::kChassis2), 0.0f, (float)kPlaylistHdrH, false);
+        juce::ColourGradient hdrBg(juce::Colours::white, 0.0f, 0.0f,
+                                   juce::Colour(0xffe8e8e8), 0.0f, (float)headerHeight, false);
         g.setGradientFill(hdrBg);
         g.fillRect(0, 0, (int)W, kPlaylistHdrH);
-        g.setColour(juce::Colour(LF::kPanelRim));
+        g.setColour(juce::Colour(0xffdcdcdc));
         g.drawLine(0.0f, (float)kPlaylistHdrH, W, (float)kPlaylistHdrH, 1.0f);
 
         const int cy = kPlaylistHdrH / 2;
 
         // Accent square
-        g.setColour(juce::Colour(LF::kAccent));
+        g.setColour(juce::Colour(0xffdcdcdc));
         g.fillRoundedRectangle(12.0f, (float)(cy - 4), 8.0f, 8.0f, 2.0f);
 
         // "PLAYLIST"
@@ -751,21 +750,21 @@ inline void PlaylistComponent::drawTracks(juce::Graphics& g)
 
         // ---- Track row bg (cream tones matching reference) ----
         {
-            const juce::Colour c1 = (t % 2 == 0) ? juce::Colour(0xfff3ecda) : juce::Colour(0xffede5d1);
-            const juce::Colour c2 = (t % 2 == 0) ? juce::Colour(0xffede5d1) : juce::Colour(0xffe6dec9);
+            const juce::Colour c1 = (t % 2 == 0) ? juce::Colour(0xfffafafa) : juce::Colour(0xfff5f5f5);
+            const juce::Colour c2 = (t % 2 == 0) ? juce::Colour(0xfff5f5f5) : juce::Colour(0xfff0f0f0);
             juce::ColourGradient rowBg(c1, 0.0f, (float)trackY, c2, 0.0f, (float)(trackY + trackHeight), false);
             g.setGradientFill(rowBg);
             g.fillRect(trackHeaderWidth, trackY, getWidth() - trackHeaderWidth, trackHeight);
         }
 
         // Row bottom border
-        g.setColour(juce::Colour(LF::kPanelRim).withAlpha(0.5f));
+        g.setColour(juce::Colour(LF::kPanelRim).withAlpha(0.3f));
         g.drawLine(0.0f, (float)(trackY + trackHeight - 1), (float)getWidth(), (float)(trackY + trackHeight - 1), 0.5f);
 
         // ---- Track header bg (panel → chassis-2 gradient) ----
         {
-            juce::ColourGradient hdrBg(juce::Colour(LF::kPanel),    0.0f, (float)trackY,
-                                       juce::Colour(LF::kChassis2), 0.0f, (float)(trackY + trackHeight), false);
+            juce::ColourGradient hdrBg(juce::Colours::white, 0.0f, (float)trackY,
+                                                   juce::Colour(0xfff0f0f0), 0.0f, (float)(trackY + trackHeight), false);
             g.setGradientFill(hdrBg);
             g.fillRect(0, trackY, trackHeaderWidth, trackHeight);
             g.setColour(juce::Colour(LF::kPanelRim).withAlpha(0.8f));
