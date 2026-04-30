@@ -589,7 +589,7 @@ inline void PlaylistComponent::drawBackground(juce::Graphics& g)
         const int cy = kPlaylistHdrH / 2;
 
         // Accent square
-        g.setColour(juce::Colour(0xffdcdcdc));
+        g.setColour(juce::Colour(LF::kAccent));
         g.fillRoundedRectangle(12.0f, (float)(cy - 4), 8.0f, 8.0f, 2.0f);
 
         // "PLAYLIST"
@@ -601,12 +601,20 @@ inline void PlaylistComponent::drawBackground(juce::Graphics& g)
         auto drawTag = [&](int tx, int ty2, int tw, const juce::String& txt)
         {
             const juce::Rectangle<float> r((float)tx, (float)ty2, (float)tw, 14.0f);
-            g.setColour(juce::Colour(LF::kChassis2).withAlpha(0.7f));
+
+            // 1. 태그 배경: 매우 밝은 회색 혹은 약간의 투명도가 있는 하얀색
+            // 0x40ffffff는 배경 위에서 은은하게 겹쳐 보이는 효과를 줍니다.
+            g.setColour(juce::Colour(0x40ffffff));
             g.fillRoundedRectangle(r, 3.0f);
-            g.setColour(juce::Colour(LF::kPanelRim));
+
+            // 2. 태그 테두리: 다른 선들과 통일된 연한 회색
+            g.setColour(juce::Colour(0xffdcdcdc));
             g.drawRoundedRectangle(r, 3.0f, 0.5f);
+
+            // 3. 태그 텍스트: 밝은 배경에서도 잘 보이도록 진한 회색으로 변경
             g.setFont(LF::monoFont(7.0f, juce::Font::bold));
-            g.setColour(juce::Colour(LF::kTextFaint));
+            g.setColour(juce::Colour(0xff666666));
+            
             g.drawText(txt, tx + 3, ty2 + 1, tw - 6, 12, juce::Justification::centredLeft);
         };
         drawTag(100, cy - 7, 76, juce::String::fromUTF8("200 BARS \xc2\xb7 4/4"));
@@ -758,7 +766,7 @@ inline void PlaylistComponent::drawTracks(juce::Graphics& g)
         }
 
         // Row bottom border
-        g.setColour(juce::Colour(LF::kPanelRim).withAlpha(0.3f));
+        g.setColour(juce::Colour(LF::kAccent).withAlpha(0.3f));
         g.drawLine(0.0f, (float)(trackY + trackHeight - 1), (float)getWidth(), (float)(trackY + trackHeight - 1), 0.5f);
 
         // ---- Track header bg (panel → chassis-2 gradient) ----
@@ -767,7 +775,7 @@ inline void PlaylistComponent::drawTracks(juce::Graphics& g)
                                                    juce::Colour(0xfff0f0f0), 0.0f, (float)(trackY + trackHeight), false);
             g.setGradientFill(hdrBg);
             g.fillRect(0, trackY, trackHeaderWidth, trackHeight);
-            g.setColour(juce::Colour(LF::kPanelRim).withAlpha(0.8f));
+            g.setColour(juce::Colour(LF::kAccent).withAlpha(0.8f));
             g.drawLine((float)trackHeaderWidth - 0.5f, (float)trackY,
                        (float)trackHeaderWidth - 0.5f, (float)(trackY + trackHeight), 1.0f);
         }

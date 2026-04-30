@@ -132,10 +132,10 @@ public:
         const float ftr = (float)kFtrH;
 
         // Browser-local lime green palette
-        constexpr juce::uint32 brPanel   = 0xffe8f5d6u;
-        constexpr juce::uint32 brChassis = 0xffd6ecbau;
-        constexpr juce::uint32 brChassis2= 0xffc4e0a6u;
-        constexpr juce::uint32 brRim     = 0xff8cbe68u;
+        constexpr juce::uint32 brPanel   = 0xfff7f7f8u;
+        constexpr juce::uint32 brChassis = 0xffebebeeu;
+        constexpr juce::uint32 brChassis2= 0xffe0e0e4u;
+        constexpr juce::uint32 brRim     = 0xffccccd0u;
 
         // ---- Container ----
         {
@@ -378,7 +378,7 @@ private:
             using LF = StudioLookAndFeel;
             const int W = getWidth();
 
-            g.setColour(juce::Colour(LF::kPanel));
+            g.setColour(juce::Colour(0xfff7f7f8u));
             g.fillAll();
 
             // Empty state: no bookmarks

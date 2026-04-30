@@ -3553,8 +3553,6 @@ void MainComponent::resized()
     playlist.setSize(juce::jmax(playlistArea.getWidth(),  playlist.getNeededWidth()),
                      juce::jmax(playlistArea.getHeight(), playlist.getNeededHeight()));
 
-    area.removeFromTop(kGap);
-
     // Inspector tab bar (left 330px) + step inspector strip (remainder)
     {
         auto tabStrip = area.removeFromTop(kTabH);

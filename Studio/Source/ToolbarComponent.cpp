@@ -118,9 +118,18 @@ ToolbarComponent::ToolbarComponent()
 
     // ---- Row 2: Pattern combo (items populated via updatePatternList)
     addAndMakeVisible(patternBox);
-    patternBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(StudioLookAndFeel::kChassis2));
-    patternBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(StudioLookAndFeel::kPanelRim));
-    patternBox.setColour(juce::ComboBox::textColourId,       juce::Colour(StudioLookAndFeel::kText));
+
+    // 1. 배경색: 아주 밝은 회색 (거의 하얀색에 가까운 톤)
+    patternBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff8f8f8));
+
+    // 2. 테두리색: 다른 경계선들과 통일된 실버 회색
+    patternBox.setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xffdcdcdc));
+
+    // 3. 텍스트색: 밝은 배경에서 잘 보이도록 진한 회색으로 변경
+    patternBox.setColour(juce::ComboBox::textColourId,       juce::Colour(0xff333333));
+
+    // 4. 화살표(버튼) 색상: 텍스트와 맞춰서 조절 (선택 사항)
+    patternBox.setColour(juce::ComboBox::arrowColourId,      juce::Colour(0xff666666));
     patternBox.onChange = [this]
     {
         const int id = patternBox.getSelectedId();
@@ -177,13 +186,13 @@ ToolbarComponent::ToolbarComponent()
     addAndMakeVisible(exportBtn);
     exportBtn.setButtonText("EXPORT");
     exportBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(StudioLookAndFeel::kAccent));
-    exportBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffffffff));
+    exportBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0x99000000));
     exportBtn.onClick = [this] { if (onExport) onExport(); };
 
     addAndMakeVisible(exportStemsBtn);
     exportStemsBtn.setButtonText("STEMS");
     exportStemsBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(StudioLookAndFeel::kAccent).darker(0.1f));
-    exportStemsBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffffffff));
+    exportStemsBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0x99000000));
     exportStemsBtn.onClick = [this] { if (onExportStems) onExportStems(); };
 
     addAndMakeVisible(mixerBtn);
@@ -618,7 +627,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
         g.setGradientFill(strip);
         g.fillRect(0.0f, y2, W, h2);
 
-        g.setColour(juce::Colour(LF::kPanelRim));
+        g.setColour(juce::Colour(0xfff0f0f0));
         g.drawLine(0.0f, y2, W, y2, 1.0f);
 
         g.setColour(juce::Colour(LF::kAccent).withAlpha(0.5f));

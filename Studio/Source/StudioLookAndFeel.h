@@ -71,7 +71,7 @@ public:
     {
         setColour(juce::ResizableWindow::backgroundColourId, juce::Colour(kChassis));
 
-        setColour(juce::PopupMenu::backgroundColourId,            juce::Colour(kPanel));
+        setColour(juce::PopupMenu::backgroundColourId,            juce::Colour(0xfff7f7f8u));
         setColour(juce::PopupMenu::textColourId,                  juce::Colour(kText));
         setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(kAccent));
         setColour(juce::PopupMenu::highlightedTextColourId,       juce::Colour(0xffffffff));
@@ -89,10 +89,10 @@ public:
         setColour(juce::Label::textColourId,       juce::Colour(kText));
         setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
 
-        setColour(juce::ComboBox::backgroundColourId, juce::Colour(kChassis2));
+        setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff0f0f2u));
         setColour(juce::ComboBox::textColourId,       juce::Colour(kText));
-        setColour(juce::ComboBox::outlineColourId,    juce::Colour(kPanelRim));
-        setColour(juce::ComboBox::arrowColourId,      juce::Colour(kTextDim));
+        setColour(juce::ComboBox::outlineColourId,    juce::Colour(0xffccccd0u));
+        setColour(juce::ComboBox::arrowColourId,      juce::Colour(0xff888890u));
 
         setColour(juce::TextButton::buttonColourId,   juce::Colour(kChassis));
         setColour(juce::TextButton::buttonOnColourId, juce::Colour(kAccent));
@@ -109,7 +109,8 @@ public:
         setColour(juce::Slider::textBoxOutlineColourId,      juce::Colour(kPanelRim));
         setColour(juce::Slider::textBoxHighlightColourId,    juce::Colour(kAccent).withAlpha(0.22f));
 
-        setColour(juce::ScrollBar::thumbColourId, juce::Colour(kPanelRim).withAlpha(0.7f));
+        setColour(juce::ScrollBar::thumbColourId,       juce::Colour(0xff909098u).withAlpha(0.7f));
+        setColour(juce::ScrollBar::backgroundColourId,  juce::Colour(0xffebebeeu));
 
         setColour(juce::ToggleButton::textColourId,         juce::Colour(kText));
         setColour(juce::ToggleButton::tickColourId,         juce::Colour(kAccent));
@@ -138,18 +139,18 @@ public:
         }
         else if (isButtonDown)
         {
-            g.setColour(juce::Colour(kPanelRim));
+            g.setColour(juce::Colour(0xffd8d8dcu));
             g.fillRoundedRectangle(b, r);
         }
         else
         {
-            g.setColour(isMouseOver ? juce::Colour(kPanel).brighter(0.04f)
-                                    : juce::Colour(kPanel));
+            g.setColour(isMouseOver ? juce::Colour(0xffffffff)
+                                    : juce::Colour(0xfff0f0f2u));
             g.fillRoundedRectangle(b, r);
         }
 
         // 1px border
-        g.setColour(juce::Colour(isOn ? 0x70000000u : 0x38000000u));
+        g.setColour(juce::Colour(isOn ? 0x70000000u : 0x28000000u));
         g.drawRoundedRectangle(b, r, 1.0f);
     }
 
@@ -481,6 +482,10 @@ public:
                        bool, int thumbStart, int thumbSize,
                        bool isMouseOver, bool isMouseDown) override
     {
+        // Track background
+        g.setColour(juce::Colour(0xffebebeeu));
+        g.fillRect(x, y, width, height);
+
         if (thumbSize <= 0) return;
         const bool vert = (height > width);
         juce::Rectangle<float> thumb;
@@ -491,8 +496,8 @@ public:
             thumb = { (float)(x + thumbStart), (float)y + 2.0f,
                       (float)thumbSize, (float)height - 4.0f };
 
-        const float a = isMouseDown ? 0.55f : (isMouseOver ? 0.38f : 0.22f);
-        g.setColour(juce::Colour(kTextDim).withAlpha(a));
+        const float a = isMouseDown ? 0.65f : (isMouseOver ? 0.45f : 0.30f);
+        g.setColour(juce::Colour(0xff909098u).withAlpha(a));
         g.fillRoundedRectangle(thumb, 3.0f);
     }
 
