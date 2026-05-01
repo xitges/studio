@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/Documents/JUCE/extras/Projucer/Builds/MacOSX/build/Debug/Projucer.app/Contents/MacOS/Projucer --resave /Users/hong_junyoung/studio/Studio/Studio.jucer)",
+      "Bash(xcodebuild -project XitgeS.xcodeproj -scheme \"XitgeS - App\" -configuration Debug build)"
+    ]
+  }
+}

@@ -9,7 +9,7 @@
 */
 
 #include "AudioEngine.h"
-#include "RubberBandStretcher.h"
+#include <rubberband/RubberBandStretcher.h>
 
 namespace
 {

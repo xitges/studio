@@ -13,8 +13,8 @@ class MixerComponent : public juce::Component
 {
 public:
     static constexpr int numTracks  = 8;
-    static constexpr int stripW     = 64;   // phase-5: 64px per insert strip
-    static constexpr int masterW    = 120;  // phase-5: 120px master
+    static constexpr int stripW     = 100;   // phase-5: 64px per insert strip
+    static constexpr int masterW    = 160;  // phase-5: 120px master
 
     // Phase-5: per-strip colour palette (matches channel rack)
     static juce::Colour stripColor(int t)
@@ -101,10 +101,9 @@ public:
         using LF = StudioLookAndFeel;
         const int H = getHeight();
 
-        // Cream panel background
         {
-            juce::ColourGradient bg(juce::Colour(LF::kPanel),    0.0f, 0.0f,
-                                    juce::Colour(LF::kChassis2), 0.0f, (float)H, false);
+            juce::ColourGradient bg(juce::Colour(0xffffffff), 0.0f, 0.0f,
+                                    juce::Colour(0xffe0e0e0), 0.0f, (float)H, false);
             g.setGradientFill(bg);
             g.fillAll();
         }
@@ -119,8 +118,8 @@ public:
 
             // Strip bg
             {
-                juce::ColourGradient sg(juce::Colour(LF::kPanel).brighter(0.04f), 0.0f, 0.0f,
-                                        juce::Colour(LF::kChassis), 0.0f, (float)H, false);
+                juce::ColourGradient sg(juce::Colour(0xffffffff).brighter(0.04f), 0.0f, 0.0f,
+                                        juce::Colour(0xffe0e0e0), 0.0f, (float)H, false);
                 g.setGradientFill(sg);
                 g.fillRect(sx, 0, sw, H);
             }

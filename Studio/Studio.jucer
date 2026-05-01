@@ -10,8 +10,10 @@
       <FILE id="ro8NHZ" name="PlaylistComponent.h" compile="0" resource="0"
             file="Source/PlaylistComponent.h"/>
       <FILE id="lvdokd" name="ProjectModel.h" compile="0" resource="0" file="Source/ProjectModel.h"/>
-      <FILE id="PSer01" name="ProjectSerializer.h" compile="0" resource="0" file="Source/ProjectSerializer.h"/>
-      <FILE id="PSer02" name="ProjectSerializer.cpp" compile="1" resource="0" file="Source/ProjectSerializer.cpp"/>
+      <FILE id="PSer01" name="ProjectSerializer.h" compile="0" resource="0"
+            file="Source/ProjectSerializer.h"/>
+      <FILE id="PSer02" name="ProjectSerializer.cpp" compile="1" resource="0"
+            file="Source/ProjectSerializer.cpp"/>
       <GROUP id="{B250E479-C067-930A-5CB3-146F1368C278}" name="Audio">
         <FILE id="ARec01" name="AudioRecorder.h" compile="0" resource="0" file="Source/Audio/AudioRecorder.h"/>
         <FILE id="LYtVJ3" name="AudioEngine.cpp" compile="1" resource="0" file="Source/Audio/AudioEngine.cpp"/>
@@ -34,24 +36,38 @@
       <FILE id="GP5oxg" name="MainComponent.h" compile="0" resource="0" file="Source/MainComponent.h"/>
       <FILE id="i8steI" name="MainComponent.cpp" compile="1" resource="0"
             file="Source/MainComponent.cpp"/>
-      <FILE id="PRoll1" name="PianoRollComponent.h" compile="0" resource="0" file="Source/PianoRollComponent.h"/>
-      <FILE id="MixC01" name="MixerComponent.h" compile="0" resource="0" file="Source/MixerComponent.h"/>
-      <FILE id="SLF001" name="StudioLookAndFeel.h" compile="0" resource="0" file="Source/StudioLookAndFeel.h"/>
-      <FILE id="LPad01" name="LaunchpadComponent.h" compile="0" resource="0" file="Source/LaunchpadComponent.h"/>
-      <FILE id="TPCtrl" name="TrackpadController.h" compile="0" resource="0" file="Source/TrackpadController.h"/>
-      <FILE id="TPImpl" name="TrackpadController.mm" compile="1" resource="0" file="Source/TrackpadController.mm"/>
+      <FILE id="PRoll1" name="PianoRollComponent.h" compile="0" resource="0"
+            file="Source/PianoRollComponent.h"/>
+      <FILE id="MixC01" name="MixerComponent.h" compile="0" resource="0"
+            file="Source/MixerComponent.h"/>
+      <FILE id="SLF001" name="StudioLookAndFeel.h" compile="0" resource="0"
+            file="Source/StudioLookAndFeel.h"/>
+      <FILE id="LPad01" name="LaunchpadComponent.h" compile="0" resource="0"
+            file="Source/LaunchpadComponent.h"/>
+      <FILE id="TPCtrl" name="TrackpadController.h" compile="0" resource="0"
+            file="Source/TrackpadController.h"/>
+      <FILE id="TPImpl" name="TrackpadController.mm" compile="1" resource="0"
+            file="Source/TrackpadController.mm"/>
       <FILE id="Syn001" name="SynthEngine.h" compile="0" resource="0" file="Source/SynthEngine.h"/>
       <FILE id="FXP001" name="FXProcessor.h" compile="0" resource="0" file="Source/FXProcessor.h"/>
-      <FILE id="SynE01" name="SynthEditorComponent.h" compile="0" resource="0" file="Source/SynthEditorComponent.h"/>
-      <FILE id="FXE001" name="FXEditorComponent.h" compile="0" resource="0" file="Source/FXEditorComponent.h"/>
+      <FILE id="SynE01" name="SynthEditorComponent.h" compile="0" resource="0"
+            file="Source/SynthEditorComponent.h"/>
+      <FILE id="FXE001" name="FXEditorComponent.h" compile="0" resource="0"
+            file="Source/FXEditorComponent.h"/>
       <FILE id="PD0001" name="PitchDetector.h" compile="0" resource="0" file="Source/PitchDetector.h"/>
-      <FILE id="PSL001" name="PSOLAPitchShifter.h" compile="0" resource="0" file="Source/PSOLAPitchShifter.h"/>
-      <FILE id="ATP001" name="AutoTuneProcessor.h" compile="0" resource="0" file="Source/AutoTuneProcessor.h"/>
-      <FILE id="ATP002" name="AutoTuneProcessor.cpp" compile="1" resource="0" file="Source/AutoTuneProcessor.cpp"/>
-      <FILE id="ATE001" name="AutoTuneEditorComponent.h" compile="0" resource="0" file="Source/AutoTuneEditorComponent.h"/>
+      <FILE id="PSL001" name="PSOLAPitchShifter.h" compile="0" resource="0"
+            file="Source/PSOLAPitchShifter.h"/>
+      <FILE id="ATP001" name="AutoTuneProcessor.h" compile="0" resource="0"
+            file="Source/AutoTuneProcessor.h"/>
+      <FILE id="ATP002" name="AutoTuneProcessor.cpp" compile="1" resource="0"
+            file="Source/AutoTuneProcessor.cpp"/>
+      <FILE id="ATE001" name="AutoTuneEditorComponent.h" compile="0" resource="0"
+            file="Source/AutoTuneEditorComponent.h"/>
       <FILE id="PMgr01" name="PluginManager.h" compile="0" resource="0" file="Source/PluginManager.h"/>
-      <FILE id="PMgr02" name="PluginManager.cpp" compile="1" resource="0" file="Source/PluginManager.cpp"/>
-      <FILE id="PBrw01" name="PluginBrowserComponent.h" compile="0" resource="0" file="Source/PluginBrowserComponent.h"/>
+      <FILE id="PMgr02" name="PluginManager.cpp" compile="1" resource="0"
+            file="Source/PluginManager.cpp"/>
+      <FILE id="PBrw01" name="PluginBrowserComponent.h" compile="0" resource="0"
+            file="Source/PluginBrowserComponent.h"/>
     </GROUP>
     <GROUP id="{F0N7S001-A000-0000-0000-000000000001}" name="Resources">
       <FILE id="FNT0001" name="JetBrainsMono-Regular.ttf" compile="0" resource="1"
@@ -79,11 +95,13 @@
   </MODULES>
   <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_PLUGINHOST_AU="1" JUCE_PLUGINHOST_VST3="1"/>
   <EXPORTFORMATS>
-    <XCODE_MAC targetFolder="Builds/MacOSX" microphonePermissionNeeded="1"
-              microphonePermissionsText="XitgeS needs microphone access to record audio.">
+    <XCODE_MAC targetFolder="Builds/MacOSX" microphonePermissionNeeded="1" microphonePermissionsText="XitgeS needs microphone access to record audio."
+               externalLibraries="rubberband">
       <CONFIGURATIONS>
-        <CONFIGURATION isDebug="1" name="Debug" targetName="XitgeS" headerPath="$(SOURCE_ROOT)/Source $(SOURCE_ROOT)/Source/Audio /opt/homebrew/include" libraryPath="/opt/homebrew/lib" extraLinkerFlags="-lrubberband -F/System/Library/PrivateFrameworks -framework MultitouchSupport"/>
-        <CONFIGURATION isDebug="0" name="Release" targetName="XitgeS" headerPath="$(SOURCE_ROOT)/Source $(SOURCE_ROOT)/Source/Audio /opt/homebrew/include" libraryPath="/opt/homebrew/lib" extraLinkerFlags="-lrubberband -F/System/Library/PrivateFrameworks -framework MultitouchSupport"/>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="XitgeS" headerPath="/usr/local/include"
+                       libraryPath="/usr/local/lib" extraLinkerFlags="-lrubberband -F/System/Library/PrivateFrameworks -framework MultitouchSupport"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="XitgeS" headerPath="/usr/local/include"
+                       libraryPath="/usr/local/lib" extraLinkerFlags="-lrubberband -F/System/Library/PrivateFrameworks -framework MultitouchSupport"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
         <MODULEPATH id="juce_audio_basics" path="../../Documents/JUCE/modules"/>
