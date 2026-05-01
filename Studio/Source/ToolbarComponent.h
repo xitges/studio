@@ -143,6 +143,7 @@ public:
     void sliderValueChanged(juce::Slider*) override;
     void comboBoxChanged(juce::ComboBox*) override;
     void timerCallback() override;
+    void mouseDoubleClick(const juce::MouseEvent&) override;
 
     bool     isPlaying()   const { return playing; }
     PlayMode getPlayMode() const { return playMode; }
@@ -262,6 +263,29 @@ private:
     
     juce::Slider     bpmSlider;
     juce::Label      bpmLabel;
+
+    // Drag + double-click handler on bpmLabel (replaces the invisible slider approach)
+    struct BpmLabelHandler : juce::MouseListener
+    {
+        ToolbarComponent& owner;
+        int lastY = 0;
+        explicit BpmLabelHandler(ToolbarComponent& o) : owner(o) {}
+
+        void mouseDown(const juce::MouseEvent& e) override { lastY = e.y; }
+
+        void mouseDrag(const juce::MouseEvent& e) override
+        {
+            const int delta = lastY - e.y;
+            lastY = e.y;
+            const double newVal = juce::jlimit(60.0, 200.0,
+                                               owner.bpmSlider.getValue() + delta * 0.5);
+            owner.bpmSlider.setValue(newVal, juce::dontSendNotification);
+            owner.bpmLabel.setText(juce::String(newVal, 1), juce::dontSendNotification);
+            if (owner.onBPMChanged) owner.onBPMChanged(newVal);
+        }
+
+        void mouseDoubleClick(const juce::MouseEvent&) override { owner.bpmLabel.showEditor(); }
+    } bpmLabelHandler_{ *this };
     juce::Label      titleLabel;
     juce::Slider     masterVolSlider;
 

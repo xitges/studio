@@ -39,7 +39,9 @@ namespace SynthEditorHelper
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'JBMono',Monaco,'Courier New',monospace;background:linear-gradient(180deg,var(--chassis),var(--chassis2));color:var(--ink);padding:12px;}
 .topbar{display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap;}
-.section{background:var(--panel);border:1px solid var(--rim);border-radius:7px;margin-bottom:10px;overflow:hidden;}
+.section{background:var(--panel);border:1px solid var(--rim);border-radius:7px;overflow:hidden;}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start;}
+.col-l,.col-r{display:flex;flex-direction:column;gap:10px;}
 .sec-hdr{display:flex;align-items:center;gap:8px;padding:8px 12px;background:linear-gradient(180deg,var(--chassis),var(--chassis2));border-bottom:1px solid var(--rim);}
 .sec-label{font-size:10px;font-weight:700;letter-spacing:.18em;color:var(--ink-soft);text-transform:uppercase;flex:1;}
 .params{padding:10px 12px;display:flex;flex-direction:column;gap:9px;}
@@ -84,7 +86,11 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
   <button class="btn" id="btn-test" onclick="doTest()">▶ PLAY</button>
 </div>
 
-<!-- OSCILLATOR -->
+<div class="two-col">
+
+<!-- LEFT COLUMN: OSC/SAMPLER · WAVE PREVIEW · ADSR · PHYSICAL MODEL -->
+<div class="col-l">
+
 <div class="section" id="sec-osc">
   <div class="sec-hdr"><span class="sec-label">OSCILLATOR</span></div>
   <div class="params">
@@ -107,7 +113,6 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
   </div>
 </div>
 
-<!-- SAMPLER -->
 <div class="section hidden" id="sec-sampler">
   <div class="sec-hdr"><span class="sec-label">SAMPLER</span></div>
   <div class="params">
@@ -138,7 +143,6 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
   </div>
 </div>
 
-<!-- WAVE PREVIEW -->
 <div class="section">
   <div class="sec-hdr"><span class="sec-label" id="canvas-lbl">WAVE PREVIEW</span></div>
   <div class="params" style="padding:8px;">
@@ -146,35 +150,6 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
   </div>
 </div>
 
-<!-- AUTO PATCH -->
-<div class="section">
-  <div class="sec-hdr">
-    <span class="sec-label">AUTO PATCH</span>
-    <button class="toggle" id="btn-ddsp" onclick="togParam('ddspEnabled','btn-ddsp')">OFF</button>
-  </div>
-  <div class="params">
-    <div class="row"><span class="plabel">BLEND</span><input type="range" id="ddspAmount" min="0" max="1" step="0.01" value="0" oninput="emit('ddspAmount',+this.value)"><span class="val" id="v-ddspAmount">0.00</span></div>
-    <div class="row"><span class="plabel">BRIGHTNESS</span><input type="range" id="ddspBrightness" min="0" max="1" step="0.01" value="0.5" oninput="emit('ddspBrightness',+this.value)"><span class="val" id="v-ddspBrightness">0.50</span></div>
-    <div class="row"><span class="plabel">MOTION</span><input type="range" id="ddspMotion" min="0" max="1" step="0.01" value="0.25" oninput="emit('ddspMotion',+this.value)"><span class="val" id="v-ddspMotion">0.25</span></div>
-  </div>
-</div>
-
-<!-- UNISON -->
-<div class="section">
-  <div class="sec-hdr"><span class="sec-label">UNISON</span></div>
-  <div class="params">
-    <div class="row">
-      <span class="plabel">VOICES</span>
-      <div class="incr"><button onclick="adjVoices(-1)">-</button><span id="v-unisonVoices">1</span><button onclick="adjVoices(1)">+</button></div>
-      <span></span>
-    </div>
-    <div class="row"><span class="plabel">DETUNE</span><input type="range" id="unisonDetune" min="0" max="100" step="0.1" value="0" oninput="emit('unisonDetune',+this.value)"><span class="val" id="v-unisonDetune">0.0 ct</span></div>
-    <div class="row"><span class="plabel">SPREAD</span><input type="range" id="unisonSpread" min="0" max="1" step="0.01" value="0.5" oninput="emit('unisonSpread',+this.value)"><span class="val" id="v-unisonSpread">0.50</span></div>
-    <div class="row"><span class="plabel">DRIFT</span><input type="range" id="driftDepth" min="0" max="1" step="0.01" value="0.3" oninput="emit('driftDepth',+this.value)"><span class="val" id="v-driftDepth">0.30</span></div>
-  </div>
-</div>
-
-<!-- ADSR -->
 <div class="section">
   <div class="sec-hdr"><span class="sec-label">ADSR ENVELOPE</span></div>
   <div class="params">
@@ -186,7 +161,34 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
   </div>
 </div>
 
-<!-- FILTER -->
+<div class="section hidden" id="sec-pluck">
+  <div class="sec-hdr"><span class="sec-label">PHYSICAL MODEL — PLUCKED</span></div>
+  <div class="params">
+    <div class="row"><span class="plabel">DAMPING</span><input type="range" id="ksDamping" min="0" max="0.8" step="0.01" value="0.15" oninput="emit('ksDamping',+this.value)"><span class="val" id="v-ksDamping">0.15</span></div>
+    <div class="row"><span class="plabel">DECAY</span><input type="range" id="ksDecay" min="0.99" max="1" step="0.0001" value="0.9985" oninput="emit('ksDecay',+this.value)"><span class="val" id="v-ksDecay">0.9985</span></div>
+    <div class="row"><span class="plabel">STIFFNESS</span><input type="range" id="ksStiffness" min="0" max="0.8" step="0.01" value="0.3" oninput="emit('ksStiffness',+this.value)"><span class="val" id="v-ksStiffness">0.30</span></div>
+    <div class="row"><span class="plabel">BRIGHTNESS</span><input type="range" id="ksBrightness" min="1000" max="16000" step="100" value="8000" oninput="emit('ksBrightness',+this.value)"><span class="val" id="v-ksBrightness">8000</span></div>
+    <div class="row"><span class="plabel">PLUCK POS</span><input type="range" id="ksPluckPos" min="0.02" max="0.5" step="0.01" value="0.1" oninput="emit('ksPluckPos',+this.value)"><span class="val" id="v-ksPluckPos">0.10</span></div>
+    <div class="row"><span class="plabel">BODY FREQ</span><input type="range" id="ksBodyFreq" min="60" max="400" step="1" value="180" oninput="emit('ksBodyFreq',+this.value)"><span class="val" id="v-ksBodyFreq">180</span></div>
+    <div class="row"><span class="plabel">BODY AMT</span><input type="range" id="ksBodyAmount" min="0" max="0.6" step="0.01" value="0.25" oninput="emit('ksBodyAmount',+this.value)"><span class="val" id="v-ksBodyAmount">0.25</span></div>
+  </div>
+</div>
+
+<div class="section hidden" id="sec-wind">
+  <div class="sec-hdr"><span class="sec-label">PHYSICAL MODEL — WIND</span></div>
+  <div class="params">
+    <div class="row"><span class="plabel">BREATH</span><input type="range" id="windBreathPressure" min="0.1" max="1" step="0.01" value="0.5" oninput="emit('windBreathPressure',+this.value)"><span class="val" id="v-windBreathPressure">0.50</span></div>
+    <div class="row"><span class="plabel">REED STIFF</span><input type="range" id="windReedStiffness" min="0.1" max="1" step="0.01" value="0.7" oninput="emit('windReedStiffness',+this.value)"><span class="val" id="v-windReedStiffness">0.70</span></div>
+    <div class="row"><span class="plabel">BORE LOSS</span><input type="range" id="windBoreLoss" min="0.01" max="0.5" step="0.01" value="0.15" oninput="emit('windBoreLoss',+this.value)"><span class="val" id="v-windBoreLoss">0.15</span></div>
+    <div class="row"><span class="plabel">BREATH NOISE</span><input type="range" id="windNoiseAmount" min="0" max="0.2" step="0.005" value="0.03" oninput="emit('windNoiseAmount',+this.value)"><span class="val" id="v-windNoiseAmount">0.030</span></div>
+  </div>
+</div>
+
+</div><!-- /col-l -->
+
+<!-- RIGHT COLUMN: FILTER · UNISON · LFO · AUTO PATCH -->
+<div class="col-r">
+
 <div class="section">
   <div class="sec-hdr"><span class="sec-label">FILTER</span></div>
   <div class="params">
@@ -206,7 +208,20 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
   </div>
 </div>
 
-<!-- LFO -->
+<div class="section">
+  <div class="sec-hdr"><span class="sec-label">UNISON</span></div>
+  <div class="params">
+    <div class="row">
+      <span class="plabel">VOICES</span>
+      <div class="incr"><button onclick="adjVoices(-1)">-</button><span id="v-unisonVoices">1</span><button onclick="adjVoices(1)">+</button></div>
+      <span></span>
+    </div>
+    <div class="row"><span class="plabel">DETUNE</span><input type="range" id="unisonDetune" min="0" max="100" step="0.1" value="0" oninput="emit('unisonDetune',+this.value)"><span class="val" id="v-unisonDetune">0.0 ct</span></div>
+    <div class="row"><span class="plabel">SPREAD</span><input type="range" id="unisonSpread" min="0" max="1" step="0.01" value="0.5" oninput="emit('unisonSpread',+this.value)"><span class="val" id="v-unisonSpread">0.50</span></div>
+    <div class="row"><span class="plabel">DRIFT</span><input type="range" id="driftDepth" min="0" max="1" step="0.01" value="0.3" oninput="emit('driftDepth',+this.value)"><span class="val" id="v-driftDepth">0.30</span></div>
+  </div>
+</div>
+
 <div class="section">
   <div class="sec-hdr"><span class="sec-label">LFO</span></div>
   <div class="params">
@@ -230,30 +245,20 @@ canvas{display:block;width:100%;background:var(--display-bg);border-radius:4px;}
   </div>
 </div>
 
-<!-- PHYSICAL MODEL — PLUCKED -->
-<div class="section hidden" id="sec-pluck">
-  <div class="sec-hdr"><span class="sec-label">PHYSICAL MODEL — PLUCKED</span></div>
+<div class="section">
+  <div class="sec-hdr">
+    <span class="sec-label">AUTO PATCH</span>
+    <button class="toggle" id="btn-ddsp" onclick="togParam('ddspEnabled','btn-ddsp')">OFF</button>
+  </div>
   <div class="params">
-    <div class="row"><span class="plabel">DAMPING</span><input type="range" id="ksDamping" min="0" max="0.8" step="0.01" value="0.15" oninput="emit('ksDamping',+this.value)"><span class="val" id="v-ksDamping">0.15</span></div>
-    <div class="row"><span class="plabel">DECAY</span><input type="range" id="ksDecay" min="0.99" max="1" step="0.0001" value="0.9985" oninput="emit('ksDecay',+this.value)"><span class="val" id="v-ksDecay">0.9985</span></div>
-    <div class="row"><span class="plabel">STIFFNESS</span><input type="range" id="ksStiffness" min="0" max="0.8" step="0.01" value="0.3" oninput="emit('ksStiffness',+this.value)"><span class="val" id="v-ksStiffness">0.30</span></div>
-    <div class="row"><span class="plabel">BRIGHTNESS</span><input type="range" id="ksBrightness" min="1000" max="16000" step="100" value="8000" oninput="emit('ksBrightness',+this.value)"><span class="val" id="v-ksBrightness">8000</span></div>
-    <div class="row"><span class="plabel">PLUCK POS</span><input type="range" id="ksPluckPos" min="0.02" max="0.5" step="0.01" value="0.1" oninput="emit('ksPluckPos',+this.value)"><span class="val" id="v-ksPluckPos">0.10</span></div>
-    <div class="row"><span class="plabel">BODY FREQ</span><input type="range" id="ksBodyFreq" min="60" max="400" step="1" value="180" oninput="emit('ksBodyFreq',+this.value)"><span class="val" id="v-ksBodyFreq">180</span></div>
-    <div class="row"><span class="plabel">BODY AMT</span><input type="range" id="ksBodyAmount" min="0" max="0.6" step="0.01" value="0.25" oninput="emit('ksBodyAmount',+this.value)"><span class="val" id="v-ksBodyAmount">0.25</span></div>
+    <div class="row"><span class="plabel">BLEND</span><input type="range" id="ddspAmount" min="0" max="1" step="0.01" value="0" oninput="emit('ddspAmount',+this.value)"><span class="val" id="v-ddspAmount">0.00</span></div>
+    <div class="row"><span class="plabel">BRIGHTNESS</span><input type="range" id="ddspBrightness" min="0" max="1" step="0.01" value="0.5" oninput="emit('ddspBrightness',+this.value)"><span class="val" id="v-ddspBrightness">0.50</span></div>
+    <div class="row"><span class="plabel">MOTION</span><input type="range" id="ddspMotion" min="0" max="1" step="0.01" value="0.25" oninput="emit('ddspMotion',+this.value)"><span class="val" id="v-ddspMotion">0.25</span></div>
   </div>
 </div>
 
-<!-- PHYSICAL MODEL — WIND -->
-<div class="section hidden" id="sec-wind">
-  <div class="sec-hdr"><span class="sec-label">PHYSICAL MODEL — WIND</span></div>
-  <div class="params">
-    <div class="row"><span class="plabel">BREATH</span><input type="range" id="windBreathPressure" min="0.1" max="1" step="0.01" value="0.5" oninput="emit('windBreathPressure',+this.value)"><span class="val" id="v-windBreathPressure">0.50</span></div>
-    <div class="row"><span class="plabel">REED STIFF</span><input type="range" id="windReedStiffness" min="0.1" max="1" step="0.01" value="0.7" oninput="emit('windReedStiffness',+this.value)"><span class="val" id="v-windReedStiffness">0.70</span></div>
-    <div class="row"><span class="plabel">BORE LOSS</span><input type="range" id="windBoreLoss" min="0.01" max="0.5" step="0.01" value="0.15" oninput="emit('windBoreLoss',+this.value)"><span class="val" id="v-windBoreLoss">0.15</span></div>
-    <div class="row"><span class="plabel">BREATH NOISE</span><input type="range" id="windNoiseAmount" min="0" max="0.2" step="0.005" value="0.03" oninput="emit('windNoiseAmount',+this.value)"><span class="val" id="v-windNoiseAmount">0.030</span></div>
-  </div>
-</div>
+</div><!-- /col-r -->
+</div><!-- /two-col -->
 
 <script>
 let _cppLoading = false;
@@ -963,7 +968,7 @@ public:
         setUsingNativeTitleBar(true);
     }
 
-    void setChannelName(const juce::String& name) { setName(juce::String::fromUTF8("Synth  \xe2\x80\x94  ") + name); }
+    void setChannelName(const juce::String& name) { setName(juce::String::fromUTF8("Synthee  \xe2\x80\x94  ") + name); }
     void closeButtonPressed() override { setVisible(false); }
 
 private:

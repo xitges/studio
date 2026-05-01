@@ -185,6 +185,94 @@ MainComponent::MainComponent()
         }
     };
 
+    instrumentPanel_.onPreviewRequested = [this](const SynthParams& params, int midiPitch)
+    {
+        const int ch = audioEngine.getMidiTargetChannel();
+        if (ch >= 0 && ch < 16)
+            audioEngine.previewSynthNote(ch, midiPitch, params);
+    };
+
+    instrumentPanel_.onStopPreviewRequested = [this]
+    {
+        const int ch = audioEngine.getMidiTargetChannel();
+        if (ch >= 0 && ch < 16)
+            audioEngine.stopEditorPreview(ch);
+    };
+
+    instrumentPanel_.onIsPreviewActive = [this]() -> bool
+    {
+        const int ch = audioEngine.getMidiTargetChannel();
+        return ch >= 0 && ch < 16 && audioEngine.isEditorPreviewActive(ch);
+    };
+
+    instrumentPanel_.onDrumPreview = [this]
+    {
+        const int ch = audioEngine.getMidiTargetChannel();
+        if (ch >= 0 && ch < 16)
+            audioEngine.previewNote(ch, 60);
+    };
+
+    instrumentPanel_.onSavePresetRequested = [this](const SynthParams& params)
+    {
+        auto dialog = std::make_shared<juce::AlertWindow>("Save Synth Preset",
+                                                          "Enter a preset name for the current synth settings.",
+                                                          juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor("name", "My Preset");
+        dialog->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        dialog->addButton("Cancel", 0);
+        auto* dlgRaw = dialog.get();
+        dlgRaw->enterModalState(true, juce::ModalCallbackFunction::create(
+            [this, dialog, params](int result) mutable
+            {
+                if (result != 1) return;
+                const auto name = dialog->getTextEditorContents("name").trim();
+                if (name.isEmpty()) return;
+                SynthPresets::Preset pr; pr.name = name; pr.params = params;
+                project.customSynthPresets.push_back(pr);
+                markDirty();
+                const juce::String sel = name;
+                refreshSynthEditorPresetList(sel);
+                instrumentPanel_.setAvailablePresets(
+                    SynthPresets::mergeFactoryAndCustom(project.customSynthPresets), sel);
+            }), true);
+    };
+
+    instrumentPanel_.onRenamePresetRequested = [this](const juce::String& oldName)
+    {
+        auto dialog = std::make_shared<juce::AlertWindow>("Rename Preset",
+                                                          "New name for: " + oldName,
+                                                          juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor("name", oldName);
+        dialog->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        dialog->addButton("Cancel", 0);
+        auto* dlgRaw = dialog.get();
+        dlgRaw->enterModalState(true, juce::ModalCallbackFunction::create(
+            [this, dialog, oldName](int result) mutable
+            {
+                if (result != 1) return;
+                const auto newName = dialog->getTextEditorContents("name").trim();
+                if (newName.isEmpty()) return;
+                for (auto& p : project.customSynthPresets)
+                    if (p.name == oldName) { p.name = newName; break; }
+                markDirty();
+                refreshSynthEditorPresetList(newName);
+                instrumentPanel_.setAvailablePresets(
+                    SynthPresets::mergeFactoryAndCustom(project.customSynthPresets), newName);
+            }), true);
+    };
+
+    instrumentPanel_.onDeletePresetRequested = [this](const juce::String& name)
+    {
+        project.customSynthPresets.erase(
+            std::remove_if(project.customSynthPresets.begin(), project.customSynthPresets.end(),
+                           [&](const SynthPresets::Preset& p) { return p.name == name; }),
+            project.customSynthPresets.end());
+        markDirty();
+        refreshSynthEditorPresetList();
+        instrumentPanel_.setAvailablePresets(
+            SynthPresets::mergeFactoryAndCustom(project.customSynthPresets));
+    };
+
     inspectorTabBar_.onTabChanged = [this](int t)
     {
         inspectorTab_ = t;
@@ -202,10 +290,21 @@ MainComponent::MainComponent()
 
     // Initialise instrument panel with channel 0
     if (!project.patterns.empty())
+    {
+        const bool hp0 = audioEngine.hasPlugin(0);
+        const auto& pat0 = project.patterns[0];
         instrumentPanel_.setChannel(0, channelRack.getChannelName(0),
-                                    project.patterns[0].samplePaths[0],
-                                    project.patterns[0].synthParams[0],
-                                    project.patterns[0].channelPitch[0]);
+                                    pat0.samplePaths[0],
+                                    pat0.synthParams[0],
+                                    pat0.channelPitch[0],
+                                    pat0.channelTypes[0],
+                                    hp0,
+                                    hp0 ? audioEngine.getPlugin(0)->getName() : juce::String{});
+        if (pat0.channelTypes[0] == ChannelType::Melodic && !hp0)
+            instrumentPanel_.setAvailablePresets(
+                SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
+                pat0.synthParams[0].presetName);
+    }
 
     toolbar.onPlay = [this]
     {
@@ -711,13 +810,17 @@ MainComponent::MainComponent()
                 inspectorTabBar_.repaint();
                 
                 // 4. 메인 화면의 인스트러먼트 패널 (파형 및 헤더) 즉시 새로고침
-                instrumentPanel_.setChannel(
-                    ch,
-                    newName,
-                    pat->samplePaths[ch],
-                    pat->synthParams[ch],
-                    pat->channelPitch[ch] // 튠 값 전달
-                );
+                {
+                    const bool hp = audioEngine.hasPlugin(ch);
+                    instrumentPanel_.setChannel(
+                        ch, newName,
+                        pat->samplePaths[ch],
+                        pat->synthParams[ch],
+                        pat->channelPitch[ch],
+                        pat->channelTypes[(size_t)ch],
+                        hp,
+                        hp ? audioEngine.getPlugin(ch)->getName() : juce::String{});
+                }
             }
                 
         
@@ -735,9 +838,17 @@ MainComponent::MainComponent()
         if (auto* pat = findPattern(activePatternId))
         {
             const juce::String samplePath = pat->samplePaths[(size_t)ch];
+            const bool hp = audioEngine.hasPlugin(ch);
             instrumentPanel_.setChannel(ch, channelRack.getChannelName(ch),
                                         samplePath, pat->synthParams[(size_t)ch],
-                                        pat->channelPitch[(size_t)ch]);
+                                        pat->channelPitch[(size_t)ch],
+                                        pat->channelTypes[(size_t)ch],
+                                        hp,
+                                        hp ? audioEngine.getPlugin(ch)->getName() : juce::String{});
+            if (pat->channelTypes[(size_t)ch] == ChannelType::Melodic && !hp)
+                instrumentPanel_.setAvailablePresets(
+                    SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
+                    pat->synthParams[(size_t)ch].presetName);
         }
     };
 
@@ -1440,7 +1551,55 @@ MainComponent::MainComponent()
     channelRack.onChannelTypeChanged = [this](int ch, ChannelType t)
     {
         if (auto* pat = findPattern(activePatternId))
+        {
             pat->channelTypes[ch] = t;
+
+            juce::String newName;
+            if (t == ChannelType::Melodic)
+            {
+                // Save the current name so we can restore it if the user reverts to Drum
+                preTypeChangeName_[(size_t)ch] = pat->channelNames[ch];
+
+                int melIdx = 0;
+                for (int i = 0; i <= ch && i < Pattern::kMaxChannels; ++i)
+                    if (pat->channelTypes[i] == ChannelType::Melodic)
+                        ++melIdx;
+
+                newName = "Mel " + juce::String(melIdx);
+            }
+            else  // reverting to Drum
+            {
+                newName = preTypeChangeName_[(size_t)ch].isNotEmpty()
+                          ? preTypeChangeName_[(size_t)ch]
+                          : "Channel " + juce::String(ch + 1);
+                preTypeChangeName_[(size_t)ch] = {};
+            }
+
+            pat->channelNames[ch] = newName;
+            channelRack.setChannelName(ch, newName);
+
+            const int displayedCh = audioEngine.getMidiTargetChannel();
+            if (displayedCh == ch || displayedCh < 0)
+                inspectorTabBar_.setInstrumentSub(ch, newName);
+
+            // Refresh instrument panel if this is the channel currently displayed
+            if (ch == juce::jmax(0, displayedCh))
+            {
+                const bool hp = audioEngine.hasPlugin(ch);
+                instrumentPanel_.setChannel(ch, newName,
+                                            pat->samplePaths[(size_t)ch],
+                                            pat->synthParams[(size_t)ch],
+                                            pat->channelPitch[(size_t)ch],
+                                            t,
+                                            hp,
+                                            hp ? audioEngine.getPlugin(ch)->getName() : juce::String{});
+                if (t == ChannelType::Melodic && !hp)
+                    instrumentPanel_.setAvailablePresets(
+                        SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
+                        pat->synthParams[(size_t)ch].presetName);
+                resized();
+            }
+        }
         channelRack.setChannelType(ch, t);
         markDirty();
     };
@@ -1482,7 +1641,7 @@ MainComponent::MainComponent()
         if (synthEditorWindow == nullptr)
         {
             synthEditorWindow = std::make_unique<SynthEditorWindow>();
-            synthEditorWindow->centreWithSize(470, 690);
+            synthEditorWindow->centreWithSize(700, 790);
         }
 
         synthEditorWindow->setChannelName(
@@ -1752,6 +1911,25 @@ MainComponent::MainComponent()
         channelRack.setChannelHasPlugin(ch, false);
         audioEngine.updatePatternSnapshot();
         markDirty();
+    };
+
+    // Instrument panel "Open VST Editor" button
+    instrumentPanel_.onOpenPluginEditor = [this]
+    {
+        const int ch = audioEngine.getMidiTargetChannel();
+        auto* plugin = audioEngine.getPlugin(ch);
+        if (plugin == nullptr) return;
+
+        if (pluginEditorWindows[(size_t)ch] != nullptr
+            && pluginEditorWindows[(size_t)ch]->isVisible())
+        {
+            pluginEditorWindows[(size_t)ch]->toFront(true);
+            return;
+        }
+
+        pluginEditorWindows[(size_t)ch] =
+            std::make_unique<PluginEditorWindow>(*plugin, ch);
+        pluginEditorWindows[(size_t)ch]->setVisible(true);
     };
 
     // Phase 3 -- channel mixer routing
@@ -3043,9 +3221,19 @@ void MainComponent::reloadProjectIntoUI()
 
     // Refresh instrument panel (channel 0 default)
     if (auto* pat = findPattern(activePatternId))
+    {
+        const bool hp0 = audioEngine.hasPlugin(0);
         instrumentPanel_.setChannel(0, channelRack.getChannelName(0),
                                     pat->samplePaths[0], pat->synthParams[0],
-                                    pat->channelPitch[0]);
+                                    pat->channelPitch[0],
+                                    pat->channelTypes[0],
+                                    hp0,
+                                    hp0 ? audioEngine.getPlugin(0)->getName() : juce::String{});
+        if (pat->channelTypes[0] == ChannelType::Melodic && !hp0)
+            instrumentPanel_.setAvailablePresets(
+                SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
+                pat->synthParams[0].presetName);
+    }
 }
 
 void MainComponent::newProject()

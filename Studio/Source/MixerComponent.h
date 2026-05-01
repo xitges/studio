@@ -20,8 +20,14 @@ public:
     static juce::Colour stripColor(int t)
     {
         static const juce::uint32 pal[] = {
-            0xffd8412a, 0xffe89c2b, 0xfff0c14a, 0xff7ab87a,
-            0xff3da356, 0xff5fa8d8, 0xff2cd4d4, 0xff7a8fe0
+            0xffe89ba0, // Soft Coral
+            0xffe89ba0, // Soft Coral
+            0xffe89ba0, // Soft Coral
+            0xffe89ba0, // Soft Coral
+            0xffe89ba0, // Soft Coral
+            0xffe89ba0, // Soft Coral
+            0xffe89ba0, // Soft Coral
+            0xffe89ba0, // Soft Coral
         };
         return t < numTracks ? juce::Colour(pal[t]) : juce::Colour(0xffd8412a);
     }

@@ -374,28 +374,53 @@ private:
 // =========================================================================
 // Instrument Panel — shown when INSTRUMENT (tab 0) is active
 //
-// Layout:
-//   Left col (kLeftW): OSC1 waveform frame (top) + OSC2 waveform frame (below)
-//   Right col         : OSCILLATORS / FILTER / ENVELOPE sections with sliders
+// Three modes driven by channel type:
+//   Drum     → sample waveform + filter/envelope sliders
+//   MelSynth → synth wave shape + full synth params
+//   MelVst   → plugin info card + open-editor button
+//
+// Left col (kLeftW): OSC 1 (original) + OSC 2 (parameter-modified)
+// Right col        : mode-specific control sections
 // =========================================================================
 class InstrumentPanel : public juce::Component
 {
 public:
-    std::function<void(float semitones)>    onTuneChanged;
-    std::function<void(const SynthParams&)> onSynthParamsChanged;
+    enum class PanelMode { Drum, MelSynth, MelVst };
+
+    std::function<void(float semitones)>         onTuneChanged;
+    std::function<void(const SynthParams&)>      onSynthParamsChanged;
+    std::function<void()>                        onOpenPluginEditor;
+    std::function<void(const SynthParams&, int)> onPreviewRequested;
+    std::function<void()>                        onStopPreviewRequested;
+    std::function<bool()>                        onIsPreviewActive;
+    std::function<void()>                        onDrumPreview;
+    std::function<void(const SynthParams&)>      onSavePresetRequested;
+    std::function<void(const juce::String&)>     onRenamePresetRequested;
+    std::function<void(const juce::String&)>     onDeletePresetRequested;
+
+    void setAvailablePresets(const std::vector<SynthPresets::Preset>& presets,
+                             const juce::String& selectName = {})
+    {
+        synthPanel_.setAvailablePresets(presets, selectName);
+    }
 
     InstrumentPanel()
     {
-        // ---- Wave-select buttons (OSC 2 synth waveform) ----
-        static const char* kWaveLbls[]  = { "SINE", "SAW", "SQ", "TRI", "NOISE" };
-        static const int   kWaveIdx[]   = { 0, 1, 2, 3, 5 };
+        // ---- Wave-select buttons (MelSynth only) ----
+        static const char* kWaveLbls[] = { "SINE", "SAW", "SQ", "TRI", "NOISE" };
+        static const int   kWaveIdx[]  = { 0, 1, 2, 3, 5 };
         for (int i = 0; i < 5; ++i)
         {
             waveButtons_[i].setButtonText(kWaveLbls[i]);
             waveButtons_[i].setClickingTogglesState(false);
             waveButtons_[i].onClick = [this, wi = kWaveIdx[i]] { setWaveform(wi); };
-            addAndMakeVisible(waveButtons_[i]);
+            addChildComponent(waveButtons_[i]);
         }
+
+        // ---- Open VST editor button (MelVst only) ----
+        openVstBtn_.setButtonText("OPEN VST EDITOR");
+        openVstBtn_.onClick = [this] { if (onOpenPluginEditor) onOpenPluginEditor(); };
+        addChildComponent(openVstBtn_);
 
         // ---- Filter type buttons (LP / BP / HP) ----
         static const char* kFiltLbls[] = { "LP", "BP", "HP" };
@@ -435,7 +460,12 @@ public:
             tune_ = (float)tuneSlider_.getValue();
             if (onTuneChanged) onTuneChanged(tune_);
         };
-        auto synthCb = [this] { pullSynthParams(); if (onSynthParamsChanged) onSynthParamsChanged(synthParams_); };
+        auto synthCb = [this] {
+            pullSynthParams();
+            computeModifiedWaveform();
+            repaint();
+            if (onSynthParamsChanged) onSynthParamsChanged(synthParams_);
+        };
         detSlider_.onValueChange = driveSlider_.onValueChange =
         cutoffSlider_.onValueChange = resSlider_.onValueChange =
         envAmtSlider_.onValueChange = attackSlider_.onValueChange =
@@ -443,26 +473,63 @@ public:
         releaseSlider_.onValueChange = synthCb;
 
         formatManager_.registerBasicFormats();
+
+        // ---- SynthEditorPanel (MelSynth mode) ----
+        synthPanel_.onParamsChanged = [this] {
+            synthPanel_.applyToParams(synthParams_);
+            if (onSynthParamsChanged) onSynthParamsChanged(synthParams_);
+        };
+        synthPanel_.onPreviewRequested     = [this](const SynthParams& p, int n) { if (onPreviewRequested)     onPreviewRequested(p, n); };
+        synthPanel_.onStopPreviewRequested = [this]                               { if (onStopPreviewRequested) onStopPreviewRequested(); };
+        synthPanel_.onIsPreviewActive      = [this]() -> bool                     { return onIsPreviewActive ? onIsPreviewActive() : false; };
+        synthPanel_.onSavePresetRequested  = [this](const SynthParams& p)         { if (onSavePresetRequested)  onSavePresetRequested(p); };
+        synthPanel_.onRenamePresetRequested= [this](const juce::String& s)        { if (onRenamePresetRequested) onRenamePresetRequested(s); };
+        synthPanel_.onDeletePresetRequested= [this](const juce::String& s)        { if (onDeletePresetRequested) onDeletePresetRequested(s); };
+        addChildComponent(synthPanel_);
+
+        // ---- Drum preview button ----
+        previewBtn_.setButtonText("PLAY");
+        previewBtn_.onClick = [this] { if (onDrumPreview) onDrumPreview(); };
+        addChildComponent(previewBtn_);
     }
 
     void setChannel(int ch, const juce::String& name, const juce::String& samplePath,
-                    const SynthParams& sp, float tuneSemitones)
+                    const SynthParams& sp, float tuneSemitones,
+                    ChannelType chType, bool hasPlugin, const juce::String& pluginName = {})
     {
         selectedChannel_ = ch;
         channelName_     = name;
         samplePath_      = samplePath;
         synthParams_     = sp;
         tune_            = tuneSemitones;
-        loadWaveform(samplePath);
+        pluginName_      = pluginName;
+
+        if (chType == ChannelType::Drum)
+            mode_ = PanelMode::Drum;
+        else if (hasPlugin)
+            mode_ = PanelMode::MelVst;
+        else
+            mode_ = PanelMode::MelSynth;
+
+        if (mode_ == PanelMode::Drum)
+            loadWaveform(samplePath);
+        else
+            generateSynthBins();
+
+        computeModifiedWaveform();
         syncControls();
         updateWaveBtnColors();
         updateFiltBtnColors();
+        updateModeVisibility();
+        if (mode_ == PanelMode::MelSynth)
+            synthPanel_.loadParams(sp);
+        resized();
         repaint();
     }
 
     int getNeededHeight() const
     {
-        // header + top-pad + right-column total + bottom-pad
+        if (mode_ == PanelMode::MelSynth) return kHeaderH + 680;
         return kHeaderH + kPadV + rightColumnHeight() + kPadV;
     }
 
@@ -471,130 +538,101 @@ public:
     {
         using LF = StudioLookAndFeel;
         const int W = getWidth();
+        g.fillAll(juce::Colour(0xfff5f5f7u));
 
-        g.fillAll(juce::Colour(0xfffafafa));
+        // ---- Header bar ----
+        g.setColour(juce::Colour(0xffe4e4e8u));
+        g.fillRect(0, 0, W, kHeaderH);
+        g.setColour(juce::Colour(0xffccccd0u));
+        g.drawLine(0.f, (float)kHeaderH - 0.5f, (float)W, (float)kHeaderH - 0.5f, 1.f);
 
-            // =========================================================================
-            // [1] 상단 패널 탭 바 (INSTRUMENT | A · ANALOG POLY) - 높이 22px
-            // =========================================================================
-            g.setColour(juce::Colour(0xfff0f0f0));
-            g.fillRect(0, 0, W, 22);
-            
-            g.setColour(juce::Colour(0xffdcdcdc));
-            g.drawLine(0.0f, 21.5f, (float)W, 21.5f, 1.0f);
+        // Mode badge
+        const char* badge = (mode_ == PanelMode::Drum)    ? "DRUM"
+                          : (mode_ == PanelMode::MelVst)  ? "VST" : "SYNTH";
+        const juce::uint32 badgeCol = (mode_ == PanelMode::Drum)   ? 0xff3a9ad9u
+                                    : (mode_ == PanelMode::MelVst) ? 0xff9977ccu
+                                                                    : 0xff27ae60u;
+        g.setFont(LF::monoFont(7.5f, juce::Font::bold));
+        g.setColour(juce::Colours::white);
+        juce::Rectangle<int> badgeR(10, (kHeaderH - 14) / 2, 34, 14);
+        g.setColour(juce::Colour(badgeCol));
+        g.fillRoundedRectangle(badgeR.toFloat(), 3.0f);
+        g.setColour(juce::Colours::white);
+        g.drawText(badge, badgeR, juce::Justification::centred);
 
-            // Title ("INSTRUMENT")
-            g.setFont(LF::monoFont(9.0f, juce::Font::bold));
-            g.setColour(juce::Colour(LF::kAccent)); // 메인 액센트 컬러
-            g.drawText("INSTRUMENT", 14, 0, 90, 22, juce::Justification::centredLeft);
+        g.setFont(LF::monoFont(11.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xff222230u));
+        g.drawText(channelName_.toUpperCase(), 52, 0, W - 200, kHeaderH,
+                   juce::Justification::centredLeft);
 
-            // Sub ("A · ANALOG POLY")
-            g.setFont(LF::monoFont(8.5f, juce::Font::bold));
-            g.setColour(juce::Colour(0xff888888));
-            g.drawText(juce::String::fromUTF8("A \xc2\xb7 ANALOG POLY"), 94, 0, 200, 22, juce::Justification::centredLeft);
-
-            // =========================================================================
-            // [2] 메인 헤더 타이틀 영역 (POLY-6 mk2 + Segment Display) - 높이 44px
-            // =========================================================================
-        const int hY = 28;
-        const int hH = 44;
-
-        // 1. 메인 타이틀 (채널 이름 사용, 예: "KICK", "SNARE", "TRACK 1")
-        g.setFont(LF::monoFont(16.0f, juce::Font::bold));
-        g.setColour(juce::Colour(0xff222222));
-        g.drawText(channelName_.toUpperCase(), 14, hY + 6, 300, 22, juce::Justification::centredLeft);
-
-        // 2. 서브 타이틀 구성 (샘플 유무에 따라 다르게 표시)
-        juce::String subTitle;
-        if (samplePath_.isNotEmpty())
-        {
-            // 수정됨: fromUTF8로 특수문자를 안전하게 처리
-            subTitle = juce::String::fromUTF8("SAMPLE \xc2\xb7 \"") + juce::File(samplePath_).getFileName() + "\"";
-        }
+        // Sub info (sample name / plugin name / wave type)
+        juce::String sub;
+        if (mode_ == PanelMode::Drum && samplePath_.isNotEmpty())
+            sub = juce::File(samplePath_).getFileName();
+        else if (mode_ == PanelMode::MelVst)
+            sub = pluginName_.isEmpty() ? "plugin loaded" : pluginName_;
         else
         {
-            static const char* kWaveLbls[] = { "SINE", "SAW", "SQUARE", "TRI", "", "NOISE" };
-            int waveIdx = juce::jlimit(0, 5, synthParams_.waveform);
-            // 수정됨: fromUTF8로 특수문자를 안전하게 처리
-            subTitle = juce::String::fromUTF8("SYNTH \xc2\xb7 ") + kWaveLbls[waveIdx];
+            static const char* kWN[] = { "SINE", "SAW", "SQUARE", "TRI", "PULSE", "NOISE", "SUPERSAW" };
+            sub = kWN[juce::jlimit(0, 6, synthParams_.waveform)];
+        }
+        g.setFont(LF::monoFont(8.5f));
+        g.setColour(juce::Colour(0xff888898u));
+        g.drawText(sub, 52, kHeaderH / 2, W - 200, kHeaderH / 2,
+                   juce::Justification::centredLeft, true);
+
+        // ---- OSC frames (left column) — Drum and MelVst only ----
+        // MelSynth uses the embedded SynthEditorPanel which draws its own waveform preview
+        if (mode_ != PanelMode::MelSynth)
+        {
+            const int contentTopY = kHeaderH + kPadV;
+            juce::Rectangle<int> osc1(kPadH, contentTopY, kLeftW, kOscH);
+            juce::Rectangle<int> osc2(kPadH, contentTopY + kOscH + kOscGap, kLeftW, kOscH);
+
+            const juce::String osc1Lbl = (mode_ == PanelMode::MelVst)
+                ? juce::String::fromUTF8("OSC 1  \xe2\x80\x94  VST INPUT")
+                : juce::String::fromUTF8("OSC 1  \xe2\x80\x94  ORIGINAL SAMPLE");
+            const juce::String osc2Lbl = (mode_ == PanelMode::MelVst)
+                ? juce::String::fromUTF8("OSC 2  \xe2\x80\x94  VST OUTPUT")
+                : juce::String::fromUTF8("OSC 2  \xe2\x80\x94  PARAM MODIFIED");
+
+            paintOscFrame(g, osc1, osc1Lbl);
+            paintWaveformBars(g, osc1.reduced(3, 18), wfMin_, wfMax_,
+                              juce::Colour(0xffb9ff66u).withAlpha(0.75f),
+                              mode_ == PanelMode::MelVst ? "PLUGIN ACTIVE" : "NO SAMPLE");
+
+            paintOscFrame(g, osc2, osc2Lbl);
+            paintWaveformBars(g, osc2.reduced(3, 18), wfMinMod_, wfMaxMod_,
+                              juce::Colour(0xff7de8ffu).withAlpha(0.80f),
+                              mode_ == PanelMode::MelVst ? "PLUGIN ACTIVE" : "NO SAMPLE");
         }
 
-        g.setFont(LF::monoFont(9.0f, juce::Font::bold));
-        g.setColour(juce::Colour(0xff888888));
-        g.drawText(subTitle, 14, hY + 26, 300, 14, juce::Justification::centredLeft);
+        // ---- Right column labels (Drum / MelVst only) ----
+        if (mode_ == PanelMode::MelSynth) return; // SynthEditorPanel draws itself
 
-        // =========================================================================
-        // [3] 우측 SegmentDisplay (A4 · 64v)
-        // =========================================================================
-        const int segW = 90;
-        const int segH = 26;
-        const int segX = W - segW - 14;
-        const int segY = hY + (hH - segH) / 2; // 세로 중앙 정렬 (alignItems:"center")
-
-        juce::Rectangle<float> segBox((float)segX, (float)segY, (float)segW, (float)segH);
-        
-        // 디스플레이 배경 (어두운 LCD 느낌)
-        g.setColour(juce::Colour(0xff1a1a20));
-        g.fillRoundedRectangle(segBox, 4.0f);
-        
-        // 디스플레이 테두리 (내부 그림자 느낌)
-        g.setColour(juce::Colour(0x66000000));
-        g.drawRoundedRectangle(segBox.reduced(0.5f), 4.0f, 1.0f);
-
-        // 디스플레이 텍스트 (빛나는 네온 그린 색상)
-        g.setFont(LF::monoFont(12.0f, juce::Font::bold));
-        g.setColour(juce::Colour(0xffb9ff66));
-        g.drawText(juce::String::fromUTF8("A4 \xc2\xb7 64v"),
-                   segBox.toNearestInt(), juce::Justification::centred);
-
-        // 헤더와 본문 사이의 구분선
-        g.setColour(juce::Colour(0xffdcdcdc));
-        g.drawLine(0.0f, (float)kHeaderH - 0.5f, (float)W, (float)kHeaderH - 0.5f, 1.0f);
-
-        // Waveform OSC frames (left column)
         const int contentTopY = kHeaderH + kPadV;
-        juce::Rectangle<int> osc1(kPadH, contentTopY, kLeftW, kOscH);
-        juce::Rectangle<int> osc2(kPadH, contentTopY + kOscH + kOscGap, kLeftW, kOscH);
-
-        paintOscFrame(g, osc1, juce::String::fromUTF8("OSC 1  \xe2\x80\x94  ORIGINAL SAMPLE"));
-        paintSampleWaveform(g, osc1.reduced(3, 18));
-
-        paintOscFrame(g, osc2, juce::String::fromUTF8("OSC 2  \xe2\x80\x94  SYNTH SHAPE"));
-        paintSynthWaveform(g, osc2.reduced(3, 18));
-
-        // Right column section headers + param labels
         const int rx = kPadH + kLeftW + kInnerGap;
         const int rw = W - rx - kPadH;
         if (rw < 60) return;
 
         int ry = contentTopY;
 
-        // OSCILLATORS section
-        paintSectionHeader(g, rx, ry, rw, "OSCILLATORS", "DUAL VCO");
-        ry += kSecHeaderH;
-        // wave label row
-        g.setFont(LF::monoFont(7.5f, juce::Font::bold));
-        g.setColour(juce::Colour(0xff888898u));
-        g.drawText("WAVE", rx, ry + 2, kLblW - 4, kRowH - 2, juce::Justification::centredRight);
-        ry += kRowH + kRowGap;
-        paintSliderLabel(g, "TUNE",  0xff3a9ad9u, rx, ry);  ry += kRowH + kRowGap;
-        paintSliderLabel(g, "DET",   0xff27ae60u, rx, ry);  ry += kRowH + kRowGap;
-        paintSliderLabel(g, "DRIVE", 0xffe6b32bu, rx, ry);  ry += kRowH + kRowGap + kSecGap;
-
-        // FILTER section
-        paintSectionHeader(g, rx, ry, rw, "FILTER", "STATE-VARIABLE 24dB");
-        ry += kSecHeaderH;
-        paintSliderLabel(g, "CUT",  0xffcc6699u, rx + kFiltBtnW + kFiltGap, ry);  ry += kRowH + kRowGap;
-        paintSliderLabel(g, "RES",  0xff9977ccu, rx + kFiltBtnW + kFiltGap, ry);  ry += kRowH + kRowGap;
-        paintSliderLabel(g, "ENV",  0xff8899ccu, rx + kFiltBtnW + kFiltGap, ry);  ry += kRowH + kRowGap + kSecGap;
-
-        // ENVELOPE section
-        paintSectionHeader(g, rx, ry, rw, "ENVELOPE", "ADSR  \xc2\xb7  AMP");
-        ry += kSecHeaderH;
-        paintSliderLabel(g, "ATK", 0xff3a9ad9u, rx, ry);  ry += kRowH + kRowGap;
-        paintSliderLabel(g, "DEC", 0xff27ae60u, rx, ry);  ry += kRowH + kRowGap;
-        paintSliderLabel(g, "SUS", 0xffe6b32bu, rx, ry);  ry += kRowH + kRowGap;
-        paintSliderLabel(g, "REL", 0xffcc6699u, rx, ry);
+        if (mode_ == PanelMode::MelVst)
+        {
+            paintSectionHeader(g, rx, ry, rw, "VST PLUGIN", "INSTRUMENT");
+            ry += kSecHeaderH;
+            ry += kVstCardH + kSecGap;
+            paintSectionHeader(g, rx, ry, rw, "PITCH", "GLOBAL");
+            ry += kSecHeaderH;
+            paintSliderLabel(g, "TUNE", 0xff3a9ad9u, rx, ry);
+        }
+        else  // Drum
+        {
+            paintSectionHeader(g, rx, ry, rw, "SAMPLE", "DRUM / SLICE");
+            ry += kSecHeaderH;
+            paintSliderLabel(g, "TUNE", 0xff3a9ad9u, rx, ry);  ry += kRowH + kRowGap + kSecGap;
+            paintFilterAndEnvLabels(g, rx, rw, ry);
+        }
     }
 
     void resized() override
@@ -602,96 +640,183 @@ public:
         const int W = getWidth();
         if (W < 80) return;
 
-        const int rx  = kPadH + kLeftW + kInnerGap;
-        const int rw  = W - rx - kPadH;
+        if (mode_ == PanelMode::MelSynth)
+        {
+            synthPanel_.setBounds(0, kHeaderH, W, 680);
+            return;
+        }
+
+        const int rx       = kPadH + kLeftW + kInnerGap;
+        const int rw       = W - rx - kPadH;
         if (rw < 60) return;
-
-        const int slW = rw - kLblW;
-        const int sx  = rx + kLblW;
-
-        // Filter-side slider starts after filter buttons
-        const int filtSlW = rw - kFiltBtnW - kFiltGap - kLblW;
-        const int filtSx  = rx + kFiltBtnW + kFiltGap + kLblW;
+        const int slW      = rw - kLblW;
+        const int sx       = rx + kLblW;
+        const int filtSlW  = rw - kFiltBtnW - kFiltGap - kLblW;
+        const int filtSx   = rx + kFiltBtnW + kFiltGap + kLblW;
 
         int ry = kHeaderH + kPadV;
 
-        // OSCILLATORS section
-        ry += kSecHeaderH;
-
-        // Wave buttons row
-        const int btnW = (rw - kLblW) / 5;
-        for (int i = 0; i < 5; ++i)
-            waveButtons_[i].setBounds(sx + i * btnW, ry, btnW - 2, kRowH);
-        ry += kRowH + kRowGap;
-
-        tuneSlider_ .setBounds(sx, ry, slW, kRowH);  ry += kRowH + kRowGap;
-        detSlider_  .setBounds(sx, ry, slW, kRowH);  ry += kRowH + kRowGap;
-        driveSlider_.setBounds(sx, ry, slW, kRowH);  ry += kRowH + kRowGap + kSecGap;
-
-        // FILTER section
-        ry += kSecHeaderH;
-
-        // LP/BP/HP buttons stacked vertically on the left
-        for (int i = 0; i < 3; ++i)
-            filtButtons_[i].setBounds(rx, ry + i * (kRowH + kRowGap), kFiltBtnW - 2, kRowH);
-
-        cutoffSlider_.setBounds(filtSx, ry, filtSlW, kRowH);  ry += kRowH + kRowGap;
-        resSlider_   .setBounds(filtSx, ry, filtSlW, kRowH);  ry += kRowH + kRowGap;
-        envAmtSlider_.setBounds(filtSx, ry, filtSlW, kRowH);  ry += kRowH + kRowGap + kSecGap;
-
-        // ENVELOPE section
-        ry += kSecHeaderH;
-        attackSlider_ .setBounds(sx, ry, slW, kRowH);  ry += kRowH + kRowGap;
-        decaySlider_  .setBounds(sx, ry, slW, kRowH);  ry += kRowH + kRowGap;
-        sustainSlider_.setBounds(sx, ry, slW, kRowH);  ry += kRowH + kRowGap;
-        releaseSlider_.setBounds(sx, ry, slW, kRowH);
+        if (mode_ == PanelMode::MelVst)
+        {
+            ry += kSecHeaderH;
+            openVstBtn_.setBounds(rx, ry + kVstCardH - kRowH - 2, rw, kRowH);
+            ry += kVstCardH + kSecGap;
+            ry += kSecHeaderH;
+            tuneSlider_.setBounds(sx, ry, slW, kRowH);
+        }
+        else  // Drum
+        {
+            // PLAY button in header
+            previewBtn_.setBounds(W - kPadH - 38, (kHeaderH - kRowH) / 2, 26, kRowH);
+            ry += kSecHeaderH;
+            tuneSlider_.setBounds(sx, ry, slW, kRowH);  ry += kRowH + kRowGap + kSecGap;
+            layoutFilterAndEnv(rx, rw, sx, slW, filtSx, filtSlW, ry);
+        }
     }
 
 private:
-    // Layout constants
-    static constexpr int kHeaderH   = 75;
-    static constexpr int kPadH      = 10;
-    static constexpr int kPadV      = 8;
-    static constexpr int kLeftW     = 650;
-    static constexpr int kInnerGap  = 12;
-    static constexpr int kOscH      = 100;
-    static constexpr int kOscGap    = 8;
-    static constexpr int kRowH      = 22;
-    static constexpr int kRowGap    = 4;
-    static constexpr int kLblW      = 52;
-    static constexpr int kSecHeaderH= 22;
-    static constexpr int kSecGap    = 10;
-    static constexpr int kFiltBtnW  = 36;
-    static constexpr int kFiltGap   = 4;
+    static constexpr int kHeaderH    = 44;
+    static constexpr int kPadH       = 10;
+    static constexpr int kPadV       = 8;
+    static constexpr int kLeftW      = 650;
+    static constexpr int kInnerGap   = 12;
+    static constexpr int kOscH       = 100;
+    static constexpr int kOscGap     = 8;
+    static constexpr int kRowH       = 22;
+    static constexpr int kRowGap     = 4;
+    static constexpr int kLblW       = 52;
+    static constexpr int kSecHeaderH = 22;
+    static constexpr int kSecGap     = 10;
+    static constexpr int kFiltBtnW   = 36;
+    static constexpr int kFiltGap    = 4;
+    static constexpr int kVstCardH   = 60;  // height of the VST info card
 
+    PanelMode    mode_           = PanelMode::Drum;
     int          selectedChannel_ = 0;
     juce::String channelName_;
     juce::String samplePath_;
+    juce::String pluginName_;
     SynthParams  synthParams_;
     float        tune_ = 0.0f;
 
-    std::vector<float> wfMin_, wfMax_;
+    std::vector<float> wfMin_, wfMax_;       // original sample bins
+    std::vector<float> wfMinMod_, wfMaxMod_; // ADSR + filter applied
 
     juce::TextButton waveButtons_[5];
     juce::TextButton filtButtons_[3];
+    juce::TextButton openVstBtn_;
 
     juce::Slider tuneSlider_, detSlider_, driveSlider_;
     juce::Slider cutoffSlider_, resSlider_, envAmtSlider_;
     juce::Slider attackSlider_, decaySlider_, sustainSlider_, releaseSlider_;
 
     juce::AudioFormatManager formatManager_;
+    SynthEditorPanel         synthPanel_;
+    juce::TextButton         previewBtn_;
 
     // ---- helpers ----
 
     int rightColumnHeight() const
     {
-        // OSCILLATORS: header + wave-row + 3 sliders + gap
-        const int oscSec  = kSecHeaderH + (kRowH + kRowGap) * 4 + kSecGap;
-        // FILTER: header + 3 sliders + gap
-        const int filtSec = kSecHeaderH + (kRowH + kRowGap) * 3 + kSecGap;
-        // ENVELOPE: header + 4 sliders
-        const int envSec  = kSecHeaderH + (kRowH + kRowGap) * 4;
-        return oscSec + filtSec + envSec;
+        const int filtEnv = kSecHeaderH + (kRowH + kRowGap) * 3 + kSecGap   // FILTER
+                          + kSecHeaderH + (kRowH + kRowGap) * 4;             // ENVELOPE
+        if (mode_ == PanelMode::MelVst)
+            return kSecHeaderH + kVstCardH + kSecGap + kSecHeaderH + (kRowH + kRowGap);
+        if (mode_ == PanelMode::MelSynth)
+            return kSecHeaderH + (kRowH + kRowGap) * 4 + kSecGap + filtEnv;  // OSC + filter+env
+        // Drum
+        return kSecHeaderH + (kRowH + kRowGap) + kSecGap + filtEnv;          // TUNE + filter+env
+    }
+
+    void updateModeVisibility()
+    {
+        const bool isMelSynth = (mode_ == PanelMode::MelSynth);
+        const bool isMelVst   = (mode_ == PanelMode::MelVst);
+        const bool isDrum     = (mode_ == PanelMode::Drum);
+
+        // MelSynth mode: only the embedded SynthEditorPanel is shown
+        synthPanel_.setVisible(isMelSynth);
+        previewBtn_.setVisible(isDrum);
+
+        // Custom controls are hidden in MelSynth mode
+        for (auto& b : waveButtons_) b.setVisible(false); // wave btns moved to SynthEditorPanel
+        openVstBtn_.setVisible(isMelVst);
+        tuneSlider_.setVisible(!isMelSynth);
+        detSlider_   .setVisible(false);  // covered by SynthEditorPanel
+        driveSlider_ .setVisible(false);
+        for (auto* f : { &filtButtons_[0], &filtButtons_[1], &filtButtons_[2] })
+            f->setVisible(isDrum || isMelVst ? !isMelSynth && !isMelVst : false);
+        // Filter/env sliders: Drum and MelVst only
+        const bool showFilterEnv = isDrum;
+        cutoffSlider_ .setVisible(showFilterEnv);
+        resSlider_    .setVisible(showFilterEnv);
+        envAmtSlider_ .setVisible(showFilterEnv);
+        attackSlider_ .setVisible(showFilterEnv);
+        decaySlider_  .setVisible(showFilterEnv);
+        sustainSlider_.setVisible(showFilterEnv);
+        releaseSlider_.setVisible(showFilterEnv);
+        for (auto* f : { &filtButtons_[0], &filtButtons_[1], &filtButtons_[2] })
+            f->setVisible(showFilterEnv);
+    }
+
+    void paintFilterAndEnvLabels(juce::Graphics& g, int rx, int rw, int ry)
+    {
+        // FILTER
+        paintSectionHeader(g, rx, ry, rw, "FILTER", "STATE-VARIABLE 24dB");
+        ry += kSecHeaderH;
+        paintSliderLabel(g, "CUT", 0xffcc6699u, rx + kFiltBtnW + kFiltGap, ry); ry += kRowH + kRowGap;
+        paintSliderLabel(g, "RES", 0xff9977ccu, rx + kFiltBtnW + kFiltGap, ry); ry += kRowH + kRowGap;
+        paintSliderLabel(g, "ENV", 0xff8899ccu, rx + kFiltBtnW + kFiltGap, ry); ry += kRowH + kRowGap + kSecGap;
+        // ENVELOPE
+        paintSectionHeader(g, rx, ry, rw, "ENVELOPE", "ADSR");
+        ry += kSecHeaderH;
+        paintSliderLabel(g, "ATK", 0xff3a9ad9u, rx, ry); ry += kRowH + kRowGap;
+        paintSliderLabel(g, "DEC", 0xff27ae60u, rx, ry); ry += kRowH + kRowGap;
+        paintSliderLabel(g, "SUS", 0xffe6b32bu, rx, ry); ry += kRowH + kRowGap;
+        paintSliderLabel(g, "REL", 0xffcc6699u, rx, ry);
+    }
+
+    void layoutFilterAndEnv(int rx, int rw, int sx, int slW, int filtSx, int filtSlW, int ry)
+    {
+        juce::ignoreUnused(rw);
+        ry += kSecHeaderH;
+        for (int i = 0; i < 3; ++i)
+            filtButtons_[i].setBounds(rx, ry + i * (kRowH + kRowGap), kFiltBtnW - 2, kRowH);
+        cutoffSlider_.setBounds(filtSx, ry, filtSlW, kRowH); ry += kRowH + kRowGap;
+        resSlider_   .setBounds(filtSx, ry, filtSlW, kRowH); ry += kRowH + kRowGap;
+        envAmtSlider_.setBounds(filtSx, ry, filtSlW, kRowH); ry += kRowH + kRowGap + kSecGap;
+        ry += kSecHeaderH;
+        attackSlider_ .setBounds(sx, ry, slW, kRowH); ry += kRowH + kRowGap;
+        decaySlider_  .setBounds(sx, ry, slW, kRowH); ry += kRowH + kRowGap;
+        sustainSlider_.setBounds(sx, ry, slW, kRowH); ry += kRowH + kRowGap;
+        releaseSlider_.setBounds(sx, ry, slW, kRowH);
+    }
+
+    void paintWaveformBars(juce::Graphics& g, juce::Rectangle<int> r,
+                           const std::vector<float>& mn, const std::vector<float>& mx,
+                           juce::Colour col, const char* emptyMsg)
+    {
+        if (mn.empty())
+        {
+            g.setFont(StudioLookAndFeel::monoFont(8.0f));
+            g.setColour(juce::Colour(0xff555560u));
+            g.drawText(emptyMsg, r, juce::Justification::centred);
+            return;
+        }
+        const int   N    = (int)mn.size();
+        const float cy   = r.getCentreY();
+        const float ampH = r.getHeight() * 0.46f;
+        const float dx   = (float)r.getWidth() / (float)N;
+        g.setColour(col);
+        for (int i = 0; i < N; ++i)
+        {
+            const float x  = r.getX() + i * dx;
+            const float y1 = cy - mx[i] * ampH;
+            const float y2 = cy - mn[i] * ampH;
+            g.fillRect(x, y1, juce::jmax(1.0f, dx - 0.5f), juce::jmax(1.0f, y2 - y1));
+        }
+        g.setColour(juce::Colour(0xff4a4a5au));
+        g.drawLine((float)r.getX(), cy, (float)r.getRight(), cy, 0.5f);
     }
 
     void paintOscFrame(juce::Graphics& g, juce::Rectangle<int> r, const juce::String& label)
@@ -707,41 +832,17 @@ private:
                    juce::Justification::centredLeft);
     }
 
-    void paintSampleWaveform(juce::Graphics& g, juce::Rectangle<int> r)
+    // generateSynthBins: fill wfMin_/wfMax_ with a few cycles of the synth waveform
+    void generateSynthBins()
     {
-        if (wfMin_.empty())
+        constexpr int kBins = 240;
+        wfMin_.assign(kBins, 0.0f);
+        wfMax_.assign(kBins, 0.0f);
+        constexpr int kCycles = 3;
+        const int perCycle = kBins / kCycles;
+        for (int bin = 0; bin < kBins; ++bin)
         {
-            g.setFont(StudioLookAndFeel::monoFont(8.0f));
-            g.setColour(juce::Colour(0xff555560u));
-            g.drawText("NO SAMPLE LOADED", r, juce::Justification::centred);
-            return;
-        }
-        const int   numBins = (int)wfMin_.size();
-        const float cy      = r.getCentreY();
-        const float ampH    = r.getHeight() * 0.46f;
-        const float dx      = (float)r.getWidth() / (float)numBins;
-        g.setColour(juce::Colour(0xffb9ff66u).withAlpha(0.75f));
-        for (int i = 0; i < numBins; ++i)
-        {
-            const float x  = r.getX() + i * dx;
-            const float y1 = cy - wfMax_[i] * ampH;
-            const float y2 = cy - wfMin_[i] * ampH;
-            g.fillRect(x, y1, juce::jmax(1.0f, dx - 0.5f), juce::jmax(1.0f, y2 - y1));
-        }
-        g.setColour(juce::Colour(0xff4a4a5au));
-        g.drawLine((float)r.getX(), cy, (float)r.getRight(), cy, 0.5f);
-    }
-
-    void paintSynthWaveform(juce::Graphics& g, juce::Rectangle<int> r)
-    {
-        const float cy   = r.getCentreY();
-        const float ampH = r.getHeight() * 0.44f;
-        const int   N    = r.getWidth();
-        if (N < 2) return;
-        juce::Path p;
-        for (int i = 0; i < N; ++i)
-        {
-            const float t = (float)i / (float)N;
+            const float t = (float)(bin % perCycle) / (float)perCycle;
             float y = 0.0f;
             switch (synthParams_.waveform)
             {
@@ -750,19 +851,11 @@ private:
                 case 2: y = (t < 0.5f ? 1.0f : -1.0f); break;
                 case 3: y = (t < 0.25f ? 4.0f*t : t < 0.75f ? 2.0f - 4.0f*t : -4.0f + 4.0f*t); break;
                 case 5: y = juce::Random::getSystemRandom().nextFloat() * 2.0f - 1.0f; break;
-                case 6:
-                    for (int s = 0; s < 5; ++s) { float tt = std::fmod(t*(1.0f+(s-2)*0.04f),1.0f); y += (1.0f-2.0f*tt)*0.25f; }
-                    break;
                 default: break;
             }
-            const float px = (float)(r.getX() + i);
-            const float py = cy - y * ampH;
-            if (i == 0) p.startNewSubPath(px, py); else p.lineTo(px, py);
+            wfMin_[bin] = juce::jmin(0.0f, y);
+            wfMax_[bin] = juce::jmax(0.0f, y);
         }
-        g.setColour(juce::Colour(0xffb9ff66u));
-        g.strokePath(p, juce::PathStrokeType(1.5f));
-        g.setColour(juce::Colour(0xff4a4a5au));
-        g.drawLine((float)r.getX(), cy, (float)r.getRight(), cy, 0.5f);
     }
 
     void paintSectionHeader(juce::Graphics& g, int x, int y, int w,
@@ -857,6 +950,75 @@ private:
         decaySlider_  .setValue(synthParams_.decay,           juce::dontSendNotification);
         sustainSlider_.setValue(synthParams_.sustain,         juce::dontSendNotification);
         releaseSlider_.setValue(synthParams_.release,         juce::dontSendNotification);
+    }
+
+    void computeModifiedWaveform()
+    {
+        if (mode_ == PanelMode::MelVst)
+        {
+            wfMinMod_.clear();
+            wfMaxMod_.clear();
+            return;
+        }
+
+        const int kBins = (int)wfMin_.size();
+        wfMinMod_.assign(kBins, 0.0f);
+        wfMaxMod_.assign(kBins, 0.0f);
+        if (kBins < 2) return;
+
+        // ---- ADSR amplitude envelope (Drum only — synth wave is periodic, no envelope) ----
+        if (mode_ == PanelMode::Drum)
+        {
+            const float totalMs = 4000.0f;
+            const float atk = juce::jmax(1.0f, synthParams_.attack);
+            const float dec = juce::jmax(1.0f, synthParams_.decay);
+            const float sus = juce::jlimit(0.0f, 1.0f, synthParams_.sustain);
+            const float rel = juce::jmax(1.0f, synthParams_.release);
+            const int atkB = juce::jlimit(0, kBins,        (int)(atk / totalMs * kBins));
+            const int decB = juce::jlimit(0, kBins - atkB, (int)(dec / totalMs * kBins));
+            const int relB = juce::jlimit(1, kBins / 3,    (int)(rel / totalMs * kBins));
+            const int susB = juce::jmax(0, kBins - atkB - decB - relB);
+            for (int bin = 0; bin < kBins; ++bin)
+            {
+                float env;
+                if (atkB > 0 && bin < atkB)
+                    env = (float)bin / (float)atkB;
+                else if (decB > 0 && bin < atkB + decB)
+                    env = 1.0f - (1.0f - sus) * (float)(bin - atkB) / (float)decB;
+                else if (bin < atkB + decB + susB)
+                    env = sus;
+                else
+                    env = sus * (1.0f - (float)(bin - atkB - decB - susB) / (float)relB);
+                wfMinMod_[bin] = wfMin_[bin] * env;
+                wfMaxMod_[bin] = wfMax_[bin] * env;
+            }
+        }
+        else  // MelSynth — start from unmodified synth bins
+        {
+            wfMinMod_ = wfMin_;
+            wfMaxMod_ = wfMax_;
+        }
+
+        // ---- Low-pass filter (moving average keyed on cutoff) ----
+        const float logRange   = std::log(20000.0f / 200.0f);
+        const float normCutoff = std::log(juce::jmax(200.0f, synthParams_.cutoff) / 200.0f) / logRange;
+        const int   halfWin    = (int)((1.0f - normCutoff) * 14.0f);
+
+        if (halfWin > 0)
+        {
+            const std::vector<float> tmpMn = wfMinMod_, tmpMx = wfMaxMod_;
+            for (int bin = 0; bin < kBins; ++bin)
+            {
+                float sMin = 0.0f, sMax = 0.0f; int cnt = 0;
+                for (int w = -halfWin; w <= halfWin; ++w)
+                {
+                    const int idx = juce::jlimit(0, kBins - 1, bin + w);
+                    sMin += tmpMn[idx]; sMax += tmpMx[idx]; ++cnt;
+                }
+                wfMinMod_[bin] = sMin / (float)cnt;
+                wfMaxMod_[bin] = sMax / (float)cnt;
+            }
+        }
     }
 
     void loadWaveform(const juce::String& path)
@@ -970,6 +1132,9 @@ private:
 
     // M2 — pattern management state
     int activePatternId = 1;
+
+    // Per-channel name saved before a Drum→Melodic type change (restored on revert)
+    std::array<juce::String, Pattern::kMaxChannels> preTypeChangeName_;
 
     // Pause/resume — saved positions when stopped (< 0 = no saved state)
     double pausedBarSong     = -1.0;

@@ -232,6 +232,15 @@ public:
     }
     void resetToChannelCount(int count, const juce::String* names);
 
+    void setChannelName(int ch, const juce::String& name)
+    {
+        if (ch >= 0 && ch < (int)channels.size())
+        {
+            channels[(size_t)ch].name = name;
+            repaint();
+        }
+    }
+
     static constexpr int ROW_HEIGHT       = 58;
     static constexpr int LABEL_WIDTH      = 180;   // phase-4
     static constexpr int HEADER_HEIGHT    = 50;    // 30px title strip + 20px step ruler

@@ -93,14 +93,29 @@ ToolbarComponent::ToolbarComponent()
     bpmSlider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     bpmSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     bpmSlider.addListener(this);
-    bpmSlider.setAlpha(0.0f);   // invisible but interactive (drag to change BPM)
+    bpmSlider.setAlpha(0.0f);
+    bpmSlider.setInterceptsMouseClicks(false, false);  // label handles all mouse now
 
     addAndMakeVisible(bpmLabel);
     bpmLabel.setText("70.0", juce::dontSendNotification);
     bpmLabel.setColour(juce::Label::textColourId, juce::Colour(StudioLookAndFeel::kDisplayFg));
     bpmLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    bpmLabel.setColour(juce::Label::outlineWhenEditingColourId, juce::Colour(StudioLookAndFeel::kAccent));
     bpmLabel.setFont(StudioLookAndFeel::displayFont(18.0f));
     bpmLabel.setJustificationType(juce::Justification::centred);
+    bpmLabel.setEditable(false, true, false);   // double-click opens editor
+    bpmLabel.addMouseListener(&bpmLabelHandler_, false);
+    bpmLabel.onEditorHide = [this]
+    {
+        const double v = juce::jlimit(60.0, 200.0,
+                                      bpmLabel.getText().getDoubleValue());
+        if (v > 0.0)
+        {
+            bpmSlider.setValue(v, juce::dontSendNotification);
+            bpmLabel.setText(juce::String(v, 1), juce::dontSendNotification);
+            if (onBPMChanged) onBPMChanged(v);
+        }
+    };
 
     // ---- Row 1: Title
     addAndMakeVisible(titleLabel);
@@ -770,6 +785,12 @@ void ToolbarComponent::sliderValueChanged(juce::Slider* slider)
 void ToolbarComponent::comboBoxChanged(juce::ComboBox* /*box*/)
 {
     // patternBox uses onChange lambda; no other combo boxes need listener handling
+}
+
+void ToolbarComponent::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (e.eventComponent == &bpmSlider)
+        bpmLabel.showEditor();
 }
 
 // ---------------------------------------------------------------------------
