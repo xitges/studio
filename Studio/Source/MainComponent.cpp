@@ -693,7 +693,35 @@ MainComponent::MainComponent()
     {
         audioEngine.loadSample(ch, file);
         if (auto* pat = findPattern(activePatternId))
+        {
             pat->samplePaths[ch] = file.getFullPathName();
+            
+            // 1. 샘플 파일명으로 패턴 데이터 업데이트
+            juce::String newName = file.getFileNameWithoutExtension();
+            pat->channelNames[ch] = newName;
+            
+            // 2. 채널랙 새로고침
+            channelRack.resetToChannelCount(project.channelCount, pat->channelNames);
+            channelRack.loadPattern(*pat);
+            
+            // 3. 인스펙터 탭 바 (글자) 즉시 새로고침
+            if (audioEngine.getMidiTargetChannel() == ch)
+            {
+                inspectorTabBar_.setInstrumentSub(ch, newName);
+                inspectorTabBar_.repaint();
+                
+                // 4. 메인 화면의 인스트러먼트 패널 (파형 및 헤더) 즉시 새로고침
+                instrumentPanel_.setChannel(
+                    ch,
+                    newName,
+                    pat->samplePaths[ch],
+                    pat->synthParams[ch],
+                    pat->channelPitch[ch] // 튠 값 전달
+                );
+            }
+                
+        
+        }
         markDirty();
         audioEngine.refreshSongCacheAsync();
     };

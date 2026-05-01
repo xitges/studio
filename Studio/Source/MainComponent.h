@@ -472,24 +472,84 @@ public:
         using LF = StudioLookAndFeel;
         const int W = getWidth();
 
-        g.fillAll(juce::Colour(0xfff5f5f7u));
+        g.fillAll(juce::Colour(0xfffafafa));
 
-        // Header bar
-        g.setColour(juce::Colour(0xffe4e4e8u));
-        g.fillRect(0, 0, W, kHeaderH);
-        g.setColour(juce::Colour(0xffccccd0u));
-        g.drawLine(0.f, (float)kHeaderH - 0.5f, (float)W, (float)kHeaderH - 0.5f, 1.f);
+            // =========================================================================
+            // [1] 상단 패널 탭 바 (INSTRUMENT | A · ANALOG POLY) - 높이 22px
+            // =========================================================================
+            g.setColour(juce::Colour(0xfff0f0f0));
+            g.fillRect(0, 0, W, 22);
+            
+            g.setColour(juce::Colour(0xffdcdcdc));
+            g.drawLine(0.0f, 21.5f, (float)W, 21.5f, 1.0f);
+
+            // Title ("INSTRUMENT")
+            g.setFont(LF::monoFont(9.0f, juce::Font::bold));
+            g.setColour(juce::Colour(LF::kAccent)); // 메인 액센트 컬러
+            g.drawText("INSTRUMENT", 14, 0, 90, 22, juce::Justification::centredLeft);
+
+            // Sub ("A · ANALOG POLY")
+            g.setFont(LF::monoFont(8.5f, juce::Font::bold));
+            g.setColour(juce::Colour(0xff888888));
+            g.drawText(juce::String::fromUTF8("A \xc2\xb7 ANALOG POLY"), 94, 0, 200, 22, juce::Justification::centredLeft);
+
+            // =========================================================================
+            // [2] 메인 헤더 타이틀 영역 (POLY-6 mk2 + Segment Display) - 높이 44px
+            // =========================================================================
+        const int hY = 28;
+        const int hH = 44;
+
+        // 1. 메인 타이틀 (채널 이름 사용, 예: "KICK", "SNARE", "TRACK 1")
+        g.setFont(LF::monoFont(16.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xff222222));
+        g.drawText(channelName_.toUpperCase(), 14, hY + 6, 300, 22, juce::Justification::centredLeft);
+
+        // 2. 서브 타이틀 구성 (샘플 유무에 따라 다르게 표시)
+        juce::String subTitle;
+        if (samplePath_.isNotEmpty())
+        {
+            // 수정됨: fromUTF8로 특수문자를 안전하게 처리
+            subTitle = juce::String::fromUTF8("SAMPLE \xc2\xb7 \"") + juce::File(samplePath_).getFileName() + "\"";
+        }
+        else
+        {
+            static const char* kWaveLbls[] = { "SINE", "SAW", "SQUARE", "TRI", "", "NOISE" };
+            int waveIdx = juce::jlimit(0, 5, synthParams_.waveform);
+            // 수정됨: fromUTF8로 특수문자를 안전하게 처리
+            subTitle = juce::String::fromUTF8("SYNTH \xc2\xb7 ") + kWaveLbls[waveIdx];
+        }
 
         g.setFont(LF::monoFont(9.0f, juce::Font::bold));
-        g.setColour(juce::Colour(LF::kAccent));
-        g.drawText("INSTRUMENT", 10, 0, 90, kHeaderH, juce::Justification::centredLeft);
+        g.setColour(juce::Colour(0xff888888));
+        g.drawText(subTitle, 14, hY + 26, 300, 14, juce::Justification::centredLeft);
 
-        juce::String info = channelName_.toUpperCase();
-        if (samplePath_.isNotEmpty())
-            info += juce::String::fromUTF8("  \xe2\x80\x94  ") + juce::File(samplePath_).getFileName();
-        g.setFont(LF::monoFont(8.5f));
-        g.setColour(juce::Colour(0xff555560u));
-        g.drawText(info, 104, 0, W - 116, kHeaderH, juce::Justification::centredLeft, true);
+        // =========================================================================
+        // [3] 우측 SegmentDisplay (A4 · 64v)
+        // =========================================================================
+        const int segW = 90;
+        const int segH = 26;
+        const int segX = W - segW - 14;
+        const int segY = hY + (hH - segH) / 2; // 세로 중앙 정렬 (alignItems:"center")
+
+        juce::Rectangle<float> segBox((float)segX, (float)segY, (float)segW, (float)segH);
+        
+        // 디스플레이 배경 (어두운 LCD 느낌)
+        g.setColour(juce::Colour(0xff1a1a20));
+        g.fillRoundedRectangle(segBox, 4.0f);
+        
+        // 디스플레이 테두리 (내부 그림자 느낌)
+        g.setColour(juce::Colour(0x66000000));
+        g.drawRoundedRectangle(segBox.reduced(0.5f), 4.0f, 1.0f);
+
+        // 디스플레이 텍스트 (빛나는 네온 그린 색상)
+        g.setFont(LF::monoFont(12.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xffb9ff66));
+        g.drawText(juce::String::fromUTF8("A4 \xc2\xb7 64v"),
+                   segBox.toNearestInt(), juce::Justification::centred);
+
+        // 헤더와 본문 사이의 구분선
+        g.setColour(juce::Colour(0xffdcdcdc));
+        g.drawLine(0.0f, (float)kHeaderH - 0.5f, (float)W, (float)kHeaderH - 0.5f, 1.0f);
 
         // Waveform OSC frames (left column)
         const int contentTopY = kHeaderH + kPadV;
@@ -589,10 +649,10 @@ public:
 
 private:
     // Layout constants
-    static constexpr int kHeaderH   = 26;
+    static constexpr int kHeaderH   = 75;
     static constexpr int kPadH      = 10;
     static constexpr int kPadV      = 8;
-    static constexpr int kLeftW     = 210;
+    static constexpr int kLeftW     = 650;
     static constexpr int kInnerGap  = 12;
     static constexpr int kOscH      = 100;
     static constexpr int kOscGap    = 8;
