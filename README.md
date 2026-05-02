@@ -1,4 +1,5 @@
 ## XITGES
+**☩ DAW**
 **☩ built with C++ and JUCE**
 
 ## Preview
