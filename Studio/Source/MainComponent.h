@@ -562,7 +562,7 @@ public:
         paramSlots_.clear();
         currentPlugin_ = nullptr;
 
-        if (plugin == nullptr) { updateModeVisibility(); resized(); repaint(); return; }
+        if (plugin == nullptr) { updateModeVisibility(); setSize(getWidth(), getNeededHeight()); repaint(); return; }
         currentPlugin_ = plugin;
 
         const auto& params = plugin->getParameters();
@@ -603,7 +603,7 @@ public:
         paramCountLabel_.setText(juce::String(count), juce::dontSendNotification);
         startTimerHz(10);
         updateModeVisibility();
-        resized();
+        setSize(getWidth(), getNeededHeight());
         repaint();
     }
 
@@ -617,7 +617,7 @@ public:
         }
         paramSlots_.clear();
         updateModeVisibility();
-        resized();
+        setSize(getWidth(), getNeededHeight());
         repaint();
     }
 
