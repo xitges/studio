@@ -1,9 +1,0 @@
-
-Builds/
-juce_LibraryCode/
-*.md
-.DS_Store
-DEVLOG.md
-howto.md
-*.user
-*.jucer.user
