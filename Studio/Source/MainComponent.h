@@ -382,7 +382,7 @@ private:
 // Left col (kLeftW): OSC 1 (original) + OSC 2 (parameter-modified)
 // Right col        : mode-specific control sections
 // =========================================================================
-class InstrumentPanel : public juce::Component
+class InstrumentPanel : public juce::Component, private juce::Timer
 {
 public:
     enum class PanelMode { Drum, MelSynth, MelVst };
@@ -492,6 +492,29 @@ public:
         previewBtn_.setButtonText("PLAY");
         previewBtn_.onClick = [this] { if (onDrumPreview) onDrumPreview(); };
         addChildComponent(previewBtn_);
+
+        // ---- VST param count controls (MelVst only) ----
+        paramDecBtn_.onClick = [this] {
+            if (numShownParams_ > 1 && currentPlugin_ != nullptr) {
+                --numShownParams_;
+                buildVstKnobs(currentPlugin_);
+            }
+        };
+        paramIncBtn_.onClick = [this] {
+            if (currentPlugin_ != nullptr) {
+                const int maxP = currentPlugin_->getParameters().size();
+                if (numShownParams_ < maxP) {
+                    ++numShownParams_;
+                    buildVstKnobs(currentPlugin_);
+                }
+            }
+        };
+        paramCountLabel_.setJustificationType(juce::Justification::centred);
+        paramCountLabel_.setFont(StudioLookAndFeel::monoFont(9.0f, juce::Font::bold));
+        paramCountLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff444458u));
+        addChildComponent(paramDecBtn_);
+        addChildComponent(paramIncBtn_);
+        addChildComponent(paramCountLabel_);
     }
 
     void setChannel(int ch, const juce::String& name, const juce::String& samplePath,
@@ -528,35 +551,74 @@ public:
         repaint();
     }
 
-    void embedPluginEditor(juce::AudioPluginInstance* plugin)
+    void buildVstKnobs(juce::AudioPluginInstance* plugin)
     {
-        clearEmbeddedEditor();
-        if (plugin == nullptr) return;
-        if (auto* ed = plugin->createEditorIfNeeded())
-        {
-            embeddedEditor_.reset(ed);
-            addAndMakeVisible(*embeddedEditor_);
+        stopTimer();
+        // keep numShownParams_ from previous call so +/- is stable across channel switches
+        for (auto& s : paramSlots_) {
+            if (s.nameLabel) { s.nameLabel->removeMouseListener(this); removeChildComponent(s.nameLabel.get()); }
+            if (s.slider)    removeChildComponent(s.slider.get());
         }
+        paramSlots_.clear();
+        currentPlugin_ = nullptr;
+
+        if (plugin == nullptr) { updateModeVisibility(); resized(); repaint(); return; }
+        currentPlugin_ = plugin;
+
+        const auto& params = plugin->getParameters();
+        const int count = juce::jmin(numShownParams_, params.size());
+
+        for (int i = 0; i < count; ++i)
+        {
+            auto* p = params[i];
+            ParamSlot slot;
+            slot.paramIndex = i;
+
+            auto s = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal,
+                                                    juce::Slider::NoTextBox);
+            s->setRange(0.0, 1.0, 0.0);
+            s->setValue((double)p->getValue(), juce::dontSendNotification);
+            s->setColour(juce::Slider::trackColourId,            juce::Colour(StudioLookAndFeel::kAccent));
+            s->setColour(juce::Slider::backgroundColourId,       juce::Colour(0xff363644u));
+            s->setColour(juce::Slider::thumbColourId,            juce::Colour(0xffe8e8ecu));
+            s->setTooltip(p->getName(64) + "  (" + p->getText(p->getValue(), 16) + ")");
+            s->onValueChange = [p, sp = s.get()] {
+                p->setValueNotifyingHost((float)sp->getValue());
+            };
+            addAndMakeVisible(*s);
+            slot.slider = std::move(s);
+
+            auto l = std::make_unique<juce::Label>("", p->getName(14).toUpperCase());
+            l->setJustificationType(juce::Justification::centredLeft);
+            l->setFont(StudioLookAndFeel::monoFont(8.0f));
+            l->setColour(juce::Label::textColourId, juce::Colour(0xff666676u));
+            l->setInterceptsMouseClicks(true, false);
+            l->addMouseListener(this, false);
+            addAndMakeVisible(*l);
+            slot.nameLabel = std::move(l);
+
+            paramSlots_.push_back(std::move(slot));
+        }
+
+        paramCountLabel_.setText(juce::String(count), juce::dontSendNotification);
+        startTimerHz(10);
+        updateModeVisibility();
         resized();
         repaint();
     }
 
-    void clearEmbeddedEditor()
+    void clearVstKnobs()
     {
-        if (embeddedEditor_ != nullptr)
-        {
-            removeChildComponent(embeddedEditor_.get());
-            embeddedEditor_.reset();
+        stopTimer();
+        currentPlugin_ = nullptr;
+        for (auto& s : paramSlots_) {
+            if (s.nameLabel) { s.nameLabel->removeMouseListener(this); removeChildComponent(s.nameLabel.get()); }
+            if (s.slider)    removeChildComponent(s.slider.get());
         }
+        paramSlots_.clear();
+        updateModeVisibility();
         resized();
         repaint();
-    }
-
-    juce::Point<int> getEmbeddedEditorSize() const
-    {
-        if (embeddedEditor_ != nullptr)
-            return { embeddedEditor_->getWidth(), embeddedEditor_->getHeight() };
-        return {};
     }
 
     int getNeededHeight() const
@@ -564,8 +626,10 @@ public:
         if (mode_ == PanelMode::MelSynth) return kHeaderH + 680;
         if (mode_ == PanelMode::MelVst)
         {
-            const int edH = embeddedEditor_ != nullptr ? embeddedEditor_->getHeight() : 80;
-            return kHeaderH + kPadV + edH + kPadV;
+            const int rows = paramSlots_.empty() ? 1
+                : ((int)paramSlots_.size() + kSlotCols - 1) / kSlotCols;
+            return kHeaderH + kPadV + kCtrlH + kSecHeaderH + 4
+                 + rows * (kSlotCellH + kSlotRowGap) + kPadV;
         }
         const int leftH  = kPadV + kOscH + kOscGap + kOscH + kPadV;
         const int rightH = kPadV + rightColumnHeight() + kPadV;
@@ -620,15 +684,23 @@ public:
         g.drawText(sub, 52, kHeaderH / 2, W - 200, kHeaderH / 2,
                    juce::Justification::centredLeft, true);
 
-        // MelVst: 임베딩된 에디터가 직접 그림
+        // MelVst: 파라미터 노브 그리드 + 팝업 버튼
         if (mode_ == PanelMode::MelVst)
         {
-            if (embeddedEditor_ == nullptr)
+            const int paramY = kHeaderH + kPadV + kCtrlH;
+            const juce::String paramSubStr = paramSlots_.empty()
+                ? juce::String("NONE AVAILABLE")
+                : juce::String((int)paramSlots_.size()) + " SHOWN  —  RIGHT-CLICK TO REMAP";
+            paintSectionHeader(g, kPadH, paramY, W - kPadH * 2,
+                               "PARAMETERS", paramSubStr.toRawUTF8());
+
+            if (paramSlots_.empty())
             {
                 g.setFont(LF::monoFont(10.0f));
                 g.setColour(juce::Colour(0xff888898u));
-                g.drawText("No custom editor available", kPadH, kHeaderH + kPadV + 20,
-                           getWidth() - kPadH * 2, 30, juce::Justification::centred);
+                g.drawText("No parameters available",
+                           kPadH, paramY + kSecHeaderH + 10,
+                           W - kPadH * 2, 30, juce::Justification::centred);
             }
             return;
         }
@@ -668,22 +740,11 @@ public:
 
         int ry = contentTopY;
 
-        if (mode_ == PanelMode::MelVst)
-        {
-            paintSectionHeader(g, rx, ry, rw, "VST PLUGIN", "INSTRUMENT");
-            ry += kSecHeaderH;
-            ry += kVstCardH + kSecGap;
-            paintSectionHeader(g, rx, ry, rw, "PITCH", "GLOBAL");
-            ry += kSecHeaderH;
-            paintSliderLabel(g, "TUNE", 0xff3a9ad9u, rx, ry);
-        }
-        else  // Drum
-        {
-            paintSectionHeader(g, rx, ry, rw, "SAMPLE", "DRUM / SLICE");
-            ry += kSecHeaderH;
-            paintSliderLabel(g, "TUNE", 0xff3a9ad9u, rx, ry);  ry += kRowH + kRowGap + kSecGap;
-            paintFilterAndEnvLabels(g, rx, rw, ry);
-        }
+        // Drum only (MelVst returns early above, MelSynth returns at line above)
+        paintSectionHeader(g, rx, ry, rw, "SAMPLE", "DRUM / SLICE");
+        ry += kSecHeaderH;
+        paintSliderLabel(g, "TUNE", 0xff3a9ad9u, rx, ry);  ry += kRowH + kRowGap + kSecGap;
+        paintFilterAndEnvLabels(g, rx, rw, ry);
     }
 
     void resized() override
@@ -709,8 +770,35 @@ public:
 
         if (mode_ == PanelMode::MelVst)
         {
-            if (embeddedEditor_ != nullptr)
-                embeddedEditor_->setTopLeftPosition(kPadH, kHeaderH + kPadV);
+            // Control row: [OPEN VST EDITOR] centred,  [- N +] right-aligned
+            const int ctrlY  = kHeaderH + kPadV + (kCtrlH - 26) / 2;
+            openVstBtn_.setBounds((W - 160) / 2, ctrlY, 160, 26);
+
+            const int cBtnW = 22, cLblW = 30;
+            const int cX = W - kPadH - cBtnW * 2 - cLblW - 4;
+            paramDecBtn_     .setBounds(cX,                      ctrlY, cBtnW, 26);
+            paramCountLabel_ .setBounds(cX + cBtnW + 2,          ctrlY, cLblW, 26);
+            paramIncBtn_     .setBounds(cX + cBtnW + 2 + cLblW + 2, ctrlY, cBtnW, 26);
+
+            // Param slot grid — 8 per row, fills panel width
+            if (!paramSlots_.empty())
+            {
+                const int numK  = (int)paramSlots_.size();
+                const int cols  = juce::jmin(numK, kSlotCols);
+                const int gapX  = 6;
+                const int cellW = (W - 2 * kPadH - (cols - 1) * gapX) / cols;
+                const int gridY = kHeaderH + kPadV + kCtrlH + kSecHeaderH + 4;
+
+                for (int i = 0; i < numK; ++i)
+                {
+                    const int col = i % kSlotCols;
+                    const int row = i / kSlotCols;
+                    const int cx  = kPadH + col * (cellW + gapX);
+                    const int cy  = gridY + row * (kSlotCellH + kSlotRowGap);
+                    paramSlots_[i].nameLabel->setBounds(cx, cy, cellW, kSlotLblH);
+                    paramSlots_[i].slider->setBounds(cx, cy + kSlotLblH + 2, cellW, kSlotSldH);
+                }
+            }
             return;
         }
         else  // Drum
@@ -738,7 +826,12 @@ private:
     static constexpr int kSecGap     = 10;
     static constexpr int kFiltBtnW   = 36;
     static constexpr int kFiltGap    = 4;
-    static constexpr int kVstCardH   = 60;  // height of the VST info card
+    static constexpr int kSlotCols   = 8;   // params per row
+    static constexpr int kSlotLblH   = 13;  // param name label height
+    static constexpr int kSlotSldH   = 15;  // slider height
+    static constexpr int kSlotCellH  = kSlotLblH + kSlotSldH + 2;  // = 30
+    static constexpr int kSlotRowGap = 8;   // gap between rows
+    static constexpr int kCtrlH      = 34;  // control row (OPEN btn + count adj)
 
     PanelMode    mode_           = PanelMode::Drum;
     int          selectedChannel_ = 0;
@@ -754,7 +847,19 @@ private:
     juce::TextButton waveButtons_[5];
     juce::TextButton filtButtons_[3];
     juce::TextButton openVstBtn_;
-    std::unique_ptr<juce::AudioProcessorEditor> embeddedEditor_;
+
+    struct ParamSlot {
+        int                          paramIndex = -1;
+        std::unique_ptr<juce::Slider> slider;
+        std::unique_ptr<juce::Label>  nameLabel;
+    };
+    std::vector<ParamSlot>       paramSlots_;
+    int                          numShownParams_ = 16;
+    juce::AudioPluginInstance*   currentPlugin_  = nullptr;
+
+    juce::TextButton paramDecBtn_ { "-" };
+    juce::TextButton paramIncBtn_ { "+" };
+    juce::Label      paramCountLabel_;
 
     juce::Slider tuneSlider_, detSlider_, driveSlider_;
     juce::Slider cutoffSlider_, resSlider_, envAmtSlider_;
@@ -771,7 +876,7 @@ private:
         const int filtEnv = kSecHeaderH + (kRowH + kRowGap) * 3 + kSecGap   // FILTER
                           + kSecHeaderH + (kRowH + kRowGap) * 4;             // ENVELOPE
         if (mode_ == PanelMode::MelVst)
-            return kSecHeaderH + kVstCardH + kSecGap + kSecHeaderH + (kRowH + kRowGap);
+            return kCtrlH;  // dead path — getNeededHeight() handles MelVst directly
         if (mode_ == PanelMode::MelSynth)
             return kSecHeaderH + (kRowH + kRowGap) * 4 + kSecGap + filtEnv;  // OSC + filter+env
         // Drum
@@ -790,7 +895,10 @@ private:
 
         // Custom controls are hidden in MelSynth mode
         for (auto& b : waveButtons_) b.setVisible(false); // wave btns moved to SynthEditorPanel
-        openVstBtn_.setVisible(false);
+        openVstBtn_.setVisible(isMelVst);
+        paramDecBtn_    .setVisible(isMelVst);
+        paramIncBtn_    .setVisible(isMelVst);
+        paramCountLabel_.setVisible(isMelVst);
         tuneSlider_.setVisible(!isMelSynth && !isMelVst);
         detSlider_   .setVisible(false);  // covered by SynthEditorPanel
         driveSlider_ .setVisible(false);
@@ -807,6 +915,67 @@ private:
         releaseSlider_.setVisible(showFilterEnv);
         for (auto* f : { &filtButtons_[0], &filtButtons_[1], &filtButtons_[2] })
             f->setVisible(showFilterEnv);
+    }
+
+    // ---- Timer: poll plugin param values → sync sliders ----
+    void timerCallback() override
+    {
+        if (currentPlugin_ == nullptr) return;
+        const auto& params = currentPlugin_->getParameters();
+        for (auto& slot : paramSlots_)
+        {
+            if (slot.paramIndex < 0 || slot.paramIndex >= (int)params.size()) continue;
+            const float pv = params[slot.paramIndex]->getValue();
+            if (std::abs(pv - (float)slot.slider->getValue()) > 0.0005f)
+                slot.slider->setValue((double)pv, juce::dontSendNotification);
+        }
+    }
+
+    // ---- Right-click on param slot label/slider → remap ----
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (!e.mods.isRightButtonDown() || currentPlugin_ == nullptr) return;
+        for (int i = 0; i < (int)paramSlots_.size(); ++i)
+        {
+            if (e.eventComponent == paramSlots_[i].nameLabel.get() ||
+                e.eventComponent == paramSlots_[i].slider.get())
+            {
+                showParamPickerMenu(i);
+                return;
+            }
+        }
+    }
+
+    void showParamPickerMenu(int slotIndex)
+    {
+        const auto& params = currentPlugin_->getParameters();
+        juce::PopupMenu m;
+        const int currentIdx = paramSlots_[slotIndex].paramIndex;
+        for (int i = 0; i < (int)params.size(); ++i)
+            m.addItem(i + 1,
+                      params[i]->getName(40) + "  [" + juce::String(i) + "]",
+                      true, i == currentIdx);
+
+        m.showMenuAsync(
+            juce::PopupMenu::Options()
+                .withTargetComponent(paramSlots_[slotIndex].nameLabel.get()),
+            [this, slotIndex](int result)
+            {
+                if (result <= 0 || currentPlugin_ == nullptr) return;
+                if (slotIndex >= (int)paramSlots_.size()) return;
+                const int newIdx = result - 1;
+                auto& slot = paramSlots_[slotIndex];
+                const auto& params = currentPlugin_->getParameters();
+                if (newIdx >= (int)params.size()) return;
+                slot.paramIndex = newIdx;
+                auto* p = params[newIdx];
+                slot.nameLabel->setText(p->getName(14).toUpperCase(),
+                                        juce::dontSendNotification);
+                slot.slider->setValue((double)p->getValue(), juce::dontSendNotification);
+                slot.slider->onValueChange = [p, sp = slot.slider.get()] {
+                    p->setValueNotifyingHost((float)sp->getValue());
+                };
+            });
     }
 
     void paintFilterAndEnvLabels(juce::Graphics& g, int rx, int rw, int ry)

@@ -301,16 +301,11 @@ MainComponent::MainComponent()
                                     hp0,
                                     hp0 ? audioEngine.getPlugin(0)->getName() : juce::String{});
         if (hp0)
-            instrumentPanel_.embedPluginEditor(audioEngine.getPlugin(0));
+            instrumentPanel_.buildVstKnobs(audioEngine.getPlugin(0));
         if (inspectorTab_ == 0)
-        {
-            const auto edSz = instrumentPanel_.getEmbeddedEditorSize();
-            const int scrollT = instrumentViewport_.getScrollBarThickness();
             instrumentPanel_.setSize(
-                juce::jmax(instrumentViewport_.getWidth() - scrollT,
-                           edSz.x > 0 ? edSz.x + 20 : 0),
+                instrumentViewport_.getWidth() - instrumentViewport_.getScrollBarThickness(),
                 instrumentPanel_.getNeededHeight());
-        }
         if (pat0.channelTypes[0] == ChannelType::Melodic && !hp0)
             instrumentPanel_.setAvailablePresets(
                 SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
@@ -861,23 +856,14 @@ MainComponent::MainComponent()
                                         hp,
                                         hp ? audioEngine.getPlugin(ch)->getName() : juce::String{});
             if (hp)
-            {
-                if (pluginEditorWindows[(size_t)ch] != nullptr)
-                    pluginEditorWindows[(size_t)ch].reset();
-                instrumentPanel_.embedPluginEditor(audioEngine.getPlugin(ch));
-            }
+                instrumentPanel_.buildVstKnobs(audioEngine.getPlugin(ch));
             else
-                instrumentPanel_.clearEmbeddedEditor();
+                instrumentPanel_.clearVstKnobs();
 
             if (inspectorTab_ == 0)
-            {
-                const auto edSz = instrumentPanel_.getEmbeddedEditorSize();
-                const int scrollT = instrumentViewport_.getScrollBarThickness();
                 instrumentPanel_.setSize(
-                    juce::jmax(instrumentViewport_.getWidth() - scrollT,
-                               edSz.x > 0 ? edSz.x + 20 : 0),
+                    instrumentViewport_.getWidth() - instrumentViewport_.getScrollBarThickness(),
                     instrumentPanel_.getNeededHeight());
-            }
             if (pat->channelTypes[(size_t)ch] == ChannelType::Melodic && !hp)
                 instrumentPanel_.setAvailablePresets(
                     SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
@@ -1931,16 +1917,10 @@ MainComponent::MainComponent()
                                                 pat->channelTypes[(size_t)targetCh],
                                                 hp,
                                                 hp ? audioEngine.getPlugin(targetCh)->getName() : juce::String{});
-                    if (pluginEditorWindows[(size_t)targetCh] != nullptr)
-                        pluginEditorWindows[(size_t)targetCh].reset();
-                    instrumentPanel_.embedPluginEditor(audioEngine.getPlugin(targetCh));
-
-                    const auto edSz = instrumentPanel_.getEmbeddedEditorSize();
-                    const int scrollT = instrumentViewport_.getScrollBarThickness();
+                    instrumentPanel_.buildVstKnobs(audioEngine.getPlugin(targetCh));
                     if (inspectorTab_ == 0)
                         instrumentPanel_.setSize(
-                            juce::jmax(instrumentViewport_.getWidth() - scrollT,
-                                       edSz.x > 0 ? edSz.x + 20 : 0),
+                            instrumentViewport_.getWidth() - instrumentViewport_.getScrollBarThickness(),
                             instrumentPanel_.getNeededHeight());
                 }
 
@@ -1976,7 +1956,7 @@ MainComponent::MainComponent()
         {
         if (pluginEditorWindows[(size_t)ch] != nullptr)
             pluginEditorWindows[(size_t)ch].reset();
-        instrumentPanel_.clearEmbeddedEditor();
+        instrumentPanel_.clearVstKnobs();
 
         audioEngine.unloadPlugin(ch);
         project.channelInstrumentPlugins[(size_t)ch] = {};
@@ -3272,7 +3252,7 @@ void MainComponent::reloadProjectIntoUI()
     {
         if (pluginEditorWindows[(size_t)ch] != nullptr)
             pluginEditorWindows[(size_t)ch].reset();
-        instrumentPanel_.clearEmbeddedEditor();
+        instrumentPanel_.clearVstKnobs();
         audioEngine.unloadPlugin(ch);
         channelRack.setChannelHasPlugin(ch, false);
     }
@@ -3330,18 +3310,13 @@ void MainComponent::reloadProjectIntoUI()
                                     pat->channelTypes[0],
                                     hp0,
                                     hp0 ? audioEngine.getPlugin(0)->getName() : juce::String{});
-        instrumentPanel_.clearEmbeddedEditor();
+        instrumentPanel_.clearVstKnobs();
         if (hp0)
-            instrumentPanel_.embedPluginEditor(audioEngine.getPlugin(0));
+            instrumentPanel_.buildVstKnobs(audioEngine.getPlugin(0));
         if (inspectorTab_ == 0)
-        {
-            const auto edSz = instrumentPanel_.getEmbeddedEditorSize();
-            const int scrollT = instrumentViewport_.getScrollBarThickness();
             instrumentPanel_.setSize(
-                juce::jmax(instrumentViewport_.getWidth() - scrollT,
-                           edSz.x > 0 ? edSz.x + 20 : 0),
+                instrumentViewport_.getWidth() - instrumentViewport_.getScrollBarThickness(),
                 instrumentPanel_.getNeededHeight());
-        }
         if (pat->channelTypes[0] == ChannelType::Melodic && !hp0)
             instrumentPanel_.setAvailablePresets(
                 SynthPresets::mergeFactoryAndCustom(project.customSynthPresets),
@@ -4002,13 +3977,10 @@ void MainComponent::resized()
 
     if (showInstr)
     {
-        instrumentViewport_.setScrollBarsShown(true, true);
         instrumentViewport_.setBounds(area);
-        const auto edSz = instrumentPanel_.getEmbeddedEditorSize();
-        const int scrollT = instrumentViewport_.getScrollBarThickness();
-        const int panelW = juce::jmax(area.getWidth() - scrollT,
-                                      edSz.x > 0 ? edSz.x + 20 : 0);
-        instrumentPanel_.setSize(panelW, instrumentPanel_.getNeededHeight());
+        instrumentPanel_.setSize(
+            area.getWidth() - instrumentViewport_.getScrollBarThickness(),
+            instrumentPanel_.getNeededHeight());
     }
     else if (showSeq)
     {
