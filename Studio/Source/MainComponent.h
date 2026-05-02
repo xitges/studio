@@ -562,7 +562,7 @@ public:
         paramSlots_.clear();
         currentPlugin_ = nullptr;
 
-        if (plugin == nullptr) { updateModeVisibility(); setSize(getWidth(), getNeededHeight()); repaint(); return; }
+        if (plugin == nullptr) { updateModeVisibility(); setSize(getWidth(), getNeededHeight()); resized(); repaint(); return; }
         currentPlugin_ = plugin;
 
         const auto& params = plugin->getParameters();
@@ -604,6 +604,7 @@ public:
         startTimerHz(10);
         updateModeVisibility();
         setSize(getWidth(), getNeededHeight());
+        resized();   // always re-layout: setSize skips resized() when height is unchanged
         repaint();
     }
 
@@ -618,6 +619,7 @@ public:
         paramSlots_.clear();
         updateModeVisibility();
         setSize(getWidth(), getNeededHeight());
+        resized();
         repaint();
     }
 
@@ -758,16 +760,6 @@ public:
             return;
         }
 
-        const int rx       = kPadH + kLeftW + kInnerGap;
-        const int rw       = W - rx - kPadH;
-        if (rw < 60) return;
-        const int slW      = rw - kLblW;
-        const int sx       = rx + kLblW;
-        const int filtSlW  = rw - kFiltBtnW - kFiltGap - kLblW;
-        const int filtSx   = rx + kFiltBtnW + kFiltGap + kLblW;
-
-        int ry = kHeaderH + kPadV;
-
         if (mode_ == PanelMode::MelVst)
         {
             // Control row: [OPEN VST EDITOR] centred,  [- N +] right-aligned
@@ -801,8 +793,18 @@ public:
             }
             return;
         }
-        else  // Drum
+
+        // ---- Drum mode ----
         {
+            const int rx      = kPadH + kLeftW + kInnerGap;
+            const int rw      = W - rx - kPadH;
+            if (rw < 60) return;
+            const int slW     = rw - kLblW;
+            const int sx      = rx + kLblW;
+            const int filtSlW = rw - kFiltBtnW - kFiltGap - kLblW;
+            const int filtSx  = rx + kFiltBtnW + kFiltGap + kLblW;
+            int ry = kHeaderH + kPadV;
+
             // PLAY button in header
             previewBtn_.setBounds(W - kPadH - 38, (kHeaderH - kRowH) / 2, 26, kRowH);
             ry += kSecHeaderH;

@@ -1896,6 +1896,22 @@ MainComponent::MainComponent()
                 project.channelInstrumentPlugins[(size_t)targetCh].pluginId =
                     desc.createIdentifierString();
                 project.channelInstrumentPlugins[(size_t)targetCh].enabled = true;
+
+                // Force Melodic mode and clear all steps
+                if (auto* pat = findPattern(activePatternId))
+                {
+                    pat->channelTypes[targetCh] = ChannelType::Melodic;
+                    for (int v = 0; v < Pattern::kMaxVariations; ++v)
+                        for (int s = 0; s < Pattern::kMaxSteps; ++s)
+                            pat->variations[v].steps[targetCh][s] = false;
+                }
+                channelRack.setChannelType(targetCh, ChannelType::Melodic);
+                for (int s = 0; s < Pattern::kMaxSteps; ++s)
+                {
+                    channelRack.setStep(targetCh, s, false);
+                    audioEngine.setStepPattern(targetCh, s, false);
+                }
+
                 channelRack.setChannelHasPlugin(targetCh, true);
                 audioEngine.updatePatternSnapshot();
                 markDirty();
