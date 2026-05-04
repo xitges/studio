@@ -625,7 +625,7 @@ public:
 
     int getNeededHeight() const
     {
-        if (mode_ == PanelMode::MelSynth) return kHeaderH + 680;
+        if (mode_ == PanelMode::MelSynth) return kHeaderH + 900;
         if (mode_ == PanelMode::MelVst)
         {
             const int rows = paramSlots_.empty() ? 1
@@ -756,7 +756,7 @@ public:
 
         if (mode_ == PanelMode::MelSynth)
         {
-            synthPanel_.setBounds(0, kHeaderH, W, 680);
+            synthPanel_.setBounds(0, kHeaderH, W, 900);
             return;
         }
 

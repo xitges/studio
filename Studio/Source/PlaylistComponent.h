@@ -960,43 +960,82 @@ inline void PlaylistComponent::drawClips(juce::Graphics& g)
             }
         }
 
-        // ---- Pattern body: 16×4 step-dot grid ----
-        if (!isAudio && w > 24)
+        // ---- Waveform preview ----
+        if (w > 24)
         {
-            const int gridX = x + 3;
-            const int gridY = ty + 21;
-            const int gridW = w - 6;
-            const int gridH = h - 24;
-            if (gridH > 4)
+            const int wfX = x + 3;
+            const int wfY = ty + 21;
+            const int wfW = w - 6;
+            const int wfH = h - 24;
+            if (wfH > 4 && wfW > 0)
             {
-                const Pattern* pat = nullptr;
-                const int vi = juce::jlimit(0, Pattern::kMaxVariations - 1, clip.variationIdx);
-                if (project != nullptr && clip.patternId > 0)
-                    for (const auto& p : project->patterns)
-                        if (p.id == clip.patternId) { pat = &p; break; }
+                const WaveCache* wcPtr = nullptr;
+                WaveCache        tempCache;
 
-                static constexpr int kCols = 16, kRows = 4;
-                const float cW = (float)gridW / kCols;
-                const float cH = (float)gridH / kRows;
-
-                int rngSeed = clip.id * 7 + clip.patternId * 13 + 1;
-                for (int r = 0; r < kRows; ++r)
+                if (!isAudio)
                 {
-                    for (int c = 0; c < kCols; ++c)
+                    // Pattern clip — synthesised waveform
+                    const Pattern* pat = nullptr;
+                    const int vi = juce::jlimit(0, Pattern::kMaxVariations - 1, clip.variationIdx);
+                    if (project != nullptr && clip.patternId > 0)
+                        for (const auto& p : project->patterns)
+                            if (p.id == clip.patternId) { pat = &p; break; }
+
+                    if (pat != nullptr)
                     {
-                        bool on = false;
-                        if (pat != nullptr && r < Pattern::kMaxChannels && c < pat->stepCount)
-                            on = pat->variations[vi].steps[r][c];
-                        else
+                        const double bpm  = (project != nullptr) ? project->bpm : 120.0;
+                        const int    bpmR = juce::roundToInt(bpm);
+                        const auto   key  = std::make_tuple(clip.patternId, vi, wfW, bpmR);
+                        auto it = waveformCache_.find(key);
+                        if (it == waveformCache_.end())
                         {
-                            rngSeed = (rngSeed * 9301 + 49297) % 233280;
-                            on = ((float)rngSeed / 233280.0f) < 0.35f;
+                            const float clipBeats = clip.lengthBars * 4.0f;
+                            waveformCache_[key] = buildPatternWave(*pat, vi, wfW, clipBeats, bpm);
+                            it = waveformCache_.find(key);
                         }
-                        const float dx = (float)gridX + c * cW + cW * 0.15f;
-                        const float dy = (float)gridY + r * cH + cH * 0.15f;
-                        g.setColour(on ? col.withAlpha(0.95f * baseA)
-                                       : juce::Colour(0x33000000).withAlpha(baseA));
-                        g.fillRoundedRectangle(dx, dy, cW * 0.7f, cH * 0.7f, 0.6f);
+                        wcPtr = &it->second;
+                    }
+                }
+                else
+                {
+                    // Audio clip — real waveform from decoded buffer
+                    if (getAudioBuffer && clip.audioFilePath.isNotEmpty())
+                    {
+                        const size_t pathHash = std::hash<std::string>{}(clip.audioFilePath.toStdString());
+                        const auto   key      = std::make_pair(pathHash, wfW);
+                        auto it = audioWaveCache_.find(key);
+                        if (it == audioWaveCache_.end())
+                        {
+                            auto buf = getAudioBuffer(clip.audioFilePath);
+                            if (buf != nullptr && buf->getNumSamples() > 0)
+                            {
+                                const double bpmL = (project != nullptr) ? project->bpm : 120.0;
+                                const int vis = (int)(clip.lengthBars * 4.0 * 60.0 / bpmL * 44100.0);
+                                audioWaveCache_[key] = buildAudioWave(*buf, wfW, vis);
+                            }
+                            else
+                            {
+                                audioWaveCache_[key] = {};
+                            }
+                            it = audioWaveCache_.find(key);
+                        }
+                        if (!it->second.empty())
+                            wcPtr = &it->second;
+                    }
+                }
+
+                if (wcPtr != nullptr && !wcPtr->empty())
+                {
+                    juce::Graphics::ScopedSaveState ss(g);
+                    g.reduceClipRegion(wfX, wfY, wfW, wfH);
+                    const float midY = (float)(wfY + wfH / 2);
+                    const float half = (float)(wfH / 2) * 0.88f;
+                    g.setColour(col.withAlpha(0.80f * baseA));
+                    for (int px = 0; px < wfW && px < (int)wcPtr->size(); ++px)
+                    {
+                        const float y0 = midY - (*wcPtr)[px].max * half;
+                        const float y1 = midY - (*wcPtr)[px].min * half;
+                        g.drawVerticalLine(wfX + px, y0, juce::jmax(y0 + 0.5f, y1));
                     }
                 }
             }
@@ -2144,7 +2183,7 @@ inline void PlaylistComponent::handleAudioFileDrop(const juce::String& filePath,
             lengthBars = (float)(beats / 4.0);
         }
     }
-    lengthBars = juce::jmax(0.25f, lengthBars);
+    lengthBars = juce::jmax(0.0625f, lengthBars);  // 1/16 bar minimum, never force shorter samples longer
 
     // Allocate new clip ID
     int newId = 1;

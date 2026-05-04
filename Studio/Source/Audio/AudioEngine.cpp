@@ -3059,13 +3059,14 @@ void AudioEngine::mixToOutput(juce::AudioBuffer<float>& output, int numSamples,
 
                 for (int s = startS; s < safe; ++s)
                 {
-                    // Loop: wrap fractional position into file range
-                    double wp = std::fmod(filePos, (double)fileLen);
-                    if (wp < 0.0) wp += (double)fileLen;
+                    // Stop at end of file — no looping for one-shot audio clips
+                    if (filePos >= (double)fileLen || filePos < 0.0) break;
+
+                    const double wp = filePos;
 
                     // Linear interpolation between adjacent samples
                     const int   s0   = (int)wp;
-                    const int   s1   = (s0 + 1) % fileLen;
+                    const int   s1   = juce::jmin(s0 + 1, fileLen - 1);
                     const float frac = (float)(wp - (double)s0);
                     const float invF = 1.0f - frac;
 
