@@ -1,4 +1,4 @@
-  ## 0. Infra / Core
+  ## Infra / Core
 - **Rationale**
         
     DAW에는 두 가지 작업이 공존 :
