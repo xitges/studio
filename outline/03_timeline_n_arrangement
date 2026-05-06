@@ -1,0 +1,106 @@
+## Timeline / Arrangement
+    - 패턴 모드 : 시퀸서 기반 반복
+        
+        시퀸서에 스텝이 찍히는 구조. 하나의 Pattern 안에 step / note / channel 상태가 들어있고, 재생은 현재 active pattern을 기준으로 진행.
+        
+        오디오 콜백마다 BPM 기준으로 현재 위치를 beat / step으로 변환하고, 해당 step에 찍힌 이벤트를 발동. 마지막 step까지 도달하면 다시 처음 step으로 돌아감. 따라서 곡 전체 시간축이라기보다, 짧은 루프를 계속 순환시키는 작업 공간.
+        
+    
+    위 구조에 따른 timeline / Arrangement 설계 :
+    
+    - Pattern의 길이는 stepCount 기준. 16 step = 1 bar, 64 step = 4 bar처럼 계산.
+    - Pattern 모드의 재생 위치는 pattern 내부 beat / step 위치.
+    - stop / pause 시 현재 step을 기억하고 같은 위치에서 다시 시작하도록.
+    - 더블 스페이스 | restart 시 patternStartStep을 0으로 되돌려서 처음부터 시작하도록.
+    - Piano Roll의 note도 pattern 내부 beat 기준으로 저장. timeline 전체 위치가 아니라 pattern 시작점 기준 상대 위치.
+    - Pattern 안의 channel 설정, step, note, variation은 클립보다 원본 데이터에 가까움. Playlist에 놓인 pattern clip들은 이 원본 pattern을 참조해서 재사용.
+    
+    ---
+    
+    - 송 모드 : 트랙 기반 플레이리스트
+        
+        플레이리스트에 클립이 배치되는 구조. 여러 track row 위에 pattern clip / audio clip을 놓고, playhead가 왼쪽에서 오른쪽으로 진행하면서 현재 위치와 겹치는 clip만 재생.
+        
+        반복을 기본으로 하지 않음. 마지막 클립 끝까지 도달하면 거기서 끝나는 구조.  곡 전체 arrangement 공간.
+        
+    
+    위 구조에 따른 timeline / Arrangement 설계 :
+    
+    - 가로축은 bar 단위 시간축. startBar, lengthBars로 clip의 위치와 길이를 표현.
+    - 세로축은 playlist track. 주로 arrangement 정리용 row.
+    - Pattern clip은 patternId와 variation을 참조. clip 자체가 step 데이터를 복사해서 들고 있는 것이 아니라 기존 Pattern을 timeline 위에서 반복 재생하는 식으로.
+    - Pattern clip 길이가 원본 pattern보다 길면 pattern 내부를 반복해서 채우도록.
+    - Pattern clip에서 내부 시작 위치를 밀 수 있도록 구현. 클립 위치는 그대로 두고 내용만 slip edit.
+    - Audio clip은 파일 경로와 디코딩된 버퍼를 참조. 파일 내부 시작 위치를 밀 수 있도록 구현.
+    - Audio clip은 fade in / fade out, pitch, playback mode를 가지도록.
+    - 재생 중에는 현재 song beat 위치를 기준으로 이번 오디오 block과 겹치는 clip만 검사.
+    - 겹치는 Pattern clip은 song 위치 → clip 내부 위치 → pattern 내부 step/note 위치로 변환.
+    - 겹치는 Audio clip은 song 위치 → clip 내부 위치 → 파일 sample 위치로 변환.
+    - Song mode의 playhead는 songBeatPosition 기준으로 움직이고, UI에서는 이를 bar로 바꿔서 표시.
+    - ruler 클릭 시 해당 bar로 seek. seek 시 audio clip 상태를 reset해서 다음 콜백부터 새 위치 기준으로 다시 읽음.
+    - Automation lane ?
+    
+    ---
+    
+    - Pattern → Clip → Song playlist 구조
+        
+        패턴은 클립에 할당되어 Song playlist에서 재생. 
+        
+        패턴은 실제 
+        
+        Pattern은 실제 음악 데이터의 원본. step, note, channel 설정, variation, sample/synth/plugin 설정을 가지도록. Clip은 patternId로 Pattern을 참조. 따라서 같은 Pattern을 여러 Clip이 공유할 수 있도록 구혀.
+        
+        - 구조 상세 :
+            
+            Pattern 원본 데이터
+            →
+            Pattern Clip이 patternId로 Pattern을 참조
+            →
+            Clip이 Song Playlist의 특정 bar / track에 배치
+            →
+            Song mode 재생 시 playhead 위치와 겹치는 clip을 찾음
+            →
+            clip이 참조하는 pattern을 읽어 소리를 생성
+            
+        - 동기화/호환 방법 :
+            
+            데이터 복사 방식으로 클립에 할당되는것이 아니기 때문에 패턴이 수정되어도 수정된 패턴 전달할 필요 없이 ID로 참조하여 사용.
+            
+            수정 흐름: 
+            
+            Message Thread에서 Pattern 편집
+            →
+            Project 안의 원본 Pattern 데이터 변경
+            →
+            AudioEngine runtime state 갱신
+            →
+            Song mode 재생 시 Pattern Clip이 patternId로 최신 Pattern을 다시 조회
+            →
+            다음 오디오 콜백부터 변경된 step / note / channel 설정이 반영
+            
+            시간 매핑 방식 : 
+            
+            Pattern은 자기 내부 시간 단위를 가짐. step / note는 song 전체 bar가 아니라 pattern 시작점을 기준으로 저장.
+            
+            Clip은 song playlist 위의 시간 단위를 가짐. startBar, lengthBars로 song timeline에서 언제 시작하고 얼마나 지속될지 저장.
+            
+            따라서 Song mode에서 Pattern Clip을 재생할 때는 song 시간 → clip 내부 시간 → pattern 내부 시간 순서로 변환.
+            
+            - 변환 흐름 :
+                
+                현재 song playhead bar
+                →
+                clip.startBar를 빼서 clip 내부 bar 위치 계산
+                →
+                clip.patternStartOffsetBars를 더해서 pattern 내부 시작 offset 반영
+                →
+                pattern 길이 안으로 modulo 처리
+                →
+                pattern 내부 step / note 위치 계산
+                →
+                해당 이벤트 발동
+                
+            
+            Pattern의 시간은 항상 clip 시작점 기준 상대 시간으로 해석
+            
+            Clip 길이가 Pattern 길이보다 길면 같은 Pattern을 반복해서 읽도록. Clip 길이가 Pattern보다 짧으면 Pattern의 일부만 재생.
