@@ -774,6 +774,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(browserCollapseBtn);
     playlistViewport.setScrollBarsShown(true, true);
     playlistViewport.setScrollBarThickness(8);
+    playlist.setViewport(&playlistViewport);
     addAndMakeVisible(playlistViewport);
 
     // Snap box -- floats outside the viewport so it never scrolls away

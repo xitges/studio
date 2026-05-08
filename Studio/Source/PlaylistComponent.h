@@ -54,6 +54,7 @@ public:
     int getTrackHeaderWidth() const { return trackHeaderWidth; }
 
     void setSnapDivisor(int d) { snapDivisor = d; repaint(); }
+    void setViewport(juce::Viewport* vp) { viewport_ = vp; }
 
     int getNeededWidth()  const { return trackHeaderWidth + (int)(juce::jmax(200.0, getTotalBars() + 8.0)) * barWidth; }
     int getNeededHeight() const
@@ -415,6 +416,8 @@ private:
     // Snap
     int snapDivisor = 4;    // 1=1bar, 2=½bar, 4=¼bar, 8=⅛bar, 16=1/16bar, 0=free
 
+    juce::Viewport* viewport_ = nullptr;
+
     // Pixel ↔ bar helpers — single source of truth for all timeline math.
     // x is the component-local pixel x coordinate.
     float  pixelToBar(float  x)   const noexcept { return (x - (float)trackHeaderWidth) / (float)barWidth; }
@@ -567,6 +570,17 @@ inline void PlaylistComponent::paint(juce::Graphics& g)
     drawClips(g);
     drawAutomationLanes(g);
     drawPlayhead(g);
+
+    // Fixed header: re-draw on top at current scroll offset so it never scrolls away
+    const int scrollY = viewport_ ? viewport_->getViewPositionY() : 0;
+    if (scrollY > 0)
+    {
+        juce::Graphics::ScopedSaveState save(g);
+        g.reduceClipRegion(0, scrollY, getWidth(), headerHeight);
+        g.setOrigin(0, scrollY);
+        drawBackground(g);
+        drawTimeRuler(g);
+    }
 }
 
 inline void PlaylistComponent::drawBackground(juce::Graphics& g)
@@ -621,9 +635,9 @@ inline void PlaylistComponent::drawBackground(juce::Graphics& g)
         drawTag(180, cy - 7, 56, juce::String(getTrackCount()) + " TRACKS");
 
         // Snap section
-        g.setFont(LF::monoFont(7.5f, juce::Font::bold));
-        g.setColour(juce::Colour(LF::kTextFaint));
-        g.drawText("SNAP", 240, cy - 7, 30, 14, juce::Justification::centredRight);
+//        g.setFont(LF::monoFont(7.5f, juce::Font::bold));
+//        g.setColour(juce::Colour(LF::kTextFaint));
+//        g.drawText("SNAP", 240, cy - 7, 30, 14, juce::Justification::centredRight);
 
         const juce::String snapNames[] = {
             "1bar",

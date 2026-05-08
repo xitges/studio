@@ -21,6 +21,7 @@ public:
 
     SampleBrowserComponent()
     {
+        formatmanager.registerBasicFormats();
         using LF = StudioLookAndFeel;
 
         // ---- Header: + bookmark button ----
@@ -302,11 +303,15 @@ private:
     static constexpr int kFtrH    = 106;
     static constexpr int kItemH   = 26;
     static constexpr int kFolderH = 22;
+    juce::AudioFormatManager formatmanager;
 
     struct Item
     {
         enum class Type { Folder, AudioFile } type;
         juce::File file;
+        juce::String ext;
+        juce::String met;
+        double duration = 0.0;
         int indent = 0;
     };
     juce::Array<juce::File> bookmarks;
@@ -547,10 +552,8 @@ private:
                     {
                         g.setFont(juce::Font(juce::FontOptions("JetBrains Mono", 7.0f, juce::Font::plain)));
                         g.setColour(juce::Colour(LF::kTextFaint));
-                        const juce::String ext = item.file.getFileExtension().toUpperCase()
-                                                            .trimCharactersAtStart(".");
-                        const juce::String meta = juce::String::fromUTF8("0:01 \xc2\xb7 ") + ext;
-                        g.drawText(meta, colName, y + rh - 11, colWave - colName - 4, 9,
+                        
+                        g.drawText(item.met, colName, y + rh - 11, colWave - colName - 4, 9,
                                    juce::Justification::centredLeft);
                     }
 
@@ -747,7 +750,11 @@ private:
         subDirs.sort();
         for (const auto& dir : subDirs)
         {
-            items.push_back({ Item::Type::Folder, dir, indent });
+            Item item;
+            item.type = Item::Type::Folder;
+            item.file = dir;
+            item.indent = indent;
+            items.push_back(item);
             if (expandedPaths.contains(dir.getFullPathName()))
                 addFolderContents(dir, indent + 1, filter);
         }
@@ -759,7 +766,29 @@ private:
         {
             if (!audioExts().contains(file.getFileExtension().toLowerCase())) continue;
             if (!filter.isEmpty() && !file.getFileName().toLowerCase().contains(filter)) continue;
-            items.push_back({ Item::Type::AudioFile, file, indent });
+
+            Item item;
+            item.type = Item::Type::AudioFile;
+            item.file = file;
+            item.indent = indent;
+            item.ext = file.getFileExtension().toUpperCase().trimCharactersAtStart(".");
+
+            if (auto reader = std::unique_ptr<juce::AudioFormatReader>(formatmanager.createReaderFor(file)))
+            {
+                item.duration = reader->lengthInSamples / reader->sampleRate;
+           
+                int minutes = (int)item.duration / 60;
+                int seconds = (int)item.duration % 60;
+                int fraction = (int)(std::fmod(item.duration, 1.0) * 100);
+                
+                item.met = juce::String::formatted("%02d:%02d:%02d", minutes, seconds, fraction) + " · " + item.ext;
+            }
+            else
+            {
+                item.met = item.ext;
+            }
+
+            items.push_back(item);
         }
     }
 
@@ -771,7 +800,11 @@ private:
 
         for (auto& bm : bookmarks)
         {
-            items.push_back({ Item::Type::Folder, bm, 0 });
+            Item item;
+            item.type = Item::Type::Folder;
+            item.file = bm;
+            item.indent = 0;
+            items.push_back(item);
             if (expandedPaths.contains(bm.getFullPathName()))
                 addFolderContents(bm, 1, filter);
         }
