@@ -242,7 +242,7 @@ public:
             g.drawText("NOW PREVIEWING", px, ry, pw - 18, 10, juce::Justification::centredLeft);
 
             const juce::Colour ledCol = currentPreviewName_.isNotEmpty()
-                ? juce::Colour(LF::kLedGreen) : juce::Colour(LF::kLedOff);
+                ? juce::Colour(LF::kDisplayFg) : juce::Colour(LF::kLedOff);
             g.setColour(ledCol);
             g.fillEllipse(W - 18.0f, (float)ry + 5.0f, 7.0f, 7.0f);
 
@@ -261,9 +261,22 @@ public:
             g.fillRoundedRectangle(wdBox.withHeight(5.0f), 3.0f);
             g.setColour(juce::Colour(0x80000000));
             g.drawRoundedRectangle(wdBox.reduced(0.5f), 3.0f, 1.0f);
-            drawMiniWave(g, wdBox.reduced(6.0f, 4.0f),
-                         previewSeed_,
-                         juce::Colour(LF::kDisplayFg).withAlpha(0.85f));
+            if (currentPreviewName_.isNotEmpty())
+            {
+                drawMiniWave(g, wdBox.reduced(6.0f, 4.0f),
+                             previewSeed_,
+                             juce::Colour(LF::kDisplayFg).withAlpha(0.85f));
+            }
+            else
+            {
+                g.setColour(juce::Colour(LF::kDisplayFg).withAlpha(0.15f));
+                
+                const float lineX = wdBox.getX() + 6.0f;
+                const float lineY = wdBox.getCentreY();
+                const float lineW = wdBox.getWidth() - 12.0f;
+                
+                g.drawLine(lineX, lineY, lineX + lineW, lineY, 1.0f);
+            }
         }
     }
 
@@ -280,7 +293,7 @@ public:
         {
             const int sy = 36, sh = 24, sx = 10, sw = W - 20;
             searchBoxBounds_ = { sx, sy, sw, sh };
-            searchPrefix_   .setBounds(sx,           sy,     20,    sh);
+            searchPrefix_   .setBounds(sx,           sy - 2,     20,    sh);
             clearSearchBtn_ .setBounds(sx + sw - 22, sy + 2, 20,    sh - 4);
             searchField_    .setBounds(sx + 20,      sy + 2, sw - 44, sh - 6);
         }

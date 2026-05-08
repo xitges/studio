@@ -1305,6 +1305,35 @@ private:
     juce::Viewport       channelRackViewport;
     MixerComponent       mixer;
 
+    // Playlist / bottom-panel resizer
+    struct PanelDivider : juce::Component
+    {
+        std::function<void(int)> onDrag;
+        std::function<float()>   getOwnerRatio;
+        float savedRatio_ = 0.55f;
+
+        void paint(juce::Graphics& g) override
+        {
+            g.fillAll(juce::Colour(0xffe4e4e8));
+            g.setColour(juce::Colour(0xffd0d0d4));
+            g.drawLine(0.0f, 0.5f, (float)getWidth(), 0.5f, 1.0f);
+            g.drawLine(0.0f, (float)getHeight() - 0.5f, (float)getWidth(), (float)getHeight() - 0.5f, 1.0f);
+            // Centre grab dots
+            const float cx = (float)getWidth() * 0.5f;
+            const float cy = (float)getHeight() * 0.5f;
+            g.setColour(juce::Colour(0xffb8b8c0));
+            for (int i = -3; i <= 3; ++i)
+                g.fillEllipse(cx + (float)i * 5.0f - 1.0f, cy - 1.0f, 2.5f, 2.5f);
+        }
+        void mouseEnter(const juce::MouseEvent&) override { setMouseCursor(juce::MouseCursor::UpDownResizeCursor); }
+        void mouseExit (const juce::MouseEvent&) override { setMouseCursor(juce::MouseCursor::NormalCursor); }
+        void mouseDown (const juce::MouseEvent&) override { if (getOwnerRatio) savedRatio_ = getOwnerRatio(); }
+        void mouseDrag (const juce::MouseEvent& e) override { if (onDrag) onDrag(e.getDistanceFromDragStartY()); }
+    };
+    PanelDivider panelDivider_;
+    float panelSplitRatio_ = 0.55f;
+    int   dividerAvailH_   = 600;
+
     // M15 — sample browser panel
     SampleBrowserComponent sampleBrowser;
     juce::Viewport         browserViewport;

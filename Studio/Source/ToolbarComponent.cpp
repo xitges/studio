@@ -105,7 +105,7 @@ ToolbarComponent::ToolbarComponent()
     bpmLabel.setColour(juce::Label::textColourId, juce::Colour(StudioLookAndFeel::kDisplayFg));
     bpmLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
     bpmLabel.setColour(juce::Label::outlineWhenEditingColourId, juce::Colour(StudioLookAndFeel::kAccent));
-    bpmLabel.setFont(StudioLookAndFeel::displayFont(18.0f));
+    bpmLabel.setFont(StudioLookAndFeel::displayFont(20.0f));
     bpmLabel.setJustificationType(juce::Justification::centred);
     bpmLabel.setEditable(false, true, false);   // double-click opens editor
     bpmLabel.addMouseListener(&bpmLabelHandler_, false);
@@ -214,11 +214,11 @@ ToolbarComponent::ToolbarComponent()
     exportStemsBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0x99000000));
     exportStemsBtn.onClick = [this] { if (onExportStems) onExportStems(); };
 
-    addAndMakeVisible(mixerBtn);
-    mixerBtn.setButtonText("MIX");
-    mixerBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(StudioLookAndFeel::kChassis));
-    mixerBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(StudioLookAndFeel::kTextDim));
-    mixerBtn.onClick = [this] { if (onToggleMixer) onToggleMixer(); };
+//    addAndMakeVisible(mixerBtn);
+//    mixerBtn.setButtonText("MIX");
+//    mixerBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(StudioLookAndFeel::kChassis));
+//    mixerBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(StudioLookAndFeel::kTextDim));
+//    mixerBtn.onClick = [this] { if (onToggleMixer) onToggleMixer(); };
 
     addAndMakeVisible(audioBtn);
     audioBtn.setButtonText("AUDIO");
@@ -307,13 +307,11 @@ void ToolbarComponent::timerCallback()
     if (playing)
     {
         reelAngle_ = std::fmod(reelAngle_ + 2.5f, 360.0f);
-        repaint(0, 0, 290, 92);                         // reels + brand area
-        repaint(300, 0, 130, 92);                        // position display
-        repaint(getWidth() - 256, 0, 256, 92);           // right section (meter + LEDs)
+        repaint(0, 0, getWidth(), 92);   // full row 1 (position display + LEDs + VU)
     }
     else
     {
-        repaint(getWidth() - 256, 0, 256, 92);
+        repaint(getWidth() - 256, 0, 256, 92);   // right section (VU meter)
     }
 
     if (recordingActive_)
@@ -354,6 +352,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
     // ROW 1 — Transport Panel (rounded, reference-matched)
     // =========================================================
     {
+        const float sx = W / 1600.0f;   // proportional scale from 1600px reference
         const juce::Rectangle<float> panel(5.0f, 5.0f, W - 10.0f, row1H - 8.0f);
 
         // Panel bg gradient
@@ -378,17 +377,18 @@ void ToolbarComponent::paint(juce::Graphics& g)
 
         // ---- LEFT: Brand + Tape Reels ----------------------------------------
         {
+            int paddingx = 10; int paddingy = 10;
             // "fieldlab." — Space Grotesk 20px Bold
             g.setFont(LF::brandFont(20.0f, juce::Font::bold));
             g.setColour(juce::Colour(LF::kText));
-            g.drawText("xitges", 14, 10, 84, 24, juce::Justification::centredLeft);
+            g.drawText("xitges", 14 + paddingx, 10 + paddingy, 84, 24, juce::Justification::centredLeft);
             g.setColour(juce::Colour(LF::kAccent));
-            g.drawText(".", 82, 10, 14, 24, juce::Justification::centredLeft);
+            g.drawText(".", 82 + paddingx, 10 + paddingy, 14, 24, juce::Justification::centredLeft);
 
             // Subtitle
             g.setFont(LF::monoFont(7.5f, juce::Font::bold));
             g.setColour(juce::Colour(LF::kTextFaint));
-            g.drawText(juce::String::fromUTF8("TR-1  \xe2\x80\x94  TABLETOP DAW"), 14, 38, 114, 10,
+            g.drawText(juce::String::fromUTF8("TR-1  \xe2\x80\x94  TABLETOP DAW"), 14 + paddingx, 38 + paddingy, 114, 10,
                         juce::Justification::centredLeft);
 
             // Tags
@@ -402,50 +402,50 @@ void ToolbarComponent::paint(juce::Graphics& g)
                 g.setColour(juce::Colour(col));
                 g.drawText(txt, x + 3, y + 1, w - 6, 10, juce::Justification::centredLeft);
             };
-            drawTag(14, 52, 62, juce::String::fromUTF8("Studio \xc2\xb7 04"), LF::kTextDim);
+            drawTag(14 + paddingx, 52 + paddingy, 62, juce::String::fromUTF8("Studio \xc2\xb7 04"), LF::kTextDim);
             if (recordingActive_)
                 drawTag(80, 52, 66, juce::String::fromUTF8("\xe2\x97\x8f REC ARM"), LF::kLedRed);
 
-            // Dashed separator after brand
-            g.setColour(juce::Colour(0x28000000));
-            for (float dy = 14.0f; dy < row1H - 14.0f; dy += 6.0f)
-                g.drawLine(120.0f, dy, 120.0f, dy + 3.0f, 1.0f);
-
-            // Tape reels — size=56px (r=28), matching reference 64px proportion
-            const float reelCy = midY;
-            const float reelR  = 28.0f;
-            const float reel1X = 158.0f;
-            const float reel2X = 240.0f;
-
-            drawTapeReel(g, reel1X, reelCy, reelR);
-
-            // Tape strip (reference: width=40, gradient #2a1f15→#4a3a25→#2a1f15)
-            const float stripX = reel1X + reelR + 3.0f;
-            const float stripW = reel2X - reelR - 3.0f - stripX;
-            juce::ColourGradient tapeGrad(juce::Colour(0xff2a1f15), stripX, 0,
-                                          juce::Colour(0xff2a1f15), stripX + stripW, 0, false);
-            tapeGrad.addColour(0.5, juce::Colour(0xff4a3a25));
-            g.setGradientFill(tapeGrad);
-            g.fillRoundedRectangle(stripX, reelCy - 1.5f, stripW, 3.0f, 1.0f);
-
-            drawTapeReel(g, reel2X, reelCy, reelR);
-
-            // L / R labels
-            g.setFont(LF::monoFont(7.0f, juce::Font::bold));
-            g.setColour(juce::Colour(LF::kTextFaint));
-            g.drawText("L", (int)(reel1X - 8.0f), (int)(reelCy + reelR + 3.0f), 16, 9,
-                        juce::Justification::centred);
-            g.drawText("R", (int)(reel2X - 8.0f), (int)(reelCy + reelR + 3.0f), 16, 9,
-                        juce::Justification::centred);
-
-            // Dashed separator after reels
-            for (float dy = 14.0f; dy < row1H - 14.0f; dy += 6.0f)
-                g.drawLine(280.0f, dy, 280.0f, dy + 3.0f, 1.0f);
+//            // Dashed separator after brand
+//            g.setColour(juce::Colour(0x28000000));
+//            for (float dy = 14.0f; dy < row1H - 14.0f; dy += 6.0f)
+//                g.drawLine(120.0f, dy, 120.0f, dy + 3.0f, 1.0f);
+//
+//            // Tape reels — size=56px (r=28), matching reference 64px proportion
+//            const float reelCy = midY;
+//            const float reelR  = 28.0f;
+//            const float reel1X = 158.0f;
+//            const float reel2X = 240.0f;
+//
+//            drawTapeReel(g, reel1X, reelCy, reelR);
+//
+//            // Tape strip (reference: width=40, gradient #2a1f15→#4a3a25→#2a1f15)
+//            const float stripX = reel1X + reelR + 3.0f;
+//            const float stripW = reel2X - reelR - 3.0f - stripX;
+//            juce::ColourGradient tapeGrad(juce::Colour(0xff2a1f15), stripX, 0,
+//                                          juce::Colour(0xff2a1f15), stripX + stripW, 0, false);
+//            tapeGrad.addColour(0.5, juce::Colour(0xff4a3a25));
+//            g.setGradientFill(tapeGrad);
+//            g.fillRoundedRectangle(stripX, reelCy - 1.5f, stripW, 3.0f, 1.0f);
+//
+//            drawTapeReel(g, reel2X, reelCy, reelR);
+//
+//            // L / R labels
+//            g.setFont(LF::monoFont(7.0f, juce::Font::bold));
+//            g.setColour(juce::Colour(LF::kTextFaint));
+//            g.drawText("L", (int)(reel1X - 8.0f), (int)(reelCy + reelR + 3.0f), 16, 9,
+//                        juce::Justification::centred);
+//            g.drawText("R", (int)(reel2X - 8.0f), (int)(reelCy + reelR + 3.0f), 16, 9,
+//                        juce::Justification::centred);
+//
+//            // Dashed separator after reels
+//            for (float dy = 14.0f; dy < row1H - 14.0f; dy += 6.0f)
+//                g.drawLine(280.0f, dy, 280.0f, dy + 3.0f, 1.0f);
         }
 
         // ---- CENTER-LEFT: BAR.BEAT.TICK Segment Display ----------------------
         {
-            const int dispX = 350, dispY = 25, dispW = 130, dispH = 38;
+            const int dispX = (int)(350.0f * sx), dispY = 25, dispW = 130, dispH = 38;
 
             g.setColour(juce::Colour(LF::kDisplayBg));
             g.fillRoundedRectangle((float)dispX, (float)dispY, (float)dispW, (float)dispH, 4.0f);
@@ -481,7 +481,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
                         juce::Justification::centred);
 
             // BAR / BEAT / TICK labels
-            g.setFont(LF::monoFont(6.5f, juce::Font::bold));
+            g.setFont(LF::monoFont(9.5f, juce::Font::bold));
             g.setColour(juce::Colour(LF::kTextFaint));
             const int lY = dispY + dispH + 4;
             const int cW = dispW / 3;
@@ -505,7 +505,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
                 g.setColour(juce::Colour(0x55000000));
                 g.drawRoundedRectangle(bR.reduced(0.5f), 4.0f, 1.0f);
                 // "BPM · 4/4" sub-label below
-                g.setFont(LF::monoFont(6.5f, juce::Font::bold));
+                g.setFont(LF::monoFont(9.5f, juce::Font::bold));
                 g.setColour(juce::Colour(LF::kTextFaint));
                 g.drawText(juce::String::fromUTF8("BPM \xc2\xb7 4/4"), (int)bR.getX(), (int)bR.getBottom() + 2,
                             (int)bR.getWidth(), 9, juce::Justification::centred);
@@ -514,7 +514,7 @@ void ToolbarComponent::paint(juce::Graphics& g)
 
         // ---- RIGHT: Status + MasterMeter + MASTER label ---------------------
         {
-            const int rightX = 510;
+            const int rightX = (int)(510.0f * sx);
 
 //            // Dashed separator
 //            g.setColour(juce::Colour(0x28000000));
@@ -536,8 +536,8 @@ void ToolbarComponent::paint(juce::Graphics& g)
                 g.drawEllipse(cx - r, cy - r, r*2.0f, r*2.0f, 0.5f);
             };
 
-            const float ledY   = 20.0f;
-            const float lx0    = (float)rightX + 10.0f;
+            const float ledY   = 30.0f;
+            const float lx0    = (float)rightX + 5.0f;
             g.setFont(LF::monoFont(8.0f, juce::Font::bold));
             g.setColour(juce::Colour(LF::kTextDim));
 
@@ -559,9 +559,9 @@ void ToolbarComponent::paint(juce::Graphics& g)
             g.setFont(LF::monoFont(7.5f));
             g.setColour(juce::Colour(LF::kTextFaint));
             g.drawText(juce::String::fromUTF8("44.1kHz \xc2\xb7 24bit \xc2\xb7 BUF 128"),
-                        rightX + 6, 34, 148, 10, juce::Justification::centredLeft);
+                        rightX + 6, 44, 148, 10, juce::Justification::centredLeft);
             g.drawText(juce::String::fromUTF8("CPU 18% \xc2\xb7 MEM 1.4G"),
-                        rightX + 6, 47, 148, 10, juce::Justification::centredLeft);
+                        rightX + 6, 57, 148, 10, juce::Justification::centredLeft);
 
             // MasterMeter — 18 segs, 1.6px height, 8px wide per bar, gap:6 between bars
             // Container: kDisplayBg bg, borderRadius 4, inset shadow, 1px dark border
@@ -666,8 +666,9 @@ void ToolbarComponent::resized()
 
     // ---- Row 1: Transport + mode selector + BPM (center section) ------------
     {
-        const int leftEnd  = 406;
-        const int rightEnd = getWidth() - 260;
+        const float sx     = (float)getWidth() / 1600.0f;
+        const int leftEnd  = (int)(406.0f * sx);
+        const int rightEnd = getWidth() - (int)(260.0f * sx);
         const int avail    = juce::jmax(0, rightEnd - leftEnd);
 
         // Square transport buttons: REW(28)+PLAY(38)+STOP(28)+REC(28)+FF(28)+LOOP(28) + 5×5gaps
@@ -702,7 +703,8 @@ void ToolbarComponent::resized()
         // BPM display (painted bg + label overlay + invisible drag slider)
         {
             const int bpmH = 42;
-            juce::Rectangle<int> bpmArea(curX, (row1H - bpmH) / 2, 72, bpmH);
+            const int bpmX = (int)(275.0f * sx) - 10;
+            juce::Rectangle<int> bpmArea(bpmX, (row1H - bpmH) / 2, 72, bpmH - 4);
             bpmLabel .setBounds(bpmArea);
             bpmSlider.setBounds(bpmArea);
         }

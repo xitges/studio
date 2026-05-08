@@ -389,11 +389,11 @@ public:
                         : recording_
                             ? juce::Colour(0xffffddddu)
                             : juce::Colour(0xffe4e4e8u));
-        g.fillRect(0, 0, keyWidth, headerH);
+        g.fillRect(0, 0, keyWidth, rulerH);
 
         g.saveState();
-        g.reduceClipRegion(0, headerH, keyWidth, overlayHeight - headerH);
-        g.addTransform(juce::AffineTransform::translation(0.0f, (float)(headerH - viewY)));
+        g.reduceClipRegion(0, rulerH, keyWidth, overlayHeight - rulerH);
+        g.addTransform(juce::AffineTransform::translation(0.0f, (float)(rulerH - viewY)));
         drawPianoKeys(g);
         drawVelocityKeyStub(g);
         g.restoreState();
@@ -405,7 +405,7 @@ public:
     void paintRulerOverlay(juce::Graphics& g, int viewX, int overlayWidth)
     {
         g.saveState();
-        g.reduceClipRegion(0, 0, overlayWidth, headerH);
+        g.reduceClipRegion(0, 0, overlayWidth, rulerH);
         g.addTransform(juce::AffineTransform::translation((float)-viewX, 0.0f));
         drawRuler(g);
         g.restoreState();
@@ -427,14 +427,28 @@ public:
 
     void previewPitchAtVisibleY(int visibleY, int viewY)
     {
-        const int pitch = pitchFromY(visibleY + viewY);
+        if (visibleY < headerH)
+                return;
+
+        const int internalY = visibleY + viewY - headerH;
+        const int pitch = pitchFromY(internalY);
+        
         if (pitch >= minPitch && pitch <= maxPitch && onKeyPreview)
             onKeyPreview(pitch);
     }
 
     void setKeyboardHoverVisibleY(int visibleY, int viewY)
     {
-        const int pitch = pitchFromY(visibleY + viewY);
+        if (visibleY < headerH)
+            {
+                clearKeyboardHover();
+                return;
+            }
+
+            // 핵심: 위와 동일하게 좌표계 보정 (- headerH)
+        const int internalY = visibleY + viewY - headerH;
+        const int pitch = pitchFromY(internalY);
+        
         const int newHover = (pitch >= minPitch && pitch <= maxPitch) ? pitch : -1;
         if (hoverPitch != newHover)
         {
@@ -1138,7 +1152,8 @@ private:
     float    snapBeats    = 0.25f;   // default: 1/16 note
 
     static constexpr int   keyWidth      = 60;
-    static constexpr int   headerH      = 24;
+    static constexpr int   headerH      = 0;
+    static constexpr int   rulerH       = 24;
     static constexpr int   noteH        = 12;
     static constexpr int   minPitch     = 21;   // A0
     static constexpr int   maxPitch     = 108;  // C8
@@ -1985,7 +2000,7 @@ private:
                         : recording_
                             ? juce::Colour(0xffffddddu)
                             : juce::Colour(0xffe4e4e8u));
-        g.fillRect(0, 0, getWidth(), headerH);
+        g.fillRect(0, 0, getWidth(), rulerH);
 
         // Hover step tick mark in the ruler
         if (hoverStepBeat >= 0.0f)
@@ -1993,15 +2008,15 @@ private:
             const int hx = xFromBeat(hoverStepBeat);
             const int hw = (int)(0.25f * pixelsPerBeat);
             g.setColour(juce::Colour(0xff000000u).withAlpha(0.06f));
-            g.fillRect(hx, 0, hw, headerH);
+            g.fillRect(hx, 0, hw, rulerH);
         }
 
         const int startX = xFromBeat(selectedStartBeat);
         const int startW = (int)(0.25f * pixelsPerBeat);
         g.setColour(juce::Colour(0xff7dd3fc).withAlpha(0.18f));
-        g.fillRect(startX, 0, startW, headerH);
+        g.fillRect(startX, 0, startW, rulerH);
         g.setColour(juce::Colour(0xff7dd3fc).withAlpha(0.85f));
-        g.drawLine((float)startX, 0.0f, (float)startX, (float)headerH, 1.2f);
+        g.drawLine((float)startX, 0.0f, (float)startX, (float)rulerH, 1.2f);
 
         // State indicator (ARM or REC)
         if (currentRecState == RecState::Armed)
@@ -2013,7 +2028,7 @@ private:
             }
             g.setColour(juce::Colour(0xffff8800).withAlpha(0.90f));
             g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
-            g.drawText("ARM", 15, 0, 36, headerH, juce::Justification::centredLeft);
+            g.drawText("ARM", 15, 0, 36, rulerH, juce::Justification::centredLeft);
         }
         else if (recording_ && playheadBeat >= 0.0)
         {
@@ -2021,7 +2036,7 @@ private:
             g.fillEllipse(4.0f, 5.0f, 8.0f, 8.0f);
             g.setColour(juce::Colours::white.withAlpha(0.9f));
             g.setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
-            g.drawText("REC", 15, 0, 36, headerH, juce::Justification::centredLeft);
+            g.drawText("REC", 15, 0, 36, rulerH, juce::Justification::centredLeft);
         }
 
         if (pattern == nullptr) return;
@@ -2041,7 +2056,7 @@ private:
                 g.setFont(juce::Font(juce::FontOptions().withHeight(12.0f)
                                      .withStyle("Bold")));
                 g.setColour(juce::Colours::white.withAlpha(0.90f));
-                g.drawText(juce::String(barNum), x + 3, 0, 32, headerH,
+                g.drawText(juce::String(barNum), x + 3, 0, 32, rulerH,
                            juce::Justification::centredLeft);
             }
             else
@@ -2049,7 +2064,7 @@ private:
                 // Beat number within bar — small (9px), dim
                 g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f)));
                 g.setColour(juce::Colours::white.withAlpha(0.38f));
-                g.drawText("." + juce::String(beatNum), x + 2, 0, 18, headerH,
+                g.drawText("." + juce::String(beatNum), x + 2, 0, 18, rulerH,
                            juce::Justification::centredLeft);
             }
         }
@@ -2558,8 +2573,8 @@ class PianoRollWindow : public juce::DocumentWindow
             snapBox.addItem("1/2",   5);
             snapBox.addItem("1 Bar", 6);
             snapBox.setSelectedId(2, juce::dontSendNotification);
-            snapBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff0f3460));
-            snapBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
+            snapBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            snapBox.setColour(juce::ComboBox::textColourId,       juce::Colours::black);
             snapBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
             snapBox.onChange = [this]
             {
@@ -2666,7 +2681,7 @@ class PianoRollWindow : public juce::DocumentWindow
             triggerBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff1a1a2a));
             triggerBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff2255aa));
             triggerBtn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xff7788aa));
-            triggerBtn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+            triggerBtn.setColour(juce::TextButton::textColourOnId,   juce::Colours::black);
             triggerBtn.onClick = [this]
             {
                 pianoRoll.setTriggerEnabled(triggerBtn.getToggleState());
@@ -2785,8 +2800,8 @@ class PianoRollWindow : public juce::DocumentWindow
             quantizeBox.addItem("1/16", 3);   // default
             quantizeBox.addItem("1/32", 4);
             quantizeBox.setSelectedId(3, juce::dontSendNotification);
-            quantizeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff162016));
-            quantizeBox.setColour(juce::ComboBox::textColourId,       juce::Colours::white);
+            quantizeBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            quantizeBox.setColour(juce::ComboBox::textColourId,       juce::Colours::black);
             quantizeBox.setColour(juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
             quantizeBox.onChange = [this]
             {
@@ -2802,8 +2817,8 @@ class PianoRollWindow : public juce::DocumentWindow
             for (int i = 0; i < 12; ++i)
                 keyRootBox.addItem(noteNames[i], i + 1);
             keyRootBox.setSelectedId(1, juce::dontSendNotification);
-            keyRootBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff26385a));
-            keyRootBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            keyRootBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            keyRootBox.setColour(juce::ComboBox::textColourId, juce::Colours::black);
             keyRootBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             keyRootBox.onChange = [this] { applySelectedKeySignature(); };
             addAndMakeVisible(keyRootBox);
@@ -2811,8 +2826,8 @@ class PianoRollWindow : public juce::DocumentWindow
             keyScaleBox.addItem("Major", 1);
             keyScaleBox.addItem("Minor", 2);
             keyScaleBox.setSelectedId(1, juce::dontSendNotification);
-            keyScaleBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff26385a));
-            keyScaleBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            keyScaleBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            keyScaleBox.setColour(juce::ComboBox::textColourId, juce::Colours::black);
             keyScaleBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             keyScaleBox.onChange = [this] { applySelectedKeySignature(); };
             addAndMakeVisible(keyScaleBox);
@@ -2823,8 +2838,8 @@ class PianoRollWindow : public juce::DocumentWindow
             chordVoicingBox.addItem("2nd Inv", 4);
             chordVoicingBox.addItem("Drop2", 5);
             chordVoicingBox.setSelectedId(1, juce::dontSendNotification);
-            chordVoicingBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff2f405e));
-            chordVoicingBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            chordVoicingBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            chordVoicingBox.setColour(juce::ComboBox::textColourId, juce::Colours::black);
             chordVoicingBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             chordVoicingBox.onChange = [this]
             {
@@ -2838,8 +2853,8 @@ class PianoRollWindow : public juce::DocumentWindow
             chordStrumBox.addItem("Medium", 3);
             chordStrumBox.addItem("Heavy", 4);
             chordStrumBox.setSelectedId(1, juce::dontSendNotification);
-            chordStrumBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff2f405e));
-            chordStrumBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            chordStrumBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            chordStrumBox.setColour(juce::ComboBox::textColourId, juce::Colours::black);
             chordStrumBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             chordStrumBox.onChange = [this]
             {
@@ -2848,13 +2863,13 @@ class PianoRollWindow : public juce::DocumentWindow
             };
             addAndMakeVisible(chordStrumBox);
 
-            progressionBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff27405f));
-            progressionBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            progressionBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            progressionBox.setColour(juce::ComboBox::textColourId, juce::Colours::black);
             progressionBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             addAndMakeVisible(progressionBox);
 
-            progressionBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff27405f));
-            progressionBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xfff3f7ff));
+            progressionBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xfff7f7f8));
+            progressionBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::black);
             progressionBtn.onClick = [this]
             {
                 applySelectedChordProgression();
@@ -2868,8 +2883,8 @@ class PianoRollWindow : public juce::DocumentWindow
             bassPatternBox.addItem("Pulse 8ths", 3);
             bassPatternBox.addItem("Passing Tone", 4);
             bassPatternBox.setSelectedId(1, juce::dontSendNotification);
-            bassPatternBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff2d4d2f));
-            bassPatternBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            bassPatternBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            bassPatternBox.setColour(juce::ComboBox::textColourId, juce::Colours::black);
             bassPatternBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             bassPatternBox.onChange = [this]
             {
@@ -2878,13 +2893,13 @@ class PianoRollWindow : public juce::DocumentWindow
             };
             addAndMakeVisible(bassPatternBox);
 
-            bassTargetBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff2d4d2f));
-            bassTargetBox.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            bassTargetBox.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xfff7f7f8));
+            bassTargetBox.setColour(juce::ComboBox::textColourId, juce::Colours::black);
             bassTargetBox.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
             addAndMakeVisible(bassTargetBox);
 
-            basslineBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2d4d2f));
-            basslineBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffeef9ee));
+            basslineBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xfff7f7f8));
+            basslineBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::black);
             basslineBtn.onClick = [this]
             {
                 applyBasslineGeneration();
@@ -2895,8 +2910,8 @@ class PianoRollWindow : public juce::DocumentWindow
             refreshProgressionOptions();
             refreshBassTargetOptions();
 
-            loadMidiBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff20324a));
-            loadMidiBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffd6e4ff));
+            loadMidiBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xfff7f7f8));
+            loadMidiBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::black);
             loadMidiBtn.onClick = [this]
             {
                 if (onImportMidi) onImportMidi();
@@ -2904,8 +2919,8 @@ class PianoRollWindow : public juce::DocumentWindow
             };
             addAndMakeVisible(loadMidiBtn);
 
-            saveMidiBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff20324a));
-            saveMidiBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xffd6e4ff));
+            saveMidiBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xfff7f7f8));
+            saveMidiBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::black);
             saveMidiBtn.onClick = [this]
             {
                 if (onExportMidi) onExportMidi();
@@ -2989,10 +3004,10 @@ class PianoRollWindow : public juce::DocumentWindow
 
             const int keyboardW = pianoRoll.getKeyboardWidth();
             const int contentY = rowH * 2;
-            const int headerH = pianoRoll.getHeaderHeight();
+            const int rulerHeight = 24;
             keyboardOverlay.setBounds(0, contentY, keyboardW, getHeight() - contentY);
-            rulerOverlay.setBounds(keyboardW, contentY, getWidth() - keyboardW, headerH);
-            viewport.setBounds(keyboardW, contentY + headerH, getWidth() - keyboardW, getHeight() - contentY - headerH);
+            rulerOverlay.setBounds(keyboardW, contentY, getWidth() - keyboardW, rulerHeight);
+            viewport.setBounds(keyboardW, contentY + rulerHeight, getWidth() - keyboardW, getHeight() - contentY - rulerHeight);
 
             const int cw = juce::jmax(viewport.getWidth(),  pianoRoll.getNeededWidth());
             const int ch = juce::jmax(viewport.getHeight(), pianoRoll.getNeededHeight());

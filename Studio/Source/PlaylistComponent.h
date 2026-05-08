@@ -154,6 +154,8 @@ public:
     // Returns decoded AudioBuffer for waveform preview (host → AudioEngine)
     std::function<std::shared_ptr<juce::AudioBuffer<float>>(const juce::String& path)> getAudioBuffer;
 
+    static constexpr int headerHeight = 60;  // kPlaylistHdrH(38) + kRulerH(22)
+
 private:
     Project* project = nullptr;
 
@@ -161,7 +163,6 @@ private:
 
     static constexpr int kPlaylistHdrH  = 38;  // PLAYLIST title + snap strip
     static constexpr int kRulerH        = 22;  // ruler band
-    static constexpr int headerHeight   = kPlaylistHdrH + kRulerH;  // 60 total
     static constexpr int trackHeight    = 54;
     static constexpr int trackGap       = 0;
     static constexpr int trackHeaderWidth = 160;

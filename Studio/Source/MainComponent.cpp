@@ -777,6 +777,25 @@ MainComponent::MainComponent()
     playlist.setViewport(&playlistViewport);
     addAndMakeVisible(playlistViewport);
 
+    // Panel divider — drag to resize playlist vs. bottom panel
+    panelDivider_.getOwnerRatio = [this] { return panelSplitRatio_; };
+    panelDivider_.onDrag = [this](int dy)
+    {
+        if (dividerAvailH_ <= 0) return;
+        const float newRatio = panelDivider_.savedRatio_ + (float)dy / (float)dividerAvailH_;
+
+        // Enforce minimums: playlist ≥ headerHeight, bottom ≥ kTabH + HEADER_HEIGHT
+        const int kTabH_ = 78;
+        const int minPlaylist = PlaylistComponent::headerHeight;
+        const int minBottom   = kTabH_ + ChannelRackComponent::HEADER_HEIGHT;
+        const float minRatio  = (float)minPlaylist / (float)dividerAvailH_;
+        const float maxRatio  = (float)(dividerAvailH_ - minBottom - 6) / (float)dividerAvailH_;
+
+        panelSplitRatio_ = juce::jlimit(minRatio, maxRatio, newRatio);
+        resized();
+    };
+    addAndMakeVisible(panelDivider_);
+
     // Snap box -- floats outside the viewport so it never scrolls away
     playlistSnapBox.addItem("1 Bar",    1);
     playlistSnapBox.addItem("1/2 Bar",  2);
@@ -3943,36 +3962,36 @@ void MainComponent::paint(juce::Graphics& g)
     }
 
     // 5. Corner screws (10px diameter, 8px from corners)
-    {
-        const float sz = 10.0f;
-        const float off = 8.0f;
-        const float W = (float)getWidth();
-        const float H = (float)getHeight();
-        const float cx[] = { off + sz*0.5f, W - off - sz*0.5f, off + sz*0.5f, W - off - sz*0.5f };
-        const float cy[] = { off + sz*0.5f, off + sz*0.5f, H - off - sz*0.5f, H - off - sz*0.5f };
-        const float angles[] = { 45.0f, 125.0f, 75.0f, 160.0f };
-
-        for (int i = 0; i < 4; ++i)
-        {
-            const float x = cx[i], y = cy[i];
-            // Radial gradient: light at 30%/25% of diameter from top-left, dark at edge
-            juce::ColourGradient screwGrad(
-                juce::Colour(0xffffffff), x - sz*0.2f, y - sz*0.25f,
-                juce::Colour(0xffa0a0a0), x + sz*0.35f, y + sz*0.35f, true);
-            screwGrad.addColour(0.5, juce::Colour(0xffdcdcdc));
-            g.setGradientFill(screwGrad);
-            g.fillEllipse(x - sz*0.5f, y - sz*0.5f, sz, sz);
-            // Border
-            g.setColour(juce::Colour(0x66000000));
-            g.drawEllipse(x - sz*0.5f + 0.5f, y - sz*0.5f + 0.5f, sz - 1.0f, sz - 1.0f, 1.0f);
-            // Slot
-            const float rad = angles[i] * juce::MathConstants<float>::pi / 180.0f;
-            const float len = sz * 0.32f;
-            g.setColour(juce::Colour(0x88000000));
-            g.drawLine(x - std::cos(rad)*len, y - std::sin(rad)*len,
-                       x + std::cos(rad)*len, y + std::sin(rad)*len, 1.0f);
-        }
-    }
+//    {
+//        const float sz = 10.0f;
+//        const float off = 8.0f;
+//        const float W = (float)getWidth();
+//        const float H = (float)getHeight();
+//        const float cx[] = { off + sz*0.5f, W - off - sz*0.5f, off + sz*0.5f, W - off - sz*0.5f };
+//        const float cy[] = { off + sz*0.5f, off + sz*0.5f, H - off - sz*0.5f, H - off - sz*0.5f };
+//        const float angles[] = { 45.0f, 125.0f, 75.0f, 160.0f };
+//
+//        for (int i = 0; i < 4; ++i)
+//        {
+//            const float x = cx[i], y = cy[i];
+//            // Radial gradient: light at 30%/25% of diameter from top-left, dark at edge
+//            juce::ColourGradient screwGrad(
+//                juce::Colour(0xffffffff), x - sz*0.2f, y - sz*0.25f,
+//                juce::Colour(0xffa0a0a0), x + sz*0.35f, y + sz*0.35f, true);
+//            screwGrad.addColour(0.5, juce::Colour(0xffdcdcdc));
+//            g.setGradientFill(screwGrad);
+//            g.fillEllipse(x - sz*0.5f, y - sz*0.5f, sz, sz);
+//            // Border
+//            g.setColour(juce::Colour(0x66000000));
+//            g.drawEllipse(x - sz*0.5f + 0.5f, y - sz*0.5f + 0.5f, sz - 1.0f, sz - 1.0f, 1.0f);
+//            // Slot
+//            const float rad = angles[i] * juce::MathConstants<float>::pi / 180.0f;
+//            const float len = sz * 0.32f;
+//            g.setColour(juce::Colour(0x88000000));
+//            g.drawLine(x - std::cos(rad)*len, y - std::sin(rad)*len,
+//                       x + std::cos(rad)*len, y + std::sin(rad)*len, 1.0f);
+//        }
+//    }
 
     // 6. Footer
     const int footerH = 22;
@@ -3982,7 +4001,7 @@ void MainComponent::paint(juce::Graphics& g)
                (float)footer.getRight(), (float)footer.getY(), 1.0f);
     g.setFont(juce::Font(juce::FontOptions().withHeight(9.0f).withStyle("Bold")));
     g.setColour(juce::Colour(LF::kTextFaint));
-    g.drawText(juce::String::fromUTF8("xitges instruments  \xc2\xb7  made in original spirit  \xc2\xb7  serial 02-1184-1"),
+    g.drawText(juce::String::fromUTF8("xitges  \xc2\xb7  made in original spirit  \xc2\xb7  serial 02-11-04"),
                footer.removeFromLeft(620), juce::Justification::centredLeft, true);
     g.drawText(juce::String::fromUTF8("USB-C  \xc2\xb7  MIDI 5P  \xc2\xb7  CV 1/8\" x4  \xc2\xb7  v2.4.1"),
                footer, juce::Justification::centredRight, true);
@@ -4046,8 +4065,13 @@ void MainComponent::resized()
     // Cache right panel bounds (cream panel bg drawn in paint())
     rightPanelBounds_ = area;
 
-    // Playlist — top ~55% of remaining area (Phase-6: reference layout)
-    const int playlistHeight = juce::jmax(260, (int)std::round(area.getHeight() * 0.55f));
+    // Playlist / bottom-panel split (user-draggable via panelDivider_)
+    constexpr int kDivH       = 6;
+    constexpr int kMinPlaylistH = PlaylistComponent::headerHeight;              // 60
+    constexpr int kMinBottomH   = 78 + ChannelRackComponent::HEADER_HEIGHT;    // 128
+    dividerAvailH_ = area.getHeight();
+    const int rawH       = (int)std::round(dividerAvailH_ * panelSplitRatio_);
+    const int playlistHeight = juce::jlimit(kMinPlaylistH, dividerAvailH_ - kMinBottomH - kDivH, rawH);
     auto playlistArea = area.removeFromTop(playlistHeight);
 
     const int ctrlY = playlistArea.getY() + 2;
@@ -4059,6 +4083,9 @@ void MainComponent::resized()
     playlistViewport.setBounds(playlistArea);
     playlist.setSize(juce::jmax(playlistArea.getWidth(),  playlist.getNeededWidth()),
                      juce::jmax(playlistArea.getHeight(), playlist.getNeededHeight()));
+
+    // Divider handle between playlist and bottom panel
+    panelDivider_.setBounds(area.removeFromTop(kDivH));
 
     // Inspector tab bar (left 330px) + step inspector strip (remainder)
     {

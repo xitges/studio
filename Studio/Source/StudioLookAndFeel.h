@@ -572,6 +572,9 @@ public:
 
     juce::Font getLabelFont(juce::Label& label) override
     {
+        // Respect explicitly set large fonts (e.g. BPM display)
+        if (label.getFont().getHeight() > 13.0f)
+            return label.getFont();
         return monoFont((float)juce::jlimit(8, 12, label.getHeight() - 4),
                         label.getFont().boldened().isBold() ? juce::Font::bold : juce::Font::plain);
     }
